@@ -71,7 +71,7 @@
 import { sql } from "drizzle-orm";
 
 import type { SalesDashboard, SalesSpocBlock } from "@/lib/admin/salesDashboardTypes";
-import { connectedCall, engagedCall, firstMoveToField, transferCredit, wasHotAt } from "@/lib/reports/metricDefinitions";
+import { connectedCall, engagedCall, firstMoveToField, notOnboardingWon, transferCredit, wasHotAt } from "@/lib/reports/metricDefinitions";
 import { freshRepeatSplit } from "@/lib/visits/freshRepeat";
 import { fmtValue, pctOfTarget, type Period } from "./salesDailyBlockA";
 import { istRangeTz } from "./window";
@@ -803,7 +803,8 @@ export async function loadRepExtras(db: Exec, p: Period): Promise<RepExtras> {
             sql`SELECT COALESCE(dl.closing_owner_id::text, h.changed_by) AS u, COUNT(DISTINCT h.dealer_lead_id) AS n
                   FROM dealer_lead_status_history h
                   JOIN dealer_leads dl ON dl.id = h.dealer_lead_id
-                 WHERE h.to_status = 'Won' AND (to_jsonb(h) ->> 'won_undone_at') IS NULL AND ${win(sql`h.changed_at`)}
+                 WHERE h.to_status = 'Won' AND (to_jsonb(h) ->> 'won_undone_at') IS NULL AND ${notOnboardingWon("h")}
+                   AND ${win(sql`h.changed_at`)}
                  GROUP BY 1`,
         ),
     ]);

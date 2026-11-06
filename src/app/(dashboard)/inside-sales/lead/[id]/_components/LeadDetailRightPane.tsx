@@ -180,6 +180,15 @@ export function LeadDetailRightPane({ bundle, viewerRole, onReviseQuote, focusQu
                                 <div className="px-4 pb-4 pt-1">
                                     {g.key === "snapshot" && (
                                         <div className="grid grid-cols-2 gap-3">
+                                            {/* ID 214: a duplicate found after onboarding — this lead is
+                                                the same dealer as an onboarding already on the CRM. */}
+                                            {onboarded &&
+                                                lead.lead_status !== "Won" &&
+                                                lead.lead_status !== "Converted" && (
+                                                    <p className="col-span-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800">
+                                                        Same dealer as an onboarding on the CRM. {onboarded.reason}
+                                                    </p>
+                                                )}
                                             <Field label="Dealer Name" value={lead.dealer_name} />
                                             <Field label="Shop Name" value={lead.shop_name} />
                                             {/* E-296 — always rendered; NULL reads "Not set". */}

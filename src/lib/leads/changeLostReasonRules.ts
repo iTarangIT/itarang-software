@@ -7,7 +7,9 @@ import { LOST_REASON, type LostReason } from "@/lib/lifecycle/transitions";
 export const LOST_REASON_CHANGE_ROLES = ["admin", "sales_head"] as const;
 
 /** Mark Lost's own list: onboarding_dropout is set only by the drop-out review. */
-export const CHANGEABLE_LOST_REASONS: readonly LostReason[] = LOST_REASON.filter((r) => r !== "onboarding_dropout");
+export const CHANGEABLE_LOST_REASONS: readonly LostReason[] = LOST_REASON.filter(
+    (r) => r !== "onboarding_dropout" && r !== "onboarding_rejected",
+);
 
 /** Refused before anything is written; withErrorHandler answers with `status`. */
 export class LostReasonChangeError extends Error {

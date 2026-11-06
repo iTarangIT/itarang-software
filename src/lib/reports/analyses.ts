@@ -21,7 +21,7 @@ import { capabilitiesFor } from "@/lib/leads/access";
 import { parseLeadListFilters } from "@/lib/leads/leadListParams";
 import { doorLabel, originLabel } from "@/lib/leads/leadSourceVocab";
 import { TEAM_ROLES } from "@/lib/exports/datasets/types";
-import { humanCall } from "@/lib/reports/metricDefinitions";
+import { humanCall, notDirectOnboarding } from "@/lib/reports/metricDefinitions";
 import { freshRepeatCtes, freshRepeatJoins, isFreshSql, isNewToItarangSql, visitedRowSql } from "@/lib/visits/freshRepeat";
 import {
     AI_BANDS,
@@ -185,6 +185,8 @@ export async function leadSources(f: AnalysisFilters, viewer: SessionUser): Prom
                                        OR dl.lead_status IN ('Won', 'Converted'))) AS won
               FROM dealer_leads dl
              WHERE dl.is_active IS NOT FALSE
+               -- ID 214: a Direct onboarding lead is not a new lead.
+               AND ${notDirectOnboarding("dl")}
                AND ${inPeriod(istDay(sql`dl.created_at`), period)}
                ${teamCond(f.team)}
                ${stateCond(f.state)}

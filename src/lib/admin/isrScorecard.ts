@@ -29,7 +29,7 @@
 import { sql, type SQL } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { engagedCall, firstMoveToField, humanCall, transferCredit, wasHotAt } from "@/lib/reports/metricDefinitions";
+import { engagedCall, firstMoveToField, humanCall, notOnboardingWon, transferCredit, wasHotAt } from "@/lib/reports/metricDefinitions";
 import { dealCardActualsSql, VOLUME_CHECK_DAYS } from "@/lib/leads/dealCardActuals";
 
 export type IsrScore = {
@@ -99,6 +99,8 @@ export async function buildIsrScorecard(f: { from: string; to: string; state?: s
              WHERE h.to_status = 'Won'
                -- ID 134: a Mark Won undone as a mistake is not a Won (E-333).
                AND (to_jsonb(h) ->> 'won_undone_at') IS NULL
+               -- ID 214: the system's Won at onboarding submission is not a Marked Won.
+               AND ${notOnboardingWon("h")}
                AND ${inRange(sql`h.changed_at`, f.from, f.to)} ${st}
              GROUP BY 1
         ),
