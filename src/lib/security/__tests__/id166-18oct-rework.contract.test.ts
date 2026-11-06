@@ -121,6 +121,8 @@ describe("item 11 — Dealer Validation page", () => {
         "[dealerId]/audit-trail/route.ts",
         "[dealerId]/duplicate-check/route.ts",
         "[dealerId]/download-signed-agreement/route.ts",
+        // ID 214: Dealer Validation > Lead (GET reads; POST stays requireSalesHead).
+        "[dealerId]/lead-match/route.ts",
     ]);
 
     it("every GET reads through requireDealerValidationReader", () => {

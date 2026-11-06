@@ -238,8 +238,7 @@ export const ANALYST_RULES: ReadonlyArray<{ topics: readonly AnalystTopic[]; tex
     {
         topics: ["leads"],
         text:
-            "Leads in = every active dealer_leads row created in the period, whatever its source (bulk imports included), " +
-            "except source_door 'direct_onboarding' (a lead the CRM created for a dealer who onboarded with no lead).",
+            "Leads in = every active dealer_leads row created in the period, whatever its source (bulk imports included), except source_door 'direct_onboarding'.",
     },
     {
         topics: ["won", "people"],
@@ -249,8 +248,7 @@ export const ANALYST_RULES: ReadonlyArray<{ topics: readonly AnalystTopic[]; tex
     {
         topics: ["won", "people"],
         text:
-            "Marked Won = status history to_status 'Won' with won_undone_at NULL, credited to closing_owner_id; " +
-            "the Won the system sets at onboarding submission (changed_by 'system', note 'Dealer onboarding submitted…') is not a Marked Won. " +
+            "Marked Won = status history to_status 'Won' with won_undone_at NULL (not changed_by 'system'), credited to closing_owner_id. " +
             "Won is the rep's mark; Converted is onboarding approved — targets, credit and incentives use Converted.",
     },
     {
@@ -283,7 +281,7 @@ export const ANALYST_RULES: ReadonlyArray<{ topics: readonly AnalystTopic[]; tex
     },
     { topics: ["won", "leads"], text: "A Lost to Lost history row is a reason change, not a loss." },
     // ID 169 (22 Oct) — as the Lost report (src/lib/admin/reports.ts): lost_reason is a fixed code.
-    { topics: ["won"], text: "Lost by reason = dealer_leads.lead_status 'Lost' grouped by lost_reason, dated by closed_at; lost_reason 'duplicate_lead' is not a loss." },
+    { topics: ["won"], text: "Lost by reason = dealer_leads.lead_status 'Lost' grouped by lost_reason, dated by closed_at." },
     // ID 155 — dated teams, as the Performance page (teamPerformance.ts teamStints / teamWindows).
     {
         topics: ["people"],
