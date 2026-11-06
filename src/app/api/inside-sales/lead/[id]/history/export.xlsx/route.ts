@@ -27,6 +27,8 @@ import { fmtIst as fmt, styleHeader, zebra } from "@/lib/excel/sheetStyle";
 import { exportsOwnLeadsOnly, logDataDownload } from "@/lib/exports/downloadLog";
 import { LEAD_HISTORY_EXPORT_ROLES, canExportLeadHistory } from "@/lib/leads/access";
 import { LEAD_STATUS_LABEL } from "@/lib/leads/queueFilters";
+import { typeCodeForDownload } from "@/lib/leads/downloadTypeCode";
+import { roleLabel } from "@/lib/admin/reportHelpers";
 import {
     CALL_STATUS_LABEL,
     NEXT_ACTION_LABEL,
@@ -48,6 +50,7 @@ type LeadRow = {
 type TouchpointRow = {
     touchpoint_type: string | null;
     performed_by_name: string | null;
+    performed_by_role: string | null;
     performed_at: string | null;
     call_status: string | null;
     call_duration_sec: number | null;
@@ -93,6 +96,7 @@ export const GET = withErrorHandler(
                 SELECT
                     t.touchpoint_type,
                     u.name AS performed_by_name,
+                    u.role AS performed_by_role,
                     t.performed_at::text AS performed_at,
                     t.call_status,
                     t.call_duration_sec,
@@ -151,6 +155,7 @@ export const GET = withErrorHandler(
             // are the two lines of the Activity-timeline card on screen.
             { header: "Activity", key: "activity", width: 26 },
             { header: "Performed By", key: "by", width: 22 },
+            { header: "Role", key: "role", width: 16 },
             { header: "Performed At (IST)", key: "at", width: 24 },
             { header: "Details", key: "remarks", width: 60 },
             { header: "Call Status", key: "call_status", width: 18 },
@@ -165,6 +170,8 @@ export const GET = withErrorHandler(
             const row = tpSheet.addRow({
                 activity: humanise(r.touchpoint_type, TOUCHPOINT_TYPE_LABEL),
                 by: r.performed_by_name ?? "System",
+                // ID 209: caller's role next to "By".
+                role: r.performed_by_role ? roleLabel(r.performed_by_role) : "—",
                 at: fmt(r.performed_at),
                 remarks: r.remarks ?? "—",
                 call_status: humanise(r.call_status, CALL_STATUS_LABEL),
@@ -172,7 +179,8 @@ export const GET = withErrorHandler(
                 engaged: r.is_engaged == null ? "—" : r.is_engaged ? "Yes" : "No",
                 next_action: humanise(r.next_action, NEXT_ACTION_LABEL),
                 next_action_at: r.next_action_at ? fmt(r.next_action_at) : "—",
-                type: r.touchpoint_type ?? "—",
+                // ID 209: a person's call reads `call`; AI calls stay `ai_call`.
+                type: typeCodeForDownload(r.touchpoint_type) ?? "—",
             });
             zebra(row, i);
         });

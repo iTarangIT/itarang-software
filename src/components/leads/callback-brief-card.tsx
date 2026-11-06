@@ -12,6 +12,7 @@ import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { PhoneCall, ShieldAlert } from "lucide-react";
+import { InfoTip } from "@/components/ui/info-tip";
 
 import { CALL_CATEGORY_LABELS, isCallCategory } from "@/lib/ai-dialer/callCategory";
 
@@ -168,7 +169,8 @@ export function CallbackBriefCard({ leadId, className = "" }: { leadId: string; 
             )}
             {sales && !complaint && (
                 <p className="mt-1 text-[11px] text-gray-500">
-                    Closes when the dealer is reached — a connected NeoDove call, a logged call, visit or WhatsApp chat.
+                    Closes when you reach the dealer.{" "}
+                    <InfoTip>A connected NeoDove call, or a logged call, visit or WhatsApp chat, closes it.</InfoTip>
                 </p>
             )}
         </div>

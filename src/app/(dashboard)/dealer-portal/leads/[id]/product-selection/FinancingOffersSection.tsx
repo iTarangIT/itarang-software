@@ -19,6 +19,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
 import ReselectFinancingCard from "./ReselectFinancingCard";
+import { InfoTip } from "@/components/ui/info-tip";
 
 /**
  * The card claims "this updates as offers arrive", so the section polls while
@@ -148,7 +149,7 @@ export default function FinancingOffersSection({ leadId }: { leadId: string }) {
   async function convertToCash() {
     const ok = await confirmDialog({
       title: "Convert to cash sale?",
-      message: "Financing data will be purged and the lead reopens in cash mode.",
+      message: "This removes the loan details and reopens the lead as a cash sale.",
       confirmText: "Convert to cash",
       variant: "danger",
     });
@@ -178,8 +179,10 @@ export default function FinancingOffersSection({ leadId }: { leadId: string }) {
       <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 p-5">
         <h3 className="text-sm font-black uppercase tracking-wider text-amber-900">Financing Unavailable</h3>
         <p className="text-xs text-amber-800 mt-1 mb-4">
-          All financing avenues for this lead were exhausted and an admin confirmed it as a dead-end.
-          You can convert it to a cash sale in place, or leave it closed.
+          No lender can finance this lead.{" "}
+          <InfoTip>
+            Admin confirmed every lender option was tried. You can convert it to a cash sale or leave it closed.
+          </InfoTip>
         </p>
         {error && <p className="text-xs text-red-600 mb-3">{error}</p>}
         <button
@@ -218,7 +221,7 @@ export default function FinancingOffersSection({ leadId }: { leadId: string }) {
           ? "The customer has accepted the offer. The NBFC is now running E-NACH and agreement signing."
           : anyOffer
             ? "Walk the customer through the firm offer below and accept it to proceed to E-NACH and agreement signing."
-            : "Waiting for the NBFC to review the file and submit a firm offer. This updates as offers arrive."}
+            : "Waiting for the lender's firm offer. This updates on its own."}
       </p>
 
       {error && <p className="text-xs text-red-600 mb-3">{error}</p>}

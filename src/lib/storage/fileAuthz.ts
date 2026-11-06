@@ -281,6 +281,10 @@ async function leadFileUploads(leadId: string, like: string): Promise<(FileUploa
                 -- house lead the creator is not the dealer, so they stay hidden.
                 -- Rows from 16 Oct on record their uploader, so no fallback (a
                 -- customer's public-link upload stays the customer's).
+                -- ID 166 (5 Nov): an older row whose file sits under
+                -- public-uploads/ was sent by the CUSTOMER through its upload
+                -- link (the only writer of that folder), so it never falls back
+                -- to the lead creator: the dealer does not open it.
                 SELECT x.url,
                        COALESCE(x.uploaded_by, CASE WHEN x.legacy THEN l.uploader_id::text END) AS uploaded_by,
                        CASE WHEN x.uploaded_by IS NULL AND x.legacy AND l.uploader_id IS NOT NULL
@@ -289,7 +293,8 @@ async function leadFileUploads(leadId: string, like: string): Promise<(FileUploa
                   FROM (
                     SELECT y.url, y.uploaded_by, y.upload_source,
                            (y.uploaded_by IS NULL AND y.upload_source IS NULL
-                            AND COALESCE(y.made_at, 'epoch'::timestamptz) < ${LEGACY_UPLOAD_CUTOFF}::timestamptz) AS legacy
+                            AND COALESCE(y.made_at, 'epoch'::timestamptz) < ${LEGACY_UPLOAD_CUTOFF}::timestamptz
+                            AND COALESCE(y.url, '') NOT LIKE '%/public-uploads/%') AS legacy
                       FROM (
                     SELECT k.file_url AS url,
                            COALESCE(to_jsonb(k) ->> 'uploaded_at', to_jsonb(k) ->> 'created_at')::timestamptz AS made_at,

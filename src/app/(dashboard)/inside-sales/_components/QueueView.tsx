@@ -482,7 +482,7 @@ export function QueueView({
                             aria-hidden
                             className={`h-1.5 w-1.5 rounded-full ${pastLimitOnly ? "bg-rose-500" : "bg-gray-300"}`}
                         />
-                        Past a limit
+                        Over time limit
                         {counts?.past_limit ? (
                             <span className="ml-0.5 rounded-full bg-rose-600 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
                                 {counts.past_limit}
@@ -527,12 +527,12 @@ export function QueueView({
                                 className="inline-flex h-10 items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-4 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
                             >
                                 <Upload className="h-4 w-4" />
-                                Upload Leads
+                                Import leads
                             </Link>
                         )}
                         <Button type="button" onClick={() => setCreateOpen(true)} className="gap-1.5">
                             <Plus className="h-4 w-4" />
-                            Create Lead
+                            Create lead
                         </Button>
                     </div>
                 </div>

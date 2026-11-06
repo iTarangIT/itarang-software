@@ -27,10 +27,10 @@ export default async function AsmQueuePage() {
             <header className="flex items-start justify-between gap-4">
                 <div>
                     <h1 className="text-2xl font-semibold tracking-tight text-gray-900">
-                        Field Work — My Visits
+                        My visits
                     </h1>
                     <p className="mt-1 text-sm text-gray-600">
-                        Welcome, {user.name}. Track your handed-off leads, schedule visits, and close on the ground.
+                        Welcome, {user.name}. Plan visits for leads sent to you and close deals at the shop.
                     </p>
                 </div>
             </header>

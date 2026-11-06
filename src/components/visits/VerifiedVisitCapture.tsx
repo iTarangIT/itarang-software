@@ -10,6 +10,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Camera, CheckCircle2, Loader2, MapPin, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { InfoTip } from "@/components/ui/info-tip";
 import { MAX_VISIT_ACCURACY_M, checkVisitLocation, checkVisitPhoto } from "@/lib/visits/verifiedCapture";
 
 export type CapturedVisit = { captureId: string; photoUrl: string; accuracyM: number };
@@ -154,8 +155,10 @@ export function VerifiedVisitCapture({
     return (
         <div className="space-y-2 rounded-md border border-gray-200 p-3">
             <p className="text-xs text-gray-600">
-                A done visit needs the phone&apos;s live location ({MAX_VISIT_ACCURACY_M} m or better) and a photo of
-                the shop taken now with the camera.
+                Read your live location, then take a shop photo.{" "}
+                <InfoTip>
+                    Location must be accurate to {MAX_VISIT_ACCURACY_M} m or better. Take the photo now with the camera.
+                </InfoTip>
             </p>
             <div className="flex flex-wrap items-center gap-2">
                 <Button
@@ -172,7 +175,7 @@ export function VerifiedVisitCapture({
                     <span className={`text-xs ${locOk ? "text-emerald-700" : "text-amber-700"}`}>
                         {locOk
                             ? `Location OK: within ${Math.round(loc.accuracy)} m`
-                            : `Location not within ${MAX_VISIT_ACCURACY_M} m (now ${Math.round(loc.accuracy)} m)`}
+                            : `Location not accurate enough (${Math.round(loc.accuracy)} m, need ${MAX_VISIT_ACCURACY_M} m). Try again.`}
                     </span>
                 )}
             </div>

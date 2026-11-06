@@ -8,6 +8,7 @@
  */
 import { useQuery } from "@tanstack/react-query";
 import { Camera, FileText, Loader2, MessageCircle, Paperclip } from "lucide-react";
+import { InfoTip } from "@/components/ui/info-tip";
 
 import type { LeadDocuments } from "@/app/api/dealer-leads/[id]/documents/route";
 
@@ -93,8 +94,11 @@ export function LeadDocumentsPanel({ leadId }: { leadId: string }) {
                 </h3>
                 {documents.length === 0 ? (
                     <p className="text-xs text-gray-500">
-                        No documents yet. Reps can send a GST certificate, shop licence or visiting card to the
-                        WhatsApp assistant to file it here.
+                        No documents yet.{" "}
+                        <InfoTip>
+                            Send a GST certificate, shop licence or visiting card to the WhatsApp assistant to add it
+                            here.
+                        </InfoTip>
                     </p>
                 ) : (
                     <ul className="divide-y divide-gray-100">

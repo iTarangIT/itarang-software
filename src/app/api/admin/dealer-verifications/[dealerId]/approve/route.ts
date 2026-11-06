@@ -22,6 +22,7 @@ import { ensureDealerSignedAgreementUrl } from "@/lib/digio/ensure-signed-agreem
 import { refreshDealerAgreementFromDigio } from "@/lib/agreement/refresh-dealer-agreement";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
+import { leadMatchApprovalBlock } from "@/lib/onboarding/leadMatch";
 import { classifyGstinConflict } from "@/lib/dealer/duplicate-check";
 import { checkCustomerGstin, GSTIN_CHECK_MESSAGE } from "@/lib/leads/gstin";
 import { usesManualAgreement } from "@/lib/dealer/dealer-capabilities";
@@ -219,6 +220,12 @@ export async function POST(req: NextRequest, context: RouteContext) {
         },
         { status: 422 }
       );
+    }
+
+    // ID 214: Admin confirms the lead, its owner and the credit first.
+    const leadBlock = await leadMatchApprovalBlock(application.id);
+    if (leadBlock) {
+      return NextResponse.json({ success: false, message: leadBlock }, { status: 422 });
     }
 
     const dealerLoginEmail = resolveDealerLoginEmail(application);

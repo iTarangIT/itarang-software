@@ -21,7 +21,7 @@ import { desc, eq, or } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { emiPaymentAttempts, emiSchedules } from "@/lib/db/schema";
 import { verifyWebhookSignature } from "@/lib/razorpay";
-import { applyEmiPayment } from "@/lib/nbfc/servicing/applyEmiPayment";
+import { attemptTenant, collectedRupees, recordSliceAttempts, settleCollectedPaymentFifo } from "@/lib/nbfc/servicing/settleCollectedPayment";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -158,15 +158,33 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ status: "already_processed", emi_id: targetEmiId });
     }
 
-    const result = await db.transaction((tx) =>
-      applyEmiPayment(tx, {
-        emiId: targetEmiId as string,
+    // ID 204 (Kartik, 4 Nov): oldest EMI first — the collected amount clears
+    // the loan's earliest unpaid EMIs up to this one, as on "Record payment".
+    const collected = collectedRupees(paymentEntity.amount, "paise");
+    const settled = await db.transaction(async (tx) => {
+      const s = await settleCollectedPaymentFifo(tx, {
+        targetEmiId: targetEmiId as string,
+        amount: collected,
         paymentRef: paymentId,
         paidAt: now,
         mode: "live",
         channel: "enach",
-      }),
-    );
+      });
+      if (s.applied) {
+        await recordSliceAttempts(tx, {
+          settled: s,
+          targetEmiId: targetEmiId as string,
+          keyPrefix: `rzp:${paymentId ?? orderId ?? now.getTime()}`,
+          mode: "live",
+          channel: "enach",
+          paidAt: now,
+          tenantId: await attemptTenant(tx, attemptId),
+          razorpayPaymentId: paymentId,
+          note: "FIFO: part of an E-NACH collection raised on a later EMI, applied to the oldest unpaid EMI first",
+        });
+      }
+      return s;
+    });
 
     if (attemptId) {
       await db
@@ -181,18 +199,21 @@ export async function POST(req: NextRequest) {
         .where(eq(emiPaymentAttempts.id, attemptId));
     }
 
-    // ID 204: "EMI received" to the customer (pilot lender; never fails the webhook).
-    if (result.applied) {
+    // ID 204: "EMI received" to the customer (pilot lender; never fails the
+    // webhook) — once per payment, on the last EMI the money reached.
+    if (settled.applied && settled.lastEmiId) {
       const { queueEmiReceived } = await import("@/lib/emi-messages/run");
-      await queueEmiReceived({ emiId: targetEmiId as string, amount: result.amountPaid ?? null, paymentRef: paymentId ?? null });
+      await queueEmiReceived({ emiId: settled.lastEmiId, amount: settled.totalApplied || null, paymentRef: paymentId ?? null });
     }
 
     return NextResponse.json({
       status: "ok",
-      outcome: "paid",
+      outcome: settled.applied ? "paid" : "not_applied",
+      reason: settled.reason,
       emi_id: targetEmiId,
-      emi_status: result.status,
-      loan_closed: result.loanClosed ?? false,
+      emi_status: settled.targetStatus,
+      loan_closed: settled.loanClosed,
+      fifo: settled.slices,
     });
   } catch (error) {
     console.error("[RZP emi webhook] Error:", error);

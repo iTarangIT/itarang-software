@@ -192,6 +192,10 @@ describe("classifyFile — the NBFC store (16 Oct)", () => {
 
     it("reads lead, case, tenant and partner keys", () => {
         expect(nbfc("agreements/LEAD-1/signed.pdf")).toEqual({ kind: "nbfc_lead", leadId: "LEAD-1", dealerMay: true });
+        expect(nbfc("agreements/LEAD-1/source-1759.pdf")).toEqual({ kind: "nbfc_lead", leadId: "LEAD-1", dealerMay: true });
+        // ID 166 (5 Nov): the e-sign audit trail never opens for the dealer
+        expect(nbfc("agreements/LEAD-1/audit-trail.pdf")).toEqual({ kind: "nbfc_lead", leadId: "LEAD-1", dealerMay: false });
+        expect(nbfc("agreements/LEAD-1/Audit_Trail-2.pdf")).toEqual({ kind: "nbfc_lead", leadId: "LEAD-1", dealerMay: false });
         expect(nbfc("admin-attachments/LEAD-1/1-a.pdf")).toEqual({ kind: "nbfc_lead", leadId: "LEAD-1", dealerMay: false });
         expect(nbfc("verdict-attachments/LEAD-1/1-a.pdf")).toEqual({ kind: "nbfc_lead", leadId: "LEAD-1", dealerMay: false });
         expect(nbfc("fi/F-1/exterior-1-0.jpg")).toEqual({ kind: "nbfc_case", table: "fi", id: "F-1" });

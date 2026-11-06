@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { SectionCard } from './shared';
 import { onFreshFileClick } from '@/lib/storage/freshFileLink';
+import { InfoTip } from '@/components/ui/info-tip';
 
 export type RequestedDoc = {
     id: string;
@@ -303,7 +304,8 @@ export default function OtherDocumentsSection({ leadId, docFor, onChanged, scope
             )}
 
             <p className="text-xs text-gray-500 mb-4">
-                Attach any extra documents not in the standard checklist (e.g. salary slip, NOC, alternative ID). Admin-requested documents also appear here.
+                Add documents not in the checklist, like a salary slip, NOC or other ID.{" "}
+                <InfoTip>Documents Admin asks for also show here.</InfoTip>
             </p>
 
             {error && (

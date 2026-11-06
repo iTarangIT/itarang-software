@@ -20,6 +20,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { PhoneCall, AlertTriangle, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { InfoTip } from "@/components/ui/info-tip";
 
 function isActivelyWorkedError(message: string): boolean {
     return message.includes("force");
@@ -112,22 +113,20 @@ export function CallNowButton({
                         {queuedTo ? (
                             <div className="px-6 py-6 space-y-3">
                                 <p className="text-sm text-gray-900">
-                                    <strong>{leadName}</strong> was pushed to{" "}
-                                    <strong>{queuedTo}</strong> for immediate calling.
-                                </p>
-                                <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                                    Whether an agent picks it up straight away depends on
-                                    that campaign&apos;s lead distribution inside NeoDove —
-                                    the CRM cannot make a phone ring. The call will appear
-                                    on this lead&apos;s timeline once NeoDove reports the
-                                    outcome.
+                                    <strong>{leadName}</strong> is next in line in{" "}
+                                    <strong>{queuedTo}</strong>.{" "}
+                                    <InfoTip>
+                                        A NeoDove agent picks it up based on that campaign&apos;s
+                                        settings; the CRM can&apos;t ring the phone. The call shows
+                                        on the timeline when NeoDove reports it.
+                                    </InfoTip>
                                 </p>
                                 <div className="flex justify-end">
                                     <button
                                         onClick={close}
                                         className="rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white hover:bg-gray-800"
                                     >
-                                        Done
+                                        Close
                                     </button>
                                 </div>
                             </div>
@@ -135,10 +134,10 @@ export function CallNowButton({
                             <>
                                 <div className="px-6 py-5 space-y-4">
                                     <p className="text-sm text-gray-600">
-                                        Push{" "}
+                                        Move{" "}
                                         <strong className="text-gray-900">{leadName}</strong>{" "}
-                                        to the top of the NeoDove calling queue. This spends
-                                        one NeoDove lead slot and cannot be undone.
+                                        to the top of the NeoDove calling queue.{" "}
+                                        <InfoTip>This uses one NeoDove lead slot. You can&apos;t undo it.</InfoTip>
                                     </p>
 
                                     {error && (

@@ -100,6 +100,9 @@ import {
 import { formatSlotTime } from "../schedule";
 import { fmtDay, staleAlertText } from "@/lib/sales/invoiceFreshnessRules";
 import { ECOFY_STAGE_LABELS } from "@/lib/ecofy/access";
+// ID 229: pure text only here; the database read is imported lazily in collect()
+// so this module still loads without DATABASE_URL (unit tests).
+import { CALL_FEED_ALARM_WORKING_MINUTES, CALL_FEED_LABEL, istWhen, workingGapText } from "@/lib/operations/callFeedText";
 import type {
   DigestDetail,
   DigestFigures,
@@ -145,6 +148,8 @@ const SECTIONS: DigestSection[] = [
   { key: "block_f", label: "F · Oldest overdue", hint: "The 10 oldest overdue follow-ups, visits and time limits passed (still unanswered), by name.", group: "backlog" },
   // ID 51 — Ecofy leads in the daily email.
   { key: "block_g", label: "G · Ecofy", hint: "Ecofy pickup queue (unassigned), new Ecofy leads yesterday, and every Ecofy lead by stage.", group: "backlog" },
+  // ID 229 — calls still reaching live.
+  { key: "block_h", label: "H · Calls reaching live", hint: "When the last NeoDove call and the last AI dialer result reached the CRM, and the working time since.", group: "backlog" },
 ];
 
 // ─────────────────────────────── dates ──────────────────────────────────────
@@ -575,7 +580,7 @@ async function collect(
     const periods = await salesDailyPeriodsFor(istDay);
 
     const { getDigestSettings } = await import("../settings");
-    const [yesterday, dayBefore, sameDayLastWeek, last7, mtd, lastMonth, scheduled, followUps, now, overdue, settings, extrasY, extrasMtd, awaiting, unmatched, wait, ecofy] = await Promise.all([
+    const [yesterday, dayBefore, sameDayLastWeek, last7, mtd, lastMonth, scheduled, followUps, now, overdue, settings, extrasY, extrasMtd, awaiting, unmatched, wait, ecofy, callFeed] = await Promise.all([
       buildSalesDashboard({ ...periods.yesterday, granularity: "day" }),
       buildSalesDashboard({ ...periods.dayBefore, granularity: "day" }),
       buildSalesDashboard({ ...periods.sameDayLastWeek, granularity: "day" }),
@@ -594,6 +599,8 @@ async function collect(
       medianWaitToAssign(periods.mtd),
       // 188 #4: Block G's "New leads yesterday" is the same Yesterday as the rest (Monday: Saturday).
       ecofySnapshot(periods.yesterday.from),
+      // ID 229: never fails the email — a read error prints "could not be read".
+      import("@/lib/operations/callFeed").then((m) => m.loadCallFeedStatus()).catch(() => null),
     ]);
     const blockA = await buildBlockA(db as never, periods, { yesterday, dayBefore, sameDayLastWeek, last7, mtd, lastMonth }, unmatched);
     // 18 Oct row 25: Block D splits Awaiting field visit at the transfer → visit limit.
@@ -909,6 +916,22 @@ async function collect(
               ? "Pickup queue: at S1 with no owner, as on the Ecofy Pickup Queue page. New leads yesterday: first received from Ecofy on the Yesterday day above (the last working day)."
               : undefined,
             empty: ecofy ? "No Ecofy leads yet." : "Ecofy leads could not be read on this database.",
+          },
+          {
+            // ID 229 — a call feed that stopped reaching live is seen the next morning at the latest.
+            key: "block_h",
+            title: `H · Calls reaching live at ${asOf}`,
+            columns: ["Feed", "Last received", "Working time since"],
+            rows: callFeed
+              ? callFeed.feeds.map((f) => [
+                  CALL_FEED_LABEL[f.feed],
+                  istWhen(f.lastAt),
+                  `${workingGapText(f.gapWorkingMinutes)}${(f.gapWorkingMinutes ?? 0) > CALL_FEED_ALARM_WORKING_MINUTES ? " (over 2 working hours)" : ""}`,
+                ])
+              : [],
+            textColumns: 3,
+            note: "Only office hours on working days count. Over 2 working hours, Admin and the CEO also get a bell.",
+            empty: "Could not be read on this database.",
           },
         ],
       },

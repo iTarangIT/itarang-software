@@ -9,7 +9,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2 } from "lucide-react";
+import { Loader2, MapPin } from "lucide-react";
 
 import {
     ACCOUNT_BUCKETS,
@@ -18,6 +18,7 @@ import {
 } from "@/lib/dealers/accountHealthRules";
 import type { DealerHealthRow } from "@/lib/dealers/accountHealth";
 import { OrderClaimBadge, OrderClaimsList, OrderPlacedButton } from "@/components/accounts/OrderClaims";
+import { InfoTip } from "@/components/ui/info-tip";
 
 const BUCKET_TONE: Record<AccountBucket, string> = {
     active: "bg-emerald-50 text-emerald-700 border-emerald-200",
@@ -35,7 +36,7 @@ const inr = (n: number) => `₹${n.toLocaleString("en-IN", { maximumFractionDigi
 /** Most urgent first: Orange, Red, Dormant, then the rest. */
 const URGENCY: AccountBucket[] = ["orange", "red", "dormant", "cooling", "never_ordered", "not_ordered_yet", "active", "closed"];
 
-type MyDealerRow = DealerHealthRow & { scope: "own" | "team" | "other" };
+type MyDealerRow = DealerHealthRow & { scope: "own" | "team" | "other"; can_log_visit: boolean };
 type Whose = "" | "own" | "team" | "other";
 const WHOSE_LABEL: Record<Exclude<Whose, "">, string> = { own: "Mine", team: "My team", other: "Others" };
 
@@ -80,7 +81,8 @@ export function MyDealersView() {
     if (allRows.length === 0) {
         return (
             <p className="rounded-xl border border-border bg-surface px-4 py-8 text-center text-sm text-ink-muted">
-                No dealer accounts are assigned to you yet. Your Sales Head assigns owners on the Accounts page.
+                No dealers assigned to you yet.{" "}
+                <InfoTip>Your Sales Head assigns dealer owners on the Accounts page.</InfoTip>
             </p>
         );
     }
@@ -126,12 +128,13 @@ export function MyDealersView() {
                     <thead className="bg-bg/60 text-[11px] uppercase tracking-wide text-ink-muted">
                         <tr>
                             <th className="px-3 py-2 text-left font-semibold">Dealer</th>
-                            <th className="px-3 py-2 text-left font-semibold">Bucket</th>
+                            <th className="px-3 py-2 text-left font-semibold">Reorder stage</th>
                             <th className="px-3 py-2 text-left font-semibold">Last invoice</th>
                             <th className="px-3 py-2 text-right font-semibold">Days since</th>
-                            <th className="px-3 py-2 text-right font-semibold">Usual gap (d)</th>
-                            <th className="px-3 py-2 text-right font-semibold">Revenue 90d</th>
+                            <th className="px-3 py-2 text-right font-semibold">Usual gap (days)</th>
+                            <th className="px-3 py-2 text-right font-semibold">Revenue, last 90 days</th>
                             <th className="px-3 py-2 text-right font-semibold">Lifetime</th>
+                            <th className="px-3 py-2" />
                             {data?.can_record_orders && <th className="px-3 py-2" />}
                         </tr>
                     </thead>
@@ -173,6 +176,18 @@ export function MyDealersView() {
                                 <td className="px-3 py-2 text-right tabular-nums">{r.avg_reorder_days ?? "—"}</td>
                                 <td className="px-3 py-2 text-right tabular-nums">{inr(r.revenue_90d)}</td>
                                 <td className="px-3 py-2 text-right tabular-nums">{inr(r.revenue_lifetime)}</td>
+                                <td className="px-3 py-2 text-right">
+                                    {/* ID 210: straight to the camera + location page for this counter. */}
+                                    {r.account_id && r.can_log_visit && (
+                                        <Link
+                                            href={`/visits/capture?account=${encodeURIComponent(r.account_id)}`}
+                                            className="inline-flex items-center gap-1 whitespace-nowrap rounded-md border border-border px-2 py-1 text-xs font-medium text-brand-sky hover:bg-bg"
+                                        >
+                                            <MapPin className="h-3.5 w-3.5" />
+                                            Log visit
+                                        </Link>
+                                    )}
+                                </td>
                                 {data?.can_record_orders && (
                                     <td className="px-3 py-2 text-right">
                                         {r.account_id && r.scope === "own" && r.bucket !== "closed" && !r.order_claim && (

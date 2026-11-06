@@ -164,7 +164,7 @@ export function TransferAsmModal({ open, onClose, leadId, state, city, onSuccess
                 </div>
 
                 <div>
-                    <Label>Handoff notes</Label>
+                    <Label>Notes for the ASM</Label>
                     <textarea
                         className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm min-h-[80px]"
                         value={handoffNotes}

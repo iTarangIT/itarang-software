@@ -96,7 +96,7 @@ export function SentByStamp({ assignedBy, currentOwnerId }: Props) {
                 assignedBy.role ? ` (${pretty(assignedBy.role)})` : ""
             }${assignedBy.at ? ` on ${fmtDate(assignedBy.at)}` : ""}`}
         >
-            <span className="text-gray-400">sent by</span>
+            <span className="text-gray-400">Assigned by</span>
             <span className="truncate font-medium text-gray-600">
                 {assignedBy.name ?? "—"}
             </span>

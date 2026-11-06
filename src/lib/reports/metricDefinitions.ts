@@ -210,11 +210,35 @@ export type AnalystTopic =
  * `first` (ID 184): a question that names this exact thing gets the rule
  * before the topic's other rules, so it is never the one left out for room.
  */
+/**
+ * ID 214 (decided 2 Nov, Kartik): a lead the CRM created for a dealer who
+ * onboarded with no lead ('Direct onboarding') is not a "new lead" — it is
+ * left out of Leads in, has no first-call time limits and is never dialled.
+ * `alias` is the dealer_leads alias in scope (e.g. "dl").
+ */
+export const DIRECT_ONBOARDING_DOOR = "direct_onboarding";
+export function notDirectOnboarding(alias = "dl"): SQL {
+    return sql`COALESCE(to_jsonb(${sql.raw(alias)}) ->> 'source_door', '') <> ${DIRECT_ONBOARDING_DOOR}`;
+}
+
+/**
+ * ID 214: the Won the system sets when a dealer's onboarding is submitted on a
+ * lead is not a "Marked Won" (that is a rep's mark). Such history rows are
+ * written by 'system' with this note (src/lib/onboarding/leadMatch.ts).
+ * `alias` is the dealer_lead_status_history alias in scope (e.g. "h").
+ */
+export const ONBOARDING_WON_NOTE = "Dealer onboarding submitted";
+export function notOnboardingWon(alias = "h"): SQL {
+    const h = sql.raw(alias);
+    return sql`NOT (${h}.changed_by = 'system' AND COALESCE(${h}.reason_notes, '') LIKE ${`${ONBOARDING_WON_NOTE}%`})`;
+}
+
 export const ANALYST_RULES: ReadonlyArray<{ topics: readonly AnalystTopic[]; text: string; first?: RegExp }> = [
     { topics: [], text: "Days, yesterday and months are IST calendar days." },
     {
         topics: ["leads"],
-        text: "Leads in = every active dealer_leads row created in the period, whatever its source (bulk imports included).",
+        text:
+            "Leads in = every active dealer_leads row created in the period, whatever its source (bulk imports included), except source_door 'direct_onboarding'.",
     },
     // ID 215 (2 Nov): the screens renamed two statuses; the stored codes did not change.
     {
@@ -229,7 +253,7 @@ export const ANALYST_RULES: ReadonlyArray<{ topics: readonly AnalystTopic[]; tex
     {
         topics: ["won", "people"],
         text:
-            "Marked Won = status history to_status 'Won' with won_undone_at NULL, credited to closing_owner_id. " +
+            "Marked Won = status history to_status 'Won' with won_undone_at NULL (not changed_by 'system'), credited to closing_owner_id. " +
             "Won is the rep's mark; Converted is onboarding approved — targets, credit and incentives use Converted.",
     },
     {

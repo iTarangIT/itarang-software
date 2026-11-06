@@ -1,6 +1,8 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { ChevronDown, Pencil, Plus, X } from "lucide-react";
+import { InfoTip } from "@/components/ui/info-tip";
 
 import { SectionCard } from "@/components/dealer-portal/lead-wizard/shared";
 import type { ProductScope } from "./useProductScope";
@@ -106,7 +108,7 @@ export function ProductCategoryCard({
   productTypeName?: string | null;
   productSku?: string | null;
   readOnly: boolean;
-  hint?: string;
+  hint?: ReactNode;
 }) {
   const {
     categories,
@@ -218,7 +220,15 @@ export function ProductCategoryCard({
         {hint ??
           (readOnly
             ? "Category and product type were set in Step 1. Inventory below is filtered to match."
-            : "Pick one or more product types — the Battery, Charger and Paraphernalia lists below show only the available stock for those products. Switching category clears the chosen battery, charger, and paraphernalia.")}
+            : (
+              <>
+                Pick one or more product types to see your stock.{" "}
+                <InfoTip>
+                  The Battery, Charger and Accessories lists show only stock for these types.
+                  Changing the category clears what you picked.
+                </InfoTip>
+              </>
+            ))}
       </p>
     </SectionCard>
   );

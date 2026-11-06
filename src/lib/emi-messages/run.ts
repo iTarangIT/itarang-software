@@ -29,6 +29,7 @@ import {
     fmtAmount,
     fmtDay,
     mobile10,
+    portalReminderRefusal,
     smsValues,
     templateParams,
     type EmiChannel,
@@ -352,8 +353,9 @@ export async function queueEmiReceived(input: { emiId: string; amount?: number |
 /**
  * The lender portal's "Send payment reminder": the oldest unpaid EMI of the
  * loan, the overdue text when it is overdue, else the due-soon text, on the
- * chosen channel — now, once per portal action. Any lender (not just the
- * pilot) once the messages are switched on.
+ * chosen channel — now, once per portal action. ID 204 (Kartik, 4 Nov): only
+ * for a lender switched on for that channel, and only when that message is
+ * on — the same switches as the automatic messages (portalReminderRefusal).
  */
 export async function sendPortalReminder(input: {
     loanSanctionId: string;
@@ -373,6 +375,9 @@ export async function sendPortalReminder(input: {
         `, today)} ORDER BY e.due_date LIMIT 1`),
     );
     if (!e) return { sent: false, reason: "No unpaid EMI on this loan." };
+    const waKind: EmiMessageKind = e.due_date < today ? "overdue_1" : e.due_date === today ? "due_today" : "due_3d";
+    const refusal = portalReminderRefusal(settings, e.nbfc_id, input.channel, waKind);
+    if (refusal) return { sent: false, reason: refusal };
     if (input.channel === "sms") {
         // SMS: the SMS-plan template for where the EMI stands (overdue → the total-overdue SMS).
         const step: EmiSmsStepKind = e.due_date < today ? "sms_overdue" : e.due_date === today ? "sms_due_today" : "sms_before";
@@ -381,7 +386,7 @@ export async function sendPortalReminder(input: {
         const n = await claimAndSendSms(e, "reminder", input.actionId, tpl, valuesFor(e, "sms", { today }));
         return n > 0 ? { sent: true } : { sent: false, reason: "The SMS could not be sent (see the file's history)." };
     }
-    const kind: EmiMessageKind = e.due_date < today ? "overdue_1" : e.due_date === today ? "due_today" : "due_3d";
+    const kind = waKind;
     const cfg = settings.messages[kind];
     if (!cfg.text) return { sent: false, reason: `The "${kind}" text is not approved yet.` };
     const n = await claimAndSend(e, "reminder", cfg, cfg.text, valuesFor(e, kind, { today }), settings, input.actionId, [input.channel]);

@@ -24,7 +24,7 @@
 import { sql } from "drizzle-orm";
 import type { SalesDashboard } from "@/lib/admin/salesDashboardTypes";
 import { batteryReading, type BatteryReading } from "@/lib/admin/batteryReading";
-import { engagedCall, firstMoveToField, transferCredit, wasHotAt } from "@/lib/reports/metricDefinitions";
+import { engagedCall, firstMoveToField, notDirectOnboarding, notOnboardingWon, transferCredit, wasHotAt } from "@/lib/reports/metricDefinitions";
 import { monthEnd, workingDaysBetween } from "@/lib/targets/rules";
 import { finalTargetSql } from "@/lib/targets/sql";
 import { scrapKgSourced } from "@/lib/buyback/scrapKgSourced";
@@ -477,7 +477,8 @@ export async function buildBlockA(
                 db,
                 periods,
                 (p) => sql`SELECT COUNT(*) AS n FROM dealer_leads dl
-                            WHERE dl.is_active IS NOT FALSE AND ${istRangeNaive(sql`dl.created_at`, p.from, p.to)}`,
+                            WHERE dl.is_active IS NOT FALSE AND ${notDirectOnboarding("dl")}
+                              AND ${istRangeNaive(sql`dl.created_at`, p.from, p.to)}`,
             ),
             perPeriod(
                 db,
@@ -522,7 +523,8 @@ export async function buildBlockA(
                 db,
                 periods,
                 (p) => sql`SELECT COUNT(DISTINCT h.dealer_lead_id) AS n FROM dealer_lead_status_history h
-                            WHERE h.to_status = 'Won' AND (to_jsonb(h) ->> 'won_undone_at') IS NULL AND ${inRange(sql`h.changed_at`, p)}`,
+                            WHERE h.to_status = 'Won' AND (to_jsonb(h) ->> 'won_undone_at') IS NULL AND ${notOnboardingWon("h")}
+                              AND ${inRange(sql`h.changed_at`, p)}`,
             ),
             perPeriod(
                 db,

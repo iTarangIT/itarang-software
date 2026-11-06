@@ -41,7 +41,7 @@ import { awaitingAssignment, countAwaitingAssignment, readySplitSql } from "@/li
 import { loadOfficeCalendar } from "@/lib/calendar/holidays";
 import { workingHoursBetween } from "@/lib/leads/workingHours";
 import { istDay } from "@/lib/calendar/officeCalendar";
-import { engagedCall, humanCall } from "@/lib/reports/metricDefinitions";
+import { engagedCall, humanCall, notDirectOnboarding } from "@/lib/reports/metricDefinitions";
 import { scrapKgSourced } from "@/lib/buyback/scrapKgSourced";
 
 export type Compare = { now: number; prev: number | null };
@@ -388,7 +388,8 @@ async function engineTile(from: string, toExcl: string, prevFrom: string | null,
             SELECT
               -- ID 153: the one "Leads in" rule (metricDefinitions) — every new lead.
               (SELECT COUNT(*)
-                 FROM dealer_leads dl WHERE dl.is_active IS NOT FALSE AND ${inWinNaive(sql`dl.created_at`, a, b)}) AS leads_in,
+                 FROM dealer_leads dl WHERE dl.is_active IS NOT FALSE AND ${notDirectOnboarding("dl")}
+                  AND ${inWinNaive(sql`dl.created_at`, a, b)}) AS leads_in,
               (SELECT COUNT(*) FROM dealer_leads dl WHERE dl.lead_status = 'Converted' AND ${inWin(sql`dl.closed_at`, a, b)}) AS converted,
               (SELECT COUNT(*) FROM (
                   SELECT r.dealer_lead_id, MIN(r.invoice_date) AS first_d

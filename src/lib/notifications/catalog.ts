@@ -126,6 +126,8 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "lead.reassigned_to_you": "Leads",
   // ID 179 — the rep a manager moved a lead away from (reassign or transfer).
   "lead.moved_away": "Leads",
+  // ID 214 — the dealer's onboarding was submitted on your lead (now Won).
+  "lead.onboarding_submitted": "Leads",
   // ID 221 — a team member's lead was given to someone else, to their manager.
   "lead.team_lead_moved": "Leads",
   "lead.reactivated": "Leads",

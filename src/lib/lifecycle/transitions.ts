@@ -59,6 +59,9 @@ export const LOST_REASON = [
   "duplicate_lead",
   "other",
   "onboarding_dropout",
+  // ID 214: the dealer's onboarding was rejected at Dealer Validation (set by
+  // the system only; reopened to Won when the dealer applies again).
+  "onboarding_rejected",
   // ID 76 (29 Sep 2026). lost_to_competition carries the competitor's name
   // (dealer_leads.competitor_name, E-314).
   "lost_to_competition",

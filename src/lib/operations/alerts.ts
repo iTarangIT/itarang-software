@@ -324,7 +324,12 @@ async function deliver(
 
   if (channels.includes("inapp")) {
     try {
-      await notifyRoles(["operations"], {
+      // ID 229: a call feed going quiet is a business problem, not only an
+      // ops one — Admin and the CEO (Kartik) hear it too, on the live CRM only
+      // (the sandbox receives no NeoDove calls by design and would ring hourly).
+      const liveCrm = process.env.NEXT_PUBLIC_APP_URL?.includes("crm.itarang.com") === true;
+      const roles = metricKey === "calls.feed_gap" && liveCrm ? ["operations", "admin", "ceo"] : ["operations"];
+      await notifyRoles(roles, {
         type: "ops_alert",
         title,
         message,

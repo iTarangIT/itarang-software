@@ -34,6 +34,7 @@ import {
 
 import { onFreshFileClick } from "@/lib/storage/freshFileLink";
 import FreshAudio from "@/components/shared/FreshAudio";
+import { InfoTip } from "@/components/ui/info-tip";
 export type LeadTouchpoint = {
     touchpoint_id: string;
     touchpoint_type: TouchpointType;
@@ -140,7 +141,7 @@ export function TouchpointTimeline({
                         {backfilled > 0 && (
                             <span className="text-amber-700">
                                 {" "}
-                                · {backfilled} backfilled from CSV
+                                · {backfilled} added from an old file
                             </span>
                         )}
                     </p>
@@ -158,7 +159,7 @@ export function TouchpointTimeline({
                             className="shrink-0 inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
                         >
                             <Download className="h-3.5 w-3.5" />
-                            Export to Excel
+                            Download Excel
                         </a>
                     )}
                 </div>
@@ -166,8 +167,8 @@ export function TouchpointTimeline({
 
             {entries.length === 0 ? (
                 <p className="text-sm text-gray-500 py-8 text-center">
-                    No touchpoints logged for this lead yet. Calls handled by NeoDove
-                    or Inside Sales will appear here.
+                    No activity on this lead yet.{" "}
+                    <InfoTip>Calls by NeoDove or Inside Sales show here.</InfoTip>
                 </p>
             ) : (
                 <>

@@ -34,6 +34,7 @@ import { toast } from "sonner";
 import { INTENT_THRESHOLDS } from "@/lib/ai/scoring/thresholds";
 import { ScraperDashboard } from "@/components/scraper/ScraperDashboard";
 import { DownloadConvertedLeadsButton } from "@/components/leads/DownloadButton";
+import { InfoTip } from "@/components/ui/info-tip";
 import {
   DialerStartModal,
   type DialerProvider,
@@ -73,6 +74,14 @@ import {
   BUSINESS_TYPE_UNSET_LABEL,
 } from "@/lib/leads/businessType";
 import { TeamMemberFilter, type TeamPerson } from "@/components/leads/TeamMemberFilter";
+
+// Upload preview: on-screen names for the file's column keys (the keys stay as-is).
+const UPLOAD_PREVIEW_HEADER: Record<string, string> = {
+  shop_name: "Shop name",
+  dealer_name: "Dealer name",
+  phone: "Phone",
+  location: "Location",
+};
 
 const ENDED_VISIBLE_MS = 8000;
 const MANUAL_CALL_MAX_MS = 3 * 60 * 1000;
@@ -378,7 +387,8 @@ function UploadModal({
       }
       (window as any).__uploadRows = normalized;
     } catch (e: any) {
-      setError("Failed to parse file: " + e.message);
+      console.error("Lead upload parse failed:", e);
+      setError("Couldn't read this file. Save it as .csv or .xlsx and try again.");
       setStatus("error");
     }
   };
@@ -396,7 +406,7 @@ function UploadModal({
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
-        setError(data.error || "Import failed");
+        setError(data.error || "Import failed. Check the file and try again.");
         setStatus("error");
         return;
       }
@@ -426,7 +436,7 @@ function UploadModal({
               <FileSpreadsheet className="w-4 h-4 text-white" />
             </div>
             <h2 className="text-sm font-semibold text-gray-900">
-              Import Leads
+              Import leads
             </h2>
           </div>
           <button
@@ -469,8 +479,12 @@ function UploadModal({
                 )}
                 {!!result.address_mismatch && (
                   <p className="text-amber-600">
-                    {result.address_mismatch} matched an existing lead at a
-                    different address — sent to the admin merge queue
+                    {result.address_mismatch} match a lead at another address
+                    — sent to Admin to check{" "}
+                    <InfoTip>
+                      Same phone as an existing lead but a different address.
+                      Admin decides whether to merge them.
+                    </InfoTip>
                   </p>
                 )}
                 {!!result.invalid_phone && (
@@ -481,7 +495,8 @@ function UploadModal({
                 )}
                 {!!result.failed && (
                   <p className="text-rose-600">
-                    {result.failed} failed — see server logs
+                    {result.failed} failed. Try these rows again or tell tech
+                    support.
                   </p>
                 )}
               </div>
@@ -492,7 +507,7 @@ function UploadModal({
                 }}
                 className="mt-4 px-4 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-700 transition-colors"
               >
-                Done
+                Close
               </button>
             </div>
           )}
@@ -584,7 +599,7 @@ function UploadModal({
                               key={h}
                               className="px-3 py-2 text-left font-medium text-gray-500"
                             >
-                              {h}
+                              {UPLOAD_PREVIEW_HEADER[h] ?? h}
                             </th>
                           ))}
                         </tr>
@@ -678,7 +693,7 @@ function UploadModal({
               {status === "parsing" && (
                 <div className="flex items-center justify-center gap-2 py-4 text-gray-500">
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  <span className="text-sm">Parsing file...</span>
+                  <span className="text-sm">Reading file…</span>
                 </div>
               )}
             </>
@@ -726,7 +741,7 @@ function Pagination({
         </p>
         {onLimitChange && (
           <label className="flex items-center gap-1.5 text-xs text-gray-400">
-            Rows
+            Rows per page
             <select
               value={limit}
               onChange={(e) => onLimitChange(Number(e.target.value))}
@@ -811,7 +826,7 @@ function AiDialerBanner({
   expanded: boolean;
   onToggleExpanded: () => void;
 }) {
-  const providerLabel = provider === "elevenlabs" ? "ElevenLabs" : "Bolna";
+  const providerLabel = provider === "elevenlabs" ? "AI voice 2" : "AI voice 1";
   const providerChip =
     provider === "elevenlabs"
       ? "bg-violet-500/20 text-violet-300 border-violet-500/40"
@@ -904,7 +919,7 @@ function AiDialerBanner({
             onClick={onSkipCountdown}
             className="px-3 py-1.5 text-xs font-medium bg-amber-500 hover:bg-amber-600 text-white rounded-lg transition-all"
           >
-            Call Now
+            Call now
           </button>
         )}
         <button
@@ -1012,7 +1027,8 @@ function ConvertedLeadCard({
       // The old version ignored the response entirely, which is why a 404 was
       // indistinguishable from a successful assignment.
       if (!res.ok || !json?.success) {
-        throw new Error(json?.error?.message ?? `Assign failed (${res.status}).`);
+        console.error("Assign failed:", res.status, json);
+        throw new Error(json?.error?.message ?? "Couldn't assign the lead. Try again.");
       }
       toast.success(`Assigned to ${user.name ?? user.email}.`);
       onUpdate();
@@ -1118,7 +1134,7 @@ function ConvertedLeadCard({
                 <div className="py-1 max-h-64 overflow-y-auto">
                   {ownersError && (
                     <p className="px-3 py-2 text-xs text-rose-600">
-                      Could not load users.
+                      Couldn&apos;t load the team list. Close and try again.
                     </p>
                   )}
                   {!ownersError && owners.length === 0 && (
@@ -1643,7 +1659,7 @@ export default function LeadsUnifiedPage() {
         } catch {
           detail = await res.text().catch(() => "");
         }
-        throw new Error(String(detail).slice(0, 240) || "Export failed");
+        throw new Error(String(detail).slice(0, 240) || "Couldn't download the file. Try again.");
       }
       const rowCount = Number(res.headers.get("X-Export-Rows") ?? 0);
       const blob = await res.blob();
@@ -1653,7 +1669,7 @@ export default function LeadsUnifiedPage() {
       a.download = "all-leads.xlsx";
       a.click();
       URL.revokeObjectURL(url);
-      toast.success(`Exported ${rowCount.toLocaleString("en-IN")} lead${rowCount === 1 ? "" : "s"} with visits, calls and billing.`);
+      toast.success(`Downloaded ${rowCount.toLocaleString("en-IN")} lead${rowCount === 1 ? "" : "s"} with visits, calls and billing.`);
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
@@ -1677,7 +1693,7 @@ export default function LeadsUnifiedPage() {
         // The route returns JSON on failure and a file on success, so read as text
         // and show whatever it said rather than downloading an error page.
         const detail = await res.text().catch(() => "");
-        throw new Error(detail.slice(0, 200) || "Export failed");
+        throw new Error(detail.slice(0, 200) || "Couldn't download the file. Try again.");
       }
       const rowCount = Number(res.headers.get("X-Export-Rows") ?? 0);
       const matched = Number(res.headers.get("X-Export-Total") ?? 0);
@@ -1695,11 +1711,11 @@ export default function LeadsUnifiedPage() {
 
       if (truncated) {
         toast.warning(
-          `Exported the first ${rowCount.toLocaleString("en-IN")} of ${matched.toLocaleString("en-IN")} matches. Narrow the filters to get the rest.`,
+          `Downloaded the first ${rowCount.toLocaleString("en-IN")} of ${matched.toLocaleString("en-IN")} leads. Add filters to download the rest.`,
         );
       } else {
         toast.success(
-          `Exported ${rowCount.toLocaleString("en-IN")} lead${rowCount === 1 ? "" : "s"}.`,
+          `Downloaded ${rowCount.toLocaleString("en-IN")} lead${rowCount === 1 ? "" : "s"}.`,
         );
       }
     } catch (e) {
@@ -1893,7 +1909,7 @@ export default function LeadsUnifiedPage() {
         toast.success(
           armedStatus === "scheduled" && resumeAt
             ? `Campaign scheduled — calling starts ${new Date(resumeAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", weekday: "short", hour: "2-digit", minute: "2-digit" })} IST`
-            : "Campaign saved — it is outside the calling window, so no calls were placed",
+            : "Campaign saved. No calls made — it's outside calling hours.",
         );
         return;
       }
@@ -1930,7 +1946,7 @@ export default function LeadsUnifiedPage() {
         toast.success(
           json.data?.status === "scheduled" && resumeAt
             ? `Campaign scheduled — calling starts ${new Date(resumeAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", weekday: "short", hour: "2-digit", minute: "2-digit" })} IST`
-            : "Campaign saved — it is outside the calling window, so no calls were placed",
+            : "Campaign saved. No calls made — it's outside calling hours.",
         );
         setTab("campaigns");
         return;
@@ -2107,7 +2123,7 @@ export default function LeadsUnifiedPage() {
           {tab === "converted" && <DownloadConvertedLeadsButton />}
           <Link href="/leads/new">
             <button className="flex items-center gap-2 px-4 py-2.5 bg-gray-900 text-white text-sm font-medium rounded-xl hover:bg-gray-700 transition-all">
-              <Plus className="w-4 h-4" /> New Lead
+              <Plus className="w-4 h-4" /> Create lead
             </button>
           </Link>
         </div>
@@ -2135,9 +2151,9 @@ export default function LeadsUnifiedPage() {
         <div className="flex items-center bg-white border border-gray-200 rounded-xl p-1 gap-1 overflow-x-auto min-w-0">
           {(
             [
-              { key: "scraper", label: "Scraper" },
+              { key: "scraper", label: "Find dealers", tip: "Dealers found automatically on the web." },
               { key: "leads", label: "Leads" },
-              { key: "converted", label: "My Converted Leads" },
+              { key: "converted", label: "My converted leads" },
               { key: "campaigns", label: "Campaigns" },
               ...(canSeeCostAnalytics
                 ? [{ key: "cost-analytics" as Tab, label: "Cost Analytics" }]
@@ -2145,17 +2161,19 @@ export default function LeadsUnifiedPage() {
               ...(caps.canSeeCallTiming
                 ? [{ key: "call-timing" as Tab, label: "Call timing" }]
                 : []),
-            ] as { key: Tab; label: string }[]
-          ).map(({ key, label }) => (
-            <button
-              key={key}
-              onClick={() => {
-                setTab(key);
-              }}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap shrink-0 ${tab === key ? "bg-gray-900 text-white shadow-sm" : "text-gray-500 hover:text-gray-800"}`}
-            >
-              {label}
-            </button>
+            ] as { key: Tab; label: string; tip?: string }[]
+          ).map(({ key, label, tip }) => (
+            <span key={key} className="flex items-center shrink-0">
+              <button
+                onClick={() => {
+                  setTab(key);
+                }}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap shrink-0 ${tab === key ? "bg-gray-900 text-white shadow-sm" : "text-gray-500 hover:text-gray-800"}`}
+              >
+                {label}
+              </button>
+              {tip && <InfoTip className="mr-1">{tip}</InfoTip>}
+            </span>
           ))}
         </div>
         {tab === "converted" && (
@@ -2238,11 +2256,7 @@ export default function LeadsUnifiedPage() {
                 {leadsError}
               </div>
               <div className="text-[11px] text-rose-600 mt-2">
-                If this says &quot;column … does not exist&quot;, a pending
-                migration (e.g. <code>drizzle/E-106_*</code>) hasn&apos;t been
-                applied to the DB this dev server connects to. Check the
-                <code> [DB] connected to …</code> line in the server log to
-                see which host needs the migration.
+                Refresh the page. If it happens again, tell tech support.
               </div>
             </div>
           )}
@@ -2325,7 +2339,7 @@ export default function LeadsUnifiedPage() {
             </label>
             {leads.length > 0 && leadsTotal > leads.length && (
               <span className="text-xs text-gray-400">
-                · tick the header box to take all {leads.length} on this page
+                · Tick the top box to select all {leads.length} on this page
               </span>
             )}
           </div>
@@ -2335,6 +2349,7 @@ export default function LeadsUnifiedPage() {
             loading={leadsLoading}
             // ID 199: a manager's team view shows whose lead each row is.
             caps={teamView ? { ...caps, canSeeOwnerAsm: true } : caps}
+            teamReview={teamView}
             hasFilters={hasAnyFilter(draft)}
             selected={selectedLeadIds}
             onToggle={toggleLeadSelected}
@@ -2429,7 +2444,7 @@ export default function LeadsUnifiedPage() {
                 ))}
               </div>
               {convertedLeads.length === 0 && (
-                <EmptyState label="No converted leads yet" />
+                <EmptyState label="No converted leads yet. [View leads]" />
               )}
               <Pagination
                 page={convertedPage}

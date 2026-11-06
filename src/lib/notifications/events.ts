@@ -2251,6 +2251,8 @@ export async function notifyQuotationRejected(p: {
   rejectorName?: string | null;
   /** The text the bell shows — built by quoteRejectedMessage so WhatsApp says the same. */
   message: string;
+  /** ID 216: the owner's own lead page (ISR or ASM), opened at this quote. */
+  href?: string;
 }) {
   if (!p.ownerUserId) return;
   await emit({
@@ -2271,7 +2273,7 @@ export async function notifyQuotationRejected(p: {
       {
         audience: { kind: "user" as const, userId: p.ownerUserId },
         as: ADMIN_PARTY,
-        href: `/inside-sales/lead/${p.leadId}?quote=${p.commercialId}`,
+        href: p.href ?? `/inside-sales/lead/${p.leadId}?quote=${p.commercialId}`,
       },
     ],
   });

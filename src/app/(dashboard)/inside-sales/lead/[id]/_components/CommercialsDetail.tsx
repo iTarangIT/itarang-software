@@ -90,7 +90,7 @@ export function QuoteApprovalBlock({
     const label =
         status === "approved"
             ? cc.approval_mode === "auto"
-                ? "Auto-approved (at or above OEM reference)"
+                ? "Approved automatically (at or above OEM price)"
                 : "Approved"
             : status === "rejected"
               ? "Rejected"
@@ -151,13 +151,13 @@ export function QuoteApprovalBlock({
                             rel="noreferrer"
                             className="font-medium underline underline-offset-2"
                         >
-                            Preview draft
+                            Preview PDF
                         </a>
                     ) : (
                         <span className="opacity-80">
                             {cc.quote_pdf_error
-                                ? "Draft generation failed — open Send to retry."
-                                : "Draft not generated yet."}
+                                ? "Quote PDF failed. Open Send to try again."
+                                : "Quote PDF not ready yet."}
                         </span>
                     )}
                     {onWithdraw && !cc.withdrawn_at && cc.dealer_decision !== "approved" && (
@@ -406,20 +406,33 @@ function StatusChip({ cc }: { cc: LeadDetailCommercials }) {
  */
 export function CommercialsVersionHistory({
     history,
+    onRevise,
+    focusId,
 }: {
     history: LeadDetailCommercials[];
+    /** ID 216: "Revise" on a rejected quote — opens the form prefilled from it. */
+    onRevise?: (c: LeadDetailCommercials) => void;
+    /** ID 216: the quote a bell / WhatsApp link points at (?quote=); opened. */
+    focusId?: string | null;
 }) {
-    const [open, setOpen] = useState<string | null>(null);
+    const focused = focusId && history.some((c) => c.commercial_id === focusId) ? focusId : null;
+    const [open, setOpen] = useState<string | null>(focused);
 
-    if (history.length <= 1) return null;
+    // ID 216: a rejected version is always worth showing — with only one
+    // version it is the only record of what the CEO turned down and why.
+    const anyRejected = history.some((c) => c.approval_status === "rejected");
+    if (history.length === 0 || (history.length <= 1 && !anyRejected)) return null;
 
     const ascending = [...history].sort((a, b) => a.version_no - b.version_no);
     const rows = [...ascending].reverse();
 
     return (
-        <details className="rounded-md border border-gray-100 bg-gray-50/50 px-3 py-2 text-xs">
+        <details
+            open={anyRejected || !!focused}
+            className="rounded-md border border-gray-100 bg-gray-50/50 px-3 py-2 text-xs"
+        >
             <summary className="cursor-pointer text-gray-700 font-medium">
-                Version history ({history.length} versions)
+                Version history ({history.length} {history.length === 1 ? "version" : "versions"})
             </summary>
 
             <ol className="mt-2 space-y-1.5">
@@ -432,7 +445,10 @@ export function CommercialsVersionHistory({
                     return (
                         <li
                             key={c.commercial_id}
-                            className="rounded-md border border-gray-200 bg-white px-2 py-1.5"
+                            id={`quote-${c.commercial_id}`}
+                            className={`rounded-md border bg-white px-2 py-1.5 ${
+                                focused === c.commercial_id ? "border-amber-400 ring-1 ring-amber-300" : "border-gray-200"
+                            }`}
                         >
                             <button
                                 type="button"
@@ -484,6 +500,20 @@ export function CommercialsVersionHistory({
                             {expanded && (
                                 <div className="mt-2 border-t border-gray-100 pt-2">
                                     <CommercialsDetail cc={c} />
+                                </div>
+                            )}
+                            {/* ID 216: a rejected quote can be revised — the form opens
+                                with its lines, prices and terms; saving makes the next
+                                version and sends it to the CEO as usual. */}
+                            {onRevise && c.approval_status === "rejected" && (
+                                <div className="mt-1.5 flex justify-end">
+                                    <button
+                                        type="button"
+                                        onClick={() => onRevise(c)}
+                                        className="rounded-md border border-brand-sky px-2 py-1 text-[11px] font-semibold text-brand-sky hover:bg-sky-50"
+                                    >
+                                        Revise
+                                    </button>
                                 </div>
                             )}
                         </li>

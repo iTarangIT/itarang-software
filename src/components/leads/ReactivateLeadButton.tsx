@@ -15,6 +15,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { Loader2, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { InfoTip } from "@/components/ui/info-tip";
 
 type Reactivated = { id: string; new_status: string; new_owner_id: string | null };
 
@@ -86,14 +87,16 @@ export function ReactivateLeadButton({
                 Reactivate this Lost lead
             </h3>
             <p className="mt-1 text-[11px] text-gray-600">
-                It goes back to the person who brought it in (if still active), otherwise to Ready to
-                Assign. The Lost reason is kept in its history.
+                It goes back to the person who brought it in.{" "}
+                <InfoTip>
+                    If they are no longer active, it goes to Ready to Assign. The Lost reason stays in its history.
+                </InfoTip>
             </p>
             <textarea
                 value={reason}
                 onChange={(e) => setReason(e.target.value)}
                 rows={3}
-                placeholder="Why is this lead being reactivated? (e.g. dealer called back, number corrected)"
+                placeholder="Why reactivate? e.g. dealer called back, number corrected"
                 disabled={busy}
                 className="mt-2 w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-100 disabled:bg-gray-50"
             />

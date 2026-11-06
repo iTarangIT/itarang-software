@@ -43,6 +43,7 @@ import {
 } from "@/lib/ai-dialer/campaignLeadStatus";
 
 import { onFreshFileClick } from "@/lib/storage/freshFileLink";
+import { InfoTip } from "@/components/ui/info-tip";
 // Legacy 6-dimension analysis (pre-band rows). Kept only so old
 // follow_up_history rows still render their bars.
 type SubScores = {
@@ -626,7 +627,7 @@ export function CampaignLeadTranscriptDrawer({
             <EmptyState
               icon={<Clock className="w-8 h-8 text-gray-300" />}
               title="Call not yet placed"
-              body="This lead is waiting in the queue. The drawer will update automatically when the call begins."
+              body="Waiting in the call queue. This updates when the call starts."
             />
           ) : status === "calling" ? (
             <EmptyState
@@ -807,7 +808,8 @@ export function AttemptsTab({
       <EmptyState
         icon={<History className="w-8 h-8 text-gray-300" />}
         title="No attempts yet"
-        body="This lead has not been dialed in any campaign yet. Attempts will appear here as calls are placed."
+        body="No AI calls on this lead yet."
+        tip="Calls show here as they happen."
       />
     );
   }
@@ -1099,9 +1101,11 @@ function TranscriptTab({
             ? `Call ended: ${formatOutcome(data.callOutcome)}`
             : "Transcript unavailable"
         }
-        body={
-          data.summary ??
-          "The call ended before a conversation could be recorded. This can happen on no-answer, busy, or when the dealer hung up immediately."
+        body={data.summary ?? "The call ended before anyone spoke."}
+        tip={
+          data.summary
+            ? undefined
+            : "This happens on no answer, busy, or when the dealer hangs up at once."
         }
       />
     );
@@ -1350,16 +1354,27 @@ function EmptyState({
   icon,
   title,
   body,
+  tip,
 }: {
   icon: React.ReactNode;
   title: string;
   body: string;
+  /** Longer explanation behind the "i" (writing standard rule 4). */
+  tip?: string;
 }) {
   return (
     <div className="px-8 py-20 flex flex-col items-center justify-center text-center">
       <div className="mb-4">{icon}</div>
       <h4 className="text-sm font-semibold text-gray-900">{title}</h4>
-      <p className="mt-1.5 text-xs text-gray-500 max-w-sm leading-relaxed">{body}</p>
+      <p className="mt-1.5 text-xs text-gray-500 max-w-sm leading-relaxed">
+        {body}
+        {tip ? (
+          <>
+            {" "}
+            <InfoTip>{tip}</InfoTip>
+          </>
+        ) : null}
+      </p>
     </div>
   );
 }

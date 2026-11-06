@@ -17,6 +17,7 @@ import { FileText, Loader2, Plus, Send, Trash2, Undo2 } from "lucide-react";
 
 import type { AssetType, CommercialsProductLine, ProductMasterResponse } from "@/lib/inside-sales/types";
 import { buildQuotePreview } from "@/lib/inside-sales/quotePreview";
+import { InfoTip } from "@/components/ui/info-tip";
 
 type Quotation = {
     quotation_id: string;
@@ -25,6 +26,8 @@ type Quotation = {
     product_lines: CommercialsProductLine[] | null;
     total: string | null;
     credit_terms: string | null;
+    dealer_payment_terms: string | null;
+    credit_days: number | null;
     notes: string | null;
     approval_status: "pending" | "approved" | "rejected";
     approval_mode: string | null;
@@ -79,11 +82,11 @@ function StatusChip({ q }: { q: Quotation }) {
           : q.approval_status === "rejected"
             ? ["Rejected by CEO", "bg-rose-50 text-rose-700 border-rose-200"]
             : q.dealer_decision === "approved"
-              ? ["Account approved", "bg-emerald-600 text-white border-emerald-600"]
+              ? ["Dealer approved", "bg-emerald-600 text-white border-emerald-600"]
               : q.dealer_decision === "declined"
-                ? ["Account declined", "bg-orange-50 text-orange-700 border-orange-200"]
+                ? ["Dealer declined", "bg-orange-50 text-orange-700 border-orange-200"]
                 : q.sent_count > 0
-                  ? ["Sent — awaiting account", "bg-sky-50 text-sky-700 border-sky-200"]
+                  ? ["Sent — waiting for dealer", "bg-sky-50 text-sky-700 border-sky-200"]
                   : [q.approval_mode === "auto" ? "Approved (auto) — not sent" : "Approved — not sent", "bg-emerald-50 text-emerald-700 border-emerald-200"];
     return <span className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${tone}`}>{label}</span>;
 }
@@ -91,7 +94,15 @@ function StatusChip({ q }: { q: Quotation }) {
 export function AccountQuotationsPanel({ accountId, readOnly = false }: { accountId: string; readOnly?: boolean }) {
     const queryClient = useQueryClient();
     const [creating, setCreating] = useState(false);
+    // ID 216: "Revise" on a rejected quotation opens Create prefilled from it.
+    const [reviseFrom, setReviseFrom] = useState<Quotation | null>(null);
     const [sending, setSending] = useState<Quotation | null>(null);
+    // ID 216: ?quote=<id> from the rejection bell / WhatsApp marks that quotation.
+    const [focusId, setFocusId] = useState<string | null>(null);
+    useEffect(() => {
+        const q = new URLSearchParams(window.location.search).get("quote");
+        if (q) setFocusId(q);
+    }, []);
     const { data, isLoading, error } = useQuery<PanelData>({
         queryKey: qKey(accountId),
         queryFn: () => api(`/api/dealer-accounts/${encodeURIComponent(accountId)}/quotations`),
@@ -120,9 +131,10 @@ export function AccountQuotationsPanel({ accountId, readOnly = false }: { accoun
         <section className="rounded-xl border border-border bg-surface shadow-card">
             <header className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3">
                 <div>
-                    <h2 className="text-sm font-semibold text-ink">Account quotations</h2>
+                    <h2 className="text-sm font-semibold text-ink">Quotes for this dealer</h2>
                     <p className="text-[11px] text-ink-muted">
-                        Separate from lead quotations. A line below its OEM reference price, or credit terms, waits for the CEO.
+                        Separate from lead quotes. Some quotes need CEO approval.{" "}
+                        <InfoTip>A price below the OEM reference price, or credit terms, needs CEO approval.</InfoTip>
                     </p>
                 </div>
                 {canWork && (
@@ -131,7 +143,7 @@ export function AccountQuotationsPanel({ accountId, readOnly = false }: { accoun
                         onClick={() => setCreating(true)}
                         className="inline-flex items-center gap-1.5 rounded-lg bg-brand-navy px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90"
                     >
-                        <Plus className="h-3.5 w-3.5" /> Create quotation
+                        <Plus className="h-3.5 w-3.5" /> Create quote
                     </button>
                 )}
             </header>
@@ -144,7 +156,7 @@ export function AccountQuotationsPanel({ accountId, readOnly = false }: { accoun
             {error && <p className="px-4 py-6 text-sm text-rose-600">{(error as Error).message}</p>}
             {data && data.quotations.length === 0 && (
                 <p className="px-4 py-6 text-sm text-ink-muted">
-                    No quotations for this account yet.{canWork ? " Press “Create quotation” to raise one." : ""}
+                    No quotations for this account yet.{canWork ? " Press “Create quote” to raise one." : ""}
                 </p>
             )}
             {(regenerate.error || withdraw.error) && (
@@ -159,7 +171,11 @@ export function AccountQuotationsPanel({ accountId, readOnly = false }: { accoun
                         const sendable = q.approval_status === "approved" && !q.withdrawn_at && q.is_latest_live && !!q.quote_pdf_url;
                         const withdrawable = !q.withdrawn_at && q.approval_status !== "rejected" && q.dealer_decision !== "approved";
                         return (
-                            <li key={q.quotation_id} className="px-4 py-3 text-sm">
+                            <li
+                                key={q.quotation_id}
+                                id={`quote-${q.quotation_id}`}
+                                className={`px-4 py-3 text-sm ${focusId === q.quotation_id ? "bg-amber-50 ring-1 ring-inset ring-amber-300" : ""}`}
+                            >
                                 <div className="flex flex-wrap items-center gap-2">
                                     <span className="font-semibold text-ink">v{q.version_no}</span>
                                     {q.quote_number && <span className="font-mono text-xs text-ink-muted">{q.quote_number}</span>}
@@ -183,7 +199,7 @@ export function AccountQuotationsPanel({ accountId, readOnly = false }: { accoun
                                     </p>
                                 )}
                                 {q.quote_pdf_error && q.approval_status === "approved" && !q.quote_pdf_url && (
-                                    <p className="mt-1 text-[12px] text-rose-700">The document could not be generated.</p>
+                                    <p className="mt-1 text-[12px] text-rose-700">Couldn&apos;t create the PDF. Click Generate document to try again.</p>
                                 )}
                                 <div className="mt-2 flex flex-wrap gap-3 text-xs font-semibold">
                                     {q.quote_pdf_url && (
@@ -198,7 +214,19 @@ export function AccountQuotationsPanel({ accountId, readOnly = false }: { accoun
                                     )}
                                     {canWork && sendable && (
                                         <button type="button" onClick={() => setSending(q)} className="inline-flex items-center gap-1 text-emerald-700 hover:underline">
-                                            <Send className="h-3.5 w-3.5" /> {q.sent_count > 0 ? "Send again" : "Send to account"}
+                                            <Send className="h-3.5 w-3.5" /> {q.sent_count > 0 ? "Send again" : "Send to dealer"}
+                                        </button>
+                                    )}
+                                    {canWork && q.approval_status === "rejected" && !q.withdrawn_at && (
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setReviseFrom(q);
+                                                setCreating(true);
+                                            }}
+                                            className="inline-flex items-center gap-1 text-brand-sky hover:underline"
+                                        >
+                                            <Plus className="h-3.5 w-3.5" /> Revise
                                         </button>
                                     )}
                                     {canWork && withdrawable && (
@@ -206,7 +234,7 @@ export function AccountQuotationsPanel({ accountId, readOnly = false }: { accoun
                                             type="button"
                                             disabled={withdraw.isPending}
                                             onClick={() => {
-                                                const reason = window.prompt("Why are you withdrawing this quotation?");
+                                                const reason = window.prompt("Why are you withdrawing this quote?");
                                                 if (reason && reason.trim().length >= 3) withdraw.mutate({ id: q.quotation_id, reason: reason.trim() });
                                             }}
                                             className="inline-flex items-center gap-1 text-ink-muted hover:underline"
@@ -225,9 +253,14 @@ export function AccountQuotationsPanel({ accountId, readOnly = false }: { accoun
                 <CreateAccountQuoteDialog
                     accountId={accountId}
                     accountName={data.account.name}
-                    onClose={() => setCreating(false)}
+                    initial={reviseFrom}
+                    onClose={() => {
+                        setCreating(false);
+                        setReviseFrom(null);
+                    }}
                     onSaved={() => {
                         setCreating(false);
+                        setReviseFrom(null);
                         refresh();
                     }}
                 />
@@ -267,17 +300,20 @@ function Dialog({ title, onClose, children }: { title: string; onClose: () => vo
 const ASSET_TYPES: { key: AssetType; label: string }[] = [
     { key: "battery", label: "Battery" },
     { key: "charger", label: "Charger" },
-    { key: "paraphernalia", label: "Paraphernalia" },
+    { key: "paraphernalia", label: "Accessories" },
 ];
 
 function CreateAccountQuoteDialog({
     accountId,
     accountName,
+    initial,
     onClose,
     onSaved,
 }: {
     accountId: string;
     accountName: string;
+    /** ID 216: a rejected quotation to revise — its lines, terms and notes. */
+    initial?: Quotation | null;
     onClose: () => void;
     onSaved: () => void;
 }) {
@@ -289,10 +325,12 @@ function CreateAccountQuoteDialog({
     const [assetType, setAssetType] = useState<AssetType>("battery");
     const [productId, setProductId] = useState("");
     const [qty, setQty] = useState("1");
-    const [lines, setLines] = useState<CommercialsProductLine[]>([]);
-    const [payTerms, setPayTerms] = useState<"cash" | "credit">("cash");
-    const [creditDays, setCreditDays] = useState("");
-    const [notes, setNotes] = useState("");
+    const [lines, setLines] = useState<CommercialsProductLine[]>(initial?.product_lines ?? []);
+    const [payTerms, setPayTerms] = useState<"cash" | "credit">(
+        initial?.dealer_payment_terms === "credit" ? "credit" : "cash",
+    );
+    const [creditDays, setCreditDays] = useState(initial?.credit_days != null ? String(initial.credit_days) : "");
+    const [notes, setNotes] = useState(initial?.notes ?? "");
     const [formError, setFormError] = useState<string | null>(null);
 
     const options = useMemo(() => products.data?.[assetType] ?? [], [products.data, assetType]);
@@ -319,8 +357,8 @@ function CreateAccountQuoteDialog({
         onSuccess: (r) => {
             window.alert(
                 r.auto_approved
-                    ? `Approved automatically${r.quote_number ? ` — ${r.quote_number}` : ""}. You can send it to the account now.`
-                    : "Sent to the CEO for approval. The account sees nothing until it is approved.",
+                    ? `Approved automatically${r.quote_number ? ` — ${r.quote_number}` : ""}. You can send it to the dealer now.`
+                    : "Sent to the CEO for approval. The dealer sees it only after approval.",
             );
             onSaved();
         },
@@ -357,7 +395,10 @@ function CreateAccountQuoteDialog({
     };
 
     return (
-        <Dialog title={`New quotation — ${accountName}`} onClose={onClose}>
+        <Dialog
+            title={initial ? `Revise v${initial.version_no} — ${accountName}` : `New quote — ${accountName}`}
+            onClose={onClose}
+        >
             <div className="space-y-4 text-sm">
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-[130px_1fr_80px_auto]">
                     <select value={assetType} onChange={(e) => { setAssetType(e.target.value as AssetType); setProductId(""); }} className="rounded-lg border border-border px-2 py-1.5">
@@ -434,7 +475,7 @@ function CreateAccountQuoteDialog({
                     )}
                 </div>
                 {payTerms === "credit" && <p className="text-[11px] text-amber-700">Credit terms always go to the CEO for approval.</p>}
-                <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} maxLength={5000} placeholder="Notes printed on the quotation (optional)" className="w-full rounded-lg border border-border px-2 py-1.5 text-xs" />
+                <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} maxLength={5000} placeholder="Notes printed on the quote (optional)" className="w-full rounded-lg border border-border px-2 py-1.5 text-xs" />
                 <p className="text-[11px] text-ink-muted">Warranty and delivery are the standard terms set by Admin.</p>
 
                 {(formError || save.error) && (
@@ -508,7 +549,7 @@ function SendAccountQuoteDialog({
     });
 
     return (
-        <Dialog title={`Send ${quotation.quote_number ?? `v${quotation.version_no}`} to the account`} onClose={onClose}>
+        <Dialog title={`Send ${quotation.quote_number ?? `v${quotation.version_no}`} to the dealer`} onClose={onClose}>
             {info.isLoading ? (
                 <p className="text-sm text-ink-muted">Loading…</p>
             ) : info.error ? (
@@ -525,7 +566,7 @@ function SendAccountQuoteDialog({
                         <input value={phone ?? info.data?.phone ?? ""} onChange={(e) => setPhone(e.target.value)} disabled={!useWa} placeholder="10-digit mobile" className="flex-1 rounded-lg border border-border px-2 py-1" />
                     </label>
                     <textarea value={message} onChange={(e) => setMessage(e.target.value)} rows={3} maxLength={2000} placeholder="Covering note (optional)" className="w-full rounded-lg border border-border px-2 py-1.5 text-xs" />
-                    <p className="text-[11px] text-ink-muted">The account gets the PDF and a link to approve it. The owner, you and the Admin CC list are copied.</p>
+                    <p className="text-[11px] text-ink-muted">The dealer gets the PDF and a link to approve it.{" "}<InfoTip>The owner, you and Admin&apos;s CC list also get a copy.</InfoTip></p>
                     {send.error && <p className="rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700">{(send.error as Error).message}</p>}
                     {(info.data?.dispatches.length ?? 0) > 0 && (
                         <div className="rounded-lg border border-border p-2 text-[11px] text-ink-muted">

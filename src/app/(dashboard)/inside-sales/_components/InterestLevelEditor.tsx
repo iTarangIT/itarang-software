@@ -68,7 +68,7 @@ export function InterestLevelEditor({ leadId, value, editable, onUpdated }: Prop
             );
             const json = await res.json();
             if (!res.ok) throw new Error(json?.error?.message ?? "Failed to update temperature");
-            toast.success("Lead temperature updated");
+            toast.success("Interest updated");
             setOpen(false);
             setReason("");
             onUpdated?.();
@@ -84,14 +84,14 @@ export function InterestLevelEditor({ leadId, value, editable, onUpdated }: Prop
             <button
                 type="button"
                 onClick={() => setOpen((v) => !v)}
-                title="Change temperature"
+                title="Change interest"
                 className="group/edit inline-flex items-center gap-1"
             >
                 {value ? (
                     <InterestChip level={value} />
                 ) : (
                     <span className="inline-flex items-center rounded-md border border-dashed border-gray-300 px-1.5 py-0.5 text-[10px] font-medium text-gray-500">
-                        Set temperature
+                        Set interest
                     </span>
                 )}
                 <Pencil className="h-3 w-3 text-gray-400 transition-colors hover:text-gray-600" />
@@ -100,7 +100,7 @@ export function InterestLevelEditor({ leadId, value, editable, onUpdated }: Prop
             {open && (
                 <div className="absolute left-0 top-7 z-50 w-56 rounded-lg border border-gray-200 bg-white p-3 shadow-lg">
                     <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-gray-500">
-                        Update lead status
+                        Set interest
                     </p>
                     <input
                         value={reason}

@@ -291,7 +291,7 @@ export function ProductCartSections({
 
       {showPara && (
         /* Section D — Paraphernalia */
-        <SectionCard title="Paraphernalia">
+        <SectionCard title="Accessories">
           {cart.scopedParaphernalia.length === 0 ? (
             <EmptyState
               icon={<Package className="w-10 h-10 text-gray-300" />}

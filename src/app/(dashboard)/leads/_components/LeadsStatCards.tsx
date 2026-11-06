@@ -107,12 +107,12 @@ export function LeadsStatCards({
             hint: "No current owner",
         },
         {
-            label: "Scheduled",
+            label: "Follow-up set",
             value: stats.scheduled,
             color: "text-purple-600",
             ring: "",
             active: false,
-            hint: "Has a next call scheduled",
+            hint: "Has a next follow-up date.",
         },
     ];
 

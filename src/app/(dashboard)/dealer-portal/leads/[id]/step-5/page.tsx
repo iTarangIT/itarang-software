@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
+import { InfoTip } from "@/components/ui/info-tip";
 import {
   CheckCircle2,
   AlertCircle,
@@ -542,7 +543,7 @@ export default function Step5Page() {
     const ok = await confirmDialog({
       title: "Convert to cash sale?",
       message:
-        "The dealer is the sole authoriser — no admin approval. The customer pays the dealer directly.",
+        "You approve this yourself — no admin approval. The customer pays you directly.",
       confirmText: "Convert to cash",
       variant: "danger",
     });
@@ -821,14 +822,14 @@ export default function Step5Page() {
               />
               <ActionRow
                 title="Change Payment Mode to Cash"
-                description="Convert to a cash sale. No admin approval — dealer authorises directly."
+                description="Convert to a cash sale. You approve it — no admin approval."
                 onClick={handleSwitchToCash}
                 tone="outline"
                 busy={actioning === "switch"}
               />
               <ActionRow
                 title="Close Lead"
-                description="Mark this lead as closed. No further action will be possible."
+                description="Close this lead. You can't take any more action on it."
                 onClick={handleCloseLead}
                 tone="muted"
                 busy={actioning === "close"}
@@ -906,9 +907,17 @@ export default function Step5Page() {
           <section className="bg-white border border-gray-200 rounded-2xl p-6 shadow-sm">
             <SectionTitle icon={<Banknote className="w-4 h-4" />} title="Loan Details" />
             <p className="text-xs text-gray-500 mb-5">
-              {loan.external_lender
-                ? `The loan terms are agreed directly with ${lenderLabel(loan)} outside iTarang. Confirm the battery and price with the customer before requesting their OTP.`
-                : "Walk the customer through every term below before requesting their OTP. The OTP is their binding acceptance of these terms."}
+              {loan.external_lender ? (
+                <>
+                  Loan terms are agreed directly with {lenderLabel(loan)}, outside iTarang.{" "}
+                  <InfoTip>Confirm the battery and price with the customer before you ask for the OTP.</InfoTip>
+                </>
+              ) : (
+                <>
+                  Explain every term below before you ask for the OTP.{" "}
+                  <InfoTip>The OTP is the customer&apos;s binding acceptance of these terms.</InfoTip>
+                </>
+              )}
             </p>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-4 text-sm">
               <Field label="Loan Amount" value={fmtTerm(loan.loan_amount)} highlight />
@@ -949,7 +958,15 @@ export default function Step5Page() {
               productTypeName={step4Ctx?.productTypeName}
               productSku={step4Ctx?.productSku}
               readOnly={otpVerified}
-              hint="Pick one or more product types — the Battery, Charger and Paraphernalia lists below show only the available stock for those products. Switching category clears the chosen battery, charger, and paraphernalia."
+              hint={
+                <>
+                  Pick one or more product types to see your stock.{" "}
+                  <InfoTip>
+                    The Battery, Charger and Accessories lists show only stock for these types.
+                    Changing the category clears what you picked.
+                  </InfoTip>
+                </>
+              }
             />
 
             <ProductCartSections cart={cart} />
@@ -976,9 +993,8 @@ export default function Step5Page() {
         <section className="bg-white border-2 border-[#0047AB]/20 rounded-2xl p-6 shadow-sm">
           <SectionTitle icon={<Phone className="w-4 h-4" />} title="Customer OTP Confirmation" />
           <p className="text-xs text-gray-500 mb-5">
-            The 6-digit OTP is read out to the customer on an automated phone call and serves as
-            their digital acceptance of the loan terms, authorising dispatch. It cannot be undone
-            once submitted.
+            A call reads the customer a 6-digit OTP. Entering it accepts the loan terms.{" "}
+            <InfoTip>It also allows dispatch. You can&apos;t undo it after you submit.</InfoTip>
           </p>
 
           {!showOtpUi && (
@@ -1116,8 +1132,11 @@ export default function Step5Page() {
         </div>
 
         <p className="text-[11px] text-gray-400 text-center pt-2">
-          Step 5 finalises the sale: stock reserved and dispatched, warranty activated, after-sales
-          record opened, and the customer notified — all in a single transaction.
+          This step completes the sale.{" "}
+          <InfoTip>
+            It reserves and dispatches the stock, starts the warranty, opens the after-sales record
+            and tells the customer — all at once.
+          </InfoTip>
         </p>
       </div>
     </div>
