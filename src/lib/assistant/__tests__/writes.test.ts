@@ -167,13 +167,13 @@ describe("set_follow_up proposals (UC-07)", () => {
         expect(SetFollowUpPlan.parse({ kind: "asm_visit", lead_id: "DL-1", visit_date: "2026-09-28", note: "x", status_to: "Under_Discussion" })).not.toHaveProperty("status_to");
     });
 
-    it("UC-07 ASM: 'Schedule Gupta Motors for Monday' → a scheduled visit that goes to Today's Schedule", async () => {
+    it("UC-07 ASM: 'Schedule Gupta Motors for Monday' → a scheduled visit that goes to the Today tab", async () => {
         findLeadInScope.mockResolvedValue(lead({ current_owner_id: "asm-1", asm_id: "asm-1", shop_name: "Gupta Motors" }));
         const r = await run(ASM, "set_follow_up", { lead_id: "DL-1", kind: "visit", visit_date: "2026-09-28", note: "discuss quote" });
         expect(r.kind).toBe("preview");
         expect(stored().plan).toEqual({ kind: "asm_visit", lead_id: "DL-1", visit_date: "2026-09-28", note: "discuss quote" });
         expect(stored().preview).toMatchObject({ title: "Schedule visit — Gupta Motors", warning: null });
-        expect(stored().preview.lines[0]).toEqual({ label: "Visit", value: "Mon 28 Sep (goes to Today's Schedule)" });
+        expect(stored().preview.lines[0]).toEqual({ label: "Visit", value: "Mon 28 Sep (goes to your Today tab)" });
         // Decided 15 Oct: a booked visit writes the screen's `visit` touchpoint — work, the idle clock resets.
         expect(stored().preview.resets_idle_clock).toBe(true);
     });
@@ -196,7 +196,7 @@ describe("set_follow_up proposals (UC-07)", () => {
     it("ASM: warns when the lead's field ASM isn't them; declines an already-scheduled day; refuses past dates", async () => {
         findLeadInScope.mockResolvedValue(lead({ current_owner_id: "asm-1", asm_id: null }));
         await run(ASM, "set_follow_up", { lead_id: "DL-1", kind: "visit", visit_date: "2026-09-28", note: "x" });
-        expect(stored().preview.warning).toMatch(/won't show in your Today's Schedule/);
+        expect(stored().preview.warning).toMatch(/won't show in your Today tab/);
         existingVisits.push({ id: "v" });
         expect((await run(ASM, "set_follow_up", { lead_id: "DL-1", kind: "visit", visit_date: "2026-09-28", note: "x" })).kind).toBe("declined");
         existingVisits.length = 0;

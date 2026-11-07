@@ -24,6 +24,7 @@ import { db } from "@/lib/db";
 import { leadVisits } from "@/lib/db/schema";
 import { logLeadTouchpoint } from "@/lib/inside-sales/logTouchpoint";
 import { recordVisit } from "@/lib/asm/recordVisit";
+import { ASM_TODAY_TAB } from "@/lib/asm/types";
 import { isWorkedTouchpoint } from "@/lib/lifecycle/touchpointTypes";
 import { createPending } from "../../actions";
 import { fmtDate } from "../../format";
@@ -108,7 +109,7 @@ export const setFollowUp: ToolFactory = (role) =>
               description:
                   "Propose the next step on a lead the ASM owns. kind \"call\": a call follow-up at a date AND time " +
                   "(follow_up_at) — e.g. 'call back kal 4 baje'. kind \"visit\": book a field visit on a day (visit_date) — " +
-                  "it appears in Today's Schedule that day. It never changes the lead's status — a visit that happened is " +
+                  `it appears in the ${ASM_TODAY_TAB} that day. It never changes the lead's status — a visit that happened is ` +
                   "logged with log_visit. Nothing is saved until Confirm.",
               schema: z.object({
                   lead_id: LeadId,
@@ -146,14 +147,14 @@ export const setFollowUp: ToolFactory = (role) =>
                   }
                   const warning =
                       scoped.lead.asm_id !== ctx.user.id
-                          ? "This lead's field ASM isn't set to you, so the visit won't show in your Today's Schedule."
+                          ? `This lead's field ASM isn't set to you, so the visit won't show in your ${ASM_TODAY_TAB}.`
                           : null;
                   return propose(
                       ctx,
                       input.lead_id,
                       { kind: "asm_visit", lead_id: input.lead_id, visit_date: day.value, note: input.note.trim() },
                       [
-                          { label: "Visit", value: `${fmtDate(day.value)} (goes to Today's Schedule)` },
+                          { label: "Visit", value: `${fmtDate(day.value)} (goes to your ${ASM_TODAY_TAB})` },
                           { label: "Note", value: input.note.trim() },
                       ],
                       warning,

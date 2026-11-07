@@ -24,7 +24,7 @@
 import { z } from "zod";
 import { LEAD_STATUS, LOST_REASON, isHighImpactLostReason } from "@/lib/lifecycle/transitions";
 import { INTEREST_LEVELS } from "@/lib/admin/salesDashboardTypes";
-import { VISIT_NEXT_ACTION, VISIT_OUTCOME } from "@/lib/asm/types";
+import { ASM_TODAY_TAB, VISIT_NEXT_ACTION, VISIT_OUTCOME } from "@/lib/asm/types";
 import { recordVisit } from "@/lib/asm/recordVisit";
 import { applyVisitStatus } from "@/lib/asm/visitStatus";
 import { markLeadLost } from "@/lib/leads/markLost";
@@ -321,7 +321,7 @@ export const logVisit: ToolFactory = () =>
             if (interest) {
                 lines.push({ label: "Temperature", value: `${lead.interest_level ?? "none"} → ${interest}${auto.interest ? " (auto)" : ""}` });
             }
-            if (nextVisit) lines.push({ label: "Next visit", value: `${fmtDate(nextVisit)} (goes to Today's Schedule)` });
+            if (nextVisit) lines.push({ label: "Next visit", value: `${fmtDate(nextVisit)} (goes to your ${ASM_TODAY_TAB})` });
             if (plan.next_action === "escalate") lines.push({ label: "Next step", value: "escalate" });
             lines.push({ label: "Remarks", value: remarks });
             if (photos.length) lines.push({ label: "📷 Photos", value: String(photos.length) });
@@ -331,7 +331,7 @@ export const logVisit: ToolFactory = () =>
             const secondConfirm = !!lost && isHighImpactLostReason(lost.reason);
             if (secondConfirm) warnings.push(highImpactConsequence(lost!.reason));
             if (nextVisit && lead.asm_id !== ctx.user.id) {
-                warnings.push("This lead's field ASM isn't set to you, so the next visit won't show in your Today's Schedule.");
+                warnings.push(`This lead's field ASM isn't set to you, so the next visit won't show in your ${ASM_TODAY_TAB}.`);
             }
             // The screen chains "escalate" into the escalation form; here that is its own card.
             if (plan.next_action === "escalate") {
