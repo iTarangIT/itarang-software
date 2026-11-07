@@ -97,7 +97,7 @@ describe("log_visit proposals (UC-01)", () => {
             { label: "Visit", value: "visited · productive" },
             { label: "Status", value: "no change" },
             { label: "Temperature", value: "warm → hot" },
-            { label: "Next visit", value: "Fri 25 Sep (goes to Today's Schedule)" },
+            { label: "Next visit", value: "Fri 25 Sep (goes to your Today tab)" },
             { label: "Remarks", value: "owner Ramesh, needs 10 batteries at X" },
         ]);
         expect(a.before).toEqual({ lead_status: "Under_Discussion", interest_level: "warm", asm_id: "asm-1" });
@@ -162,10 +162,10 @@ describe("log_visit proposals (UC-01)", () => {
         expect(createPending).not.toHaveBeenCalled();
     });
 
-    it("warns when the next visit won't reach Today's Schedule; escalate says where to raise it", async () => {
+    it("warns when the next visit won't reach the Today tab; escalate says where to raise it", async () => {
         findLeadInScope.mockResolvedValue(lead({ asm_id: null }));
         await run(ASM, "log_visit", UC01);
-        expect(stored().preview.warning).toMatch(/won't show in your Today's Schedule/);
+        expect(stored().preview.warning).toMatch(/won't show in your Today tab/);
         findLeadInScope.mockResolvedValue(lead());
         await run(ASM, "log_visit", { ...UC01, next_action: "escalate", next_visit_date: undefined });
         // escalate_lead exists for the ASM: the card says to ask for it, not to go to the screen.
@@ -257,7 +257,7 @@ describe("claim_lead proposals (UC-05)", () => {
         const q = sqlText(execute.mock.calls[0]![0]);
         expect(q).toContain("dl.current_owner_id IS NULL");
         expect(stored().preview.lines).toContainEqual({ label: "Status", value: `${statusLabel("New_Unassigned")} → ${statusLabel("Assigned_Not_Contacted")}` });
-        expect(stored().preview.lines).toContainEqual({ label: "Field ASM", value: "you (visits go to your Today's Schedule)" });
+        expect(stored().preview.lines).toContainEqual({ label: "Field ASM", value: "you (visits go to your Today tab)" });
     });
 
     it("ID 45: outside the ASM's territory → a warning on the card; a released lead keeps its stage (S3)", async () => {

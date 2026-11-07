@@ -24,6 +24,9 @@ export const ASM_TAB_LABELS: Record<AsmQueueTab, string> = {
     my_closed: "My closed",
 };
 
+/** The Today tab as the assistant names it ("your Today tab"); follows the tab label. */
+export const ASM_TODAY_TAB = `${ASM_TAB_LABELS.today} tab`;
+
 // Visit lifecycle (BRD §0.8) — mirrors lead_visits.visit_status enum.
 export const VISIT_STATUS = [
     "pending_scheduling",

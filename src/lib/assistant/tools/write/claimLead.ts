@@ -17,6 +17,7 @@ import { db } from "@/lib/db";
 import { claimLead as claimLeadWrite } from "@/lib/inside-sales/claimLead";
 import { parseMobileList } from "@/lib/leads/claimScope";
 import { isForward } from "@/lib/lifecycle/statusRules";
+import { ASM_TODAY_TAB } from "@/lib/asm/types";
 import { claimPoolPredicate, findClaimState, scopeJoin } from "../../scope";
 import { createPending } from "../../actions";
 import { statusLabel } from "../../format";
@@ -142,7 +143,7 @@ export const claimLead: ToolFactory = () =>
                 },
                 { label: "Owner", value: "you" },
             ];
-            if (ctx.user.role === "asm") lines.push({ label: "Field ASM", value: "you (visits go to your Today's Schedule)" });
+            if (ctx.user.role === "asm") lines.push({ label: "Field ASM", value: `you (visits go to your ${ASM_TODAY_TAB})` });
             if (lead.city) lines.push({ label: "City", value: lead.city });
             // ID 45: the writer marks an ASM's claim outside their territory for the Sales Head.
             const outside = ctx.user.role === "asm" && !(await inAsmTerritory(ctx.user.id, lead.id));
