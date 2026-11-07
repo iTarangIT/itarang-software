@@ -129,7 +129,7 @@ const BUYBACK_ADMIN_SECTION = {
   items: [
     {
       id: "buyback-dashboard",
-      label: "Buyback Dashboard",
+      label: "Buyback dashboard",
       icon: LayoutDashboard,
       href: "/admin/buyback/dashboard",
     },
@@ -141,7 +141,7 @@ const BUYBACK_ADMIN_SECTION = {
     },
     {
       id: "buyback-queue",
-      label: "Buyback Requests",
+      label: "Buyback requests",
       icon: Recycle,
       href: "/admin/buyback",
     },
@@ -153,13 +153,13 @@ const BUYBACK_ADMIN_SECTION = {
     },
     {
       id: "buyback-vendors",
-      label: "Scrap Vendors",
+      label: "Scrap vendors",
       icon: Truck,
       href: "/admin/buyback/vendors",
     },
     {
       id: "buyback-catalog",
-      label: "Battery Catalogue",
+      label: "Battery catalogue",
       icon: BookOpen,
       href: "/admin/buyback/catalog",
     },
@@ -171,19 +171,19 @@ const BUYBACK_ADMIN_SECTION = {
     },
     {
       id: "buyback-payments",
-      label: "Payments & Settlement",
+      label: "Payments & settlement",
       icon: Wallet,
       href: "/admin/buyback/payments",
     },
     {
       id: "buyback-ledger",
-      label: "Transaction History",
+      label: "Transaction history",
       icon: Coins,
       href: "/admin/buyback/ledger",
     },
     {
       id: "buyback-statements",
-      label: "Bank Reconciliation",
+      label: "Bank reconciliation",
       icon: Receipt,
       href: "/admin/buyback/statements",
     },
@@ -230,7 +230,7 @@ const NEODOVE_SECTION = {
     },
     {
       id: "neodove-activity",
-      label: "Sync Activity",
+      label: "Sync activity",
       icon: History,
       href: "/leads/neodove-campaigns/activity",
     },
@@ -268,7 +268,7 @@ const COMMON_ITEMS = [
     items: [
       {
         id: "submit-expense",
-        label: "Submit Expense",
+        label: "Submit expense",
         icon: Receipt,
         href: "/expenses/submit",
       },
@@ -304,18 +304,18 @@ function ecofySubnav() {
     href: "/sales-head/ecofy",
     children: [
       { id: "sh-ecofy-dashboard", label: "Dashboard", icon: LayoutDashboard, href: "/sales-head/ecofy" },
-      { id: "sh-ecofy-queue", label: "Pickup Queue", icon: Inbox, href: "/sales-head/ecofy/queue" },
-      { id: "sh-ecofy-leads", label: "All Leads", icon: Users, href: "/sales-head/ecofy/leads" },
+      { id: "sh-ecofy-queue", label: "Pickup queue", icon: Inbox, href: "/sales-head/ecofy/queue" },
+      { id: "sh-ecofy-leads", label: "All leads", icon: Users, href: "/sales-head/ecofy/leads" },
       // Tracker ID 51 gap 11 — single lead + bulk import into Ecofy (M03).
-      { id: "sh-ecofy-upload", label: "Upload Leads", icon: Upload, href: "/sales-head/ecofy/upload" },
-      { id: "sh-ecofy-eligibility", label: "Eligibility Queue", icon: ClipboardCheck, href: "/sales-head/ecofy/eligibility" },
-      { id: "sh-ecofy-financing", label: "Financing Queue", icon: Landmark, href: "/sales-head/ecofy/financing" },
+      { id: "sh-ecofy-upload", label: "Import leads", icon: Upload, href: "/sales-head/ecofy/upload" },
+      { id: "sh-ecofy-eligibility", label: "Eligibility queue", icon: ClipboardCheck, href: "/sales-head/ecofy/eligibility" },
+      { id: "sh-ecofy-financing", label: "Financing queue", icon: Landmark, href: "/sales-head/ecofy/financing" },
       { id: "sh-ecofy-assets", label: "Assets", icon: Battery, href: "/sales-head/ecofy/assets" },
       { id: "sh-ecofy-calculator", label: "Calculator", icon: Calculator, href: "/sales-head/ecofy/calculator" },
       // Ecofy CONFLICTS #31 — the release designer moved here from Ecofy's own
       // Admin menu. Longest-href-wins keeps "Calculator" unlit on this route.
       { id: "sh-ecofy-calculator-designer", label: "Calculator designer", icon: SlidersHorizontal, href: "/sales-head/ecofy/calculator/designer" },
-      { id: "sh-ecofy-epc-agents", label: "EPC Agents", icon: Wrench, href: "/sales-head/ecofy/epc-agents" },
+      { id: "sh-ecofy-epc-agents", label: "EPC agents", icon: Wrench, href: "/sales-head/ecofy/epc-agents" },
     ],
   };
 }
@@ -332,9 +332,9 @@ function ecofyWorkerSubnav(idPrefix: "asm" | "is", base: string) {
     // A node, not a route (see nbfcSettingsSubnav).
     href: `${base}/ecofy-leads`,
     children: [
-      { id: `${idPrefix}-ecofy-leads`, label: "My Leads", icon: Users, href: `${base}/ecofy-leads` },
+      { id: `${idPrefix}-ecofy-leads`, label: "My leads", icon: Users, href: `${base}/ecofy-leads` },
       { id: `${idPrefix}-ecofy-calculator`, label: "Calculator", icon: Calculator, href: `${base}/ecofy-calculator` },
-      { id: `${idPrefix}-ecofy-epc-agents`, label: "EPC Agents", icon: Wrench, href: `${base}/ecofy-epc-agents` },
+      { id: `${idPrefix}-ecofy-epc-agents`, label: "EPC agents", icon: Wrench, href: `${base}/ecofy-epc-agents` },
     ],
   };
 }
@@ -388,7 +388,7 @@ function nbfcSettingsSubnav(idPrefix: string) {
 function loanProductSettingsItem(idPrefix: string) {
   return {
     id: `${idPrefix}-loan-product-defaults`,
-    label: "Loan Product",
+    label: "Loan product",
     icon: Coins,
     href: "/admin/settings/loan-products",
   };
@@ -412,7 +412,7 @@ function loanProductSettingsItem(idPrefix: string) {
 function dealerValidationDigestItem(idPrefix: string) {
   return {
     id: `${idPrefix}-dealer-validation-digest`,
-    label: "Dealer Validation",
+    label: "Dealer validation",
     icon: MailCheck,
     href: "/admin/settings/dealer-validation",
   };
@@ -421,7 +421,7 @@ function dealerValidationDigestItem(idPrefix: string) {
 function kycReviewDigestItem(idPrefix: string) {
   return {
     id: `${idPrefix}-kyc-review-digest`,
-    label: "KYC Review",
+    label: "KYC review",
     icon: MailCheck,
     href: "/admin/settings/kyc-review",
   };
@@ -430,7 +430,7 @@ function kycReviewDigestItem(idPrefix: string) {
 function scrapBuybackDigestItem(idPrefix: string) {
   return {
     id: `${idPrefix}-scrap-buyback-digest`,
-    label: "Scrap / Buyback Report",
+    label: "Scrap / buyback report",
     icon: MailCheck,
     href: "/admin/settings/scrap-buyback",
   };
@@ -440,7 +440,7 @@ function scrapBuybackDigestItem(idPrefix: string) {
 function salesDailyDigestItem(idPrefix: string) {
   return {
     id: `${idPrefix}-sales-daily-digest`,
-    label: "Sales Daily Report",
+    label: "Sales daily report",
     icon: MailCheck,
     href: "/admin/settings/sales-daily",
   };
@@ -450,7 +450,7 @@ function salesDailyDigestItem(idPrefix: string) {
 function targetsPendingDigestItem(idPrefix: string) {
   return {
     id: `${idPrefix}-targets-pending-digest`,
-    label: "Targets Pending Report",
+    label: "Targets pending report",
     icon: MailCheck,
     href: "/admin/settings/targets-pending",
   };
@@ -460,7 +460,7 @@ function targetsPendingDigestItem(idPrefix: string) {
 function emiMessagesDigestItem(idPrefix: string) {
   return {
     id: `${idPrefix}-emi-messages-digest`,
-    label: "EMI Messages Report",
+    label: "EMI messages report",
     icon: MailCheck,
     href: "/admin/settings/emi-messages-daily",
   };
@@ -470,7 +470,7 @@ function emiMessagesDigestItem(idPrefix: string) {
 function myDayDigestItem(idPrefix: string) {
   return {
     id: `${idPrefix}-my-day-digest`,
-    label: "My Day Emails (ISR / ASM)",
+    label: "My day emails (ISR / ASM)",
     icon: MailCheck,
     href: "/admin/settings/my-day",
   };
@@ -480,7 +480,7 @@ function myDayDigestItem(idPrefix: string) {
 function missedCallbacksDigestItem(idPrefix: string) {
   return {
     id: `${idPrefix}-missed-callbacks-digest`,
-    label: "Missed Callbacks Report",
+    label: "Missed callbacks report",
     icon: MailCheck,
     href: "/admin/settings/missed-callbacks",
   };
@@ -490,7 +490,7 @@ function missedCallbacksDigestItem(idPrefix: string) {
 function idleWeeklyDigestItem(idPrefix: string) {
   return {
     id: `${idPrefix}-idle-weekly-digest`,
-    label: "Weekly Idle Leads Report",
+    label: "Weekly idle leads report",
     icon: MailCheck,
     href: "/admin/settings/idle-weekly",
   };
@@ -521,7 +521,7 @@ function kycFileOpensItem(idPrefix: string) {
 function buybackDailyDigestItem(idPrefix: string) {
   return {
     id: `${idPrefix}-buyback-daily-digest`,
-    label: "Buyback Daily Report",
+    label: "Buyback daily report",
     icon: MailCheck,
     href: "/admin/settings/buyback-daily",
   };
@@ -578,7 +578,7 @@ const ROLE_TRAILING_SECTIONS: Record<string, any[]> = {
           // getActiveItemId() is longest-href-wins, so this beats
           // /admin/settings (which in turn beats /admin) when it is active.
           id: "sh-kyc-automation",
-          label: "KYC Automation",
+          label: "KYC automation",
           icon: ShieldCheck,
           href: "/admin/settings/kyc-automation",
         },
@@ -599,7 +599,7 @@ const ROLE_TRAILING_SECTIONS: Record<string, any[]> = {
           // E-255 — Google Drive backup of every stored document. Own entry
           // beside the NBFC group, same reasoning.
           id: "sh-gdrive-mirror",
-          label: "Drive Backup",
+          label: "Drive backup",
           icon: CloudUpload,
           href: "/admin/settings/gdrive-mirror",
         },
@@ -608,7 +608,7 @@ const ROLE_TRAILING_SECTIONS: Record<string, any[]> = {
           // team logins too. Same id as Admin's, so the redesigned menu puts
           // it in the same Settings slot.
           id: "house-team-logins",
-          label: "House Team Logins",
+          label: "House team logins",
           icon: UserPlus,
           href: "/admin/house-team-logins",
         },
@@ -649,14 +649,14 @@ function reportsNav(idPrefix: "ceo" | "admin" | "sh") {
 const aiAnalystSection = (id: string, href: string) => ({
   section: "AI ANALYST",
   direct: true,
-  items: [{ id, label: "AI Analyst", icon: Sparkles, href }],
+  items: [{ id, label: "AI analyst", icon: Sparkles, href }],
 });
 
 // E-316 — the Feature Request module is the whole workspace for the product
 // head, tech head and developer logins.
 const FEATURE_REQUESTS_SECTION = {
   section: "FEATURE REQUESTS",
-  items: [{ id: "feature-requests", label: "Feature Requests", icon: Lightbulb, href: "/feature-requests" }],
+  items: [{ id: "feature-requests", label: "Feature requests", icon: Lightbulb, href: "/feature-requests" }],
 };
 
 const roleNavigation: Record<string, any[]> = {
@@ -674,7 +674,7 @@ const roleNavigation: Record<string, any[]> = {
           href: "/ceo",
         },
         // E-358 — every dealer account, each with its account quotations.
-        { id: "ceo-my-dealers", label: "My Dealers", icon: Store, href: "/my-dealers" },
+        { id: "ceo-my-dealers", label: "My dealers", icon: Store, href: "/my-dealers" },
       ],
     },
     aiAnalystSection("ceo-ai-analyst", "/ceo/analyst"),
@@ -689,7 +689,7 @@ const roleNavigation: Record<string, any[]> = {
       items: [
         {
           id: "ceo-admin-dashboard",
-          label: "Ops Dashboard",
+          label: "Ops dashboard",
           icon: LayoutDashboard,
           href: "/admin",
         },
@@ -702,7 +702,7 @@ const roleNavigation: Record<string, any[]> = {
         {
           // E-221 — quotes waiting for the CEO's decision (off the overview).
           id: "ceo-quotations",
-          label: "Quote Approvals",
+          label: "Quote approvals",
           icon: FileCheck,
           href: "/ceo/quotations",
         },
@@ -723,21 +723,21 @@ const roleNavigation: Record<string, any[]> = {
         {
           // ID 82 — sales-ready leads nobody owns, longest wait first.
           id: "ceo-ready-to-assign",
-          label: "Ready to Assign",
+          label: "Ready to assign",
           icon: UserPlus,
           href: "/admin/ready-to-assign",
         },
         {
           // ID 81 — the event / ad / list a lead came in on.
           id: "ceo-acquisition-campaigns",
-          label: "Acquisition Campaigns",
+          label: "Acquisition campaigns",
           icon: Radar,
           href: "/admin/acquisition-campaigns",
         },
         {
           // R-15 — idle leads, oldest first, reassign from the row.
           id: "ceo-needs-attention",
-          label: "Needs Attention",
+          label: "Needs attention",
           icon: AlertTriangle,
           href: "/admin/reports/needs-attention",
         },
@@ -745,21 +745,21 @@ const roleNavigation: Record<string, any[]> = {
           // ID 36 — dead / non-responsive numbers; owner kept, repair puts the
           // lead back to work.
           id: "ceo-number-repair",
-          label: "Number Repair",
+          label: "Number repair",
           icon: PhoneOff,
           href: "/admin/number-repair",
         },
         {
           // ID 79 — WhatsApp chat screenshots reps logged; reused images flagged.
           id: "ceo-whatsapp-screenshots",
-          label: "WhatsApp Screenshots",
+          label: "WhatsApp screenshots",
           icon: ImageIcon,
           href: "/admin/whatsapp-screenshots",
         },
         {
           // R-18 — converted dealers' re-order health.
           id: "ceo-dealer-health",
-          label: "Dealer Health",
+          label: "Dealer health",
           icon: TrendingUp,
           href: "/admin/reports/dealer-health",
         },
@@ -773,7 +773,7 @@ const roleNavigation: Record<string, any[]> = {
         {
           // E-322 (IDs 39, 71) — Vyapar / GSTR-1 import, SKUs, reconciliation.
           id: "ceo-invoice-ledger",
-          label: "Invoice Ledger",
+          label: "Invoice ledger",
           icon: Receipt,
           href: "/admin/reports/invoice-ledger",
         },
@@ -784,7 +784,7 @@ const roleNavigation: Record<string, any[]> = {
       items: [
         {
           id: "product-catalog",
-          label: "Product Catalog",
+          label: "Product catalog",
           icon: Package,
           href: "/product-catalog",
         },
@@ -794,7 +794,7 @@ const roleNavigation: Record<string, any[]> = {
         // from the sales_order_manager sidebar, which is who actually uses it.
         {
           id: "oem-pricing",
-          label: "OEM Inventory Pricing",
+          label: "OEM inventory pricing",
           icon: Landmark,
           href: "/oem-pricing",
         },
@@ -808,7 +808,7 @@ const roleNavigation: Record<string, any[]> = {
         { id: "deals", label: "Deals", icon: FileCheck, href: "/deals" },
         {
           id: "sales-invoices",
-          label: "Sales Invoices",
+          label: "Sales invoices",
           icon: Receipt,
           href: "/ceo/invoices",
         },
@@ -826,13 +826,13 @@ const roleNavigation: Record<string, any[]> = {
       items: [
         {
           id: "intellicar",
-          label: "IoT Dashboard",
+          label: "IoT dashboard",
           icon: Battery,
           href: "/ceo/intellicar",
         },
         {
           id: "ceo-news",
-          label: "Green Energy News",
+          label: "Green energy news",
           icon: Newspaper,
           href: "/ceo/news",
         },
@@ -845,31 +845,31 @@ const roleNavigation: Record<string, any[]> = {
       items: [
         {
           id: "nbfc-approvals",
-          label: "Pending NBFC Approvals",
+          label: "Pending NBFC approvals",
           icon: ClipboardCheck,
           href: "/admin/nbfc/approvals",
         },
         {
           id: "financing-offer-approvals",
-          label: "Financing Approvals",
+          label: "Financing approvals",
           icon: ClipboardCheck,
           href: "/admin/nbfc/financing-offers/approvals",
         },
         {
           id: "nbfc-directory",
-          label: "NBFC Directory",
+          label: "NBFC directory",
           icon: Building,
           href: "/admin/nbfc",
         },
         {
           id: "loan-products",
-          label: "Loan Products",
+          label: "Loan products",
           icon: Package,
           href: "/admin/loan-products",
         },
         {
           id: "nbfc-ecosystem",
-          label: "Ecosystem Overview",
+          label: "Ecosystem overview",
           icon: PieChart,
           href: "/admin/nbfc/ecosystem-overview",
         },
@@ -880,13 +880,13 @@ const roleNavigation: Record<string, any[]> = {
       items: [
         {
           id: "kyc-review",
-          label: "KYC Review",
+          label: "KYC review",
           icon: Shield,
           href: "/admin/kyc-review",
         },
         {
           id: "product-review",
-          label: "Product Review",
+          label: "Product review",
           icon: Package,
           href: "/admin/product-review",
         },
@@ -895,13 +895,13 @@ const roleNavigation: Record<string, any[]> = {
         // a parallel /ceo copy, so there is one queue and one set of actions.
         {
           id: "dealer-validation",
-          label: "Dealer Validation",
+          label: "Dealer validation",
           icon: ClipboardCheck,
           href: "/admin/dealer-verification",
         },
         {
           id: "expense-approvals",
-          label: "Expense Approvals",
+          label: "Expense approvals",
           icon: ClipboardCheck,
           href: "/ceo/expenses",
         },
@@ -929,7 +929,7 @@ const roleNavigation: Record<string, any[]> = {
           href: "/sales-head",
         },
         // E-358 — every dealer account, each with its account quotations.
-        { id: "sh-my-dealers", label: "My Dealers", icon: Store, href: "/my-dealers" },
+        { id: "sh-my-dealers", label: "My dealers", icon: Store, href: "/my-dealers" },
       ],
     },
     aiAnalystSection("sh-ai-analyst", "/sales-head/analyst"),
@@ -938,7 +938,7 @@ const roleNavigation: Record<string, any[]> = {
       items: [
         {
           id: "sh-admin-dashboard",
-          label: "Ops Dashboard",
+          label: "Ops dashboard",
           icon: LayoutDashboard,
           href: "/admin",
         },
@@ -952,13 +952,13 @@ const roleNavigation: Record<string, any[]> = {
         },
         {
           id: "sh-ai-intent",
-          label: "AI Intent Learning",
+          label: "AI intent learning",
           icon: GraduationCap,
           href: "/admin/ai-intent",
         },
         {
           id: "sh-ai-campaigns",
-          label: "AI Campaigns",
+          label: "AI campaigns",
           icon: Megaphone,
           href: "/sales-head/campaigns",
           // Not `exact` — the detail route /sales-head/campaigns/[id] must
@@ -972,32 +972,32 @@ const roleNavigation: Record<string, any[]> = {
         },
         {
           id: "sh-merge-requests",
-          label: "Merge Requests",
+          label: "Merge requests",
           icon: GitMerge,
           href: "/admin/merge-requests",
         },
         {
           id: "sh-onboarding-dropouts",
-          label: "Onboarding Dropouts",
+          label: "Onboarding dropouts",
           icon: UserMinus,
           href: "/admin/onboarding-dropouts",
         },
         {
           id: "sh-whatsapp-onboarding",
-          label: "WhatsApp Onboarding",
+          label: "WhatsApp onboarding",
           icon: MessageSquare,
           href: "/admin/whatsapp-onboarding",
         },
         {
           id: "sh-lead-upload",
-          label: "Bulk Lead Upload",
+          label: "Bulk lead upload",
           icon: Upload,
           href: "/admin/upload",
         },
         {
           // ID 81 — the event / ad / list a lead came in on.
           id: "sh-acquisition-campaigns",
-          label: "Acquisition Campaigns",
+          label: "Acquisition campaigns",
           icon: Radar,
           href: "/admin/acquisition-campaigns",
         },
@@ -1018,14 +1018,14 @@ const roleNavigation: Record<string, any[]> = {
         {
           // ID 82 — sales-ready leads nobody owns, longest wait first.
           id: "sh-ready-to-assign",
-          label: "Ready to Assign",
+          label: "Ready to assign",
           icon: UserPlus,
           href: "/admin/ready-to-assign",
         },
         {
           // R-15 — idle leads, oldest first, reassign from the row.
           id: "sh-needs-attention",
-          label: "Needs Attention",
+          label: "Needs attention",
           icon: AlertTriangle,
           href: "/admin/reports/needs-attention",
         },
@@ -1033,28 +1033,28 @@ const roleNavigation: Record<string, any[]> = {
           // ID 36 — dead / non-responsive numbers; owner kept, repair puts the
           // lead back to work.
           id: "sh-number-repair",
-          label: "Number Repair",
+          label: "Number repair",
           icon: PhoneOff,
           href: "/admin/number-repair",
         },
         {
           // ID 79 — WhatsApp chat screenshots reps logged; reused images flagged.
           id: "sh-whatsapp-screenshots",
-          label: "WhatsApp Screenshots",
+          label: "WhatsApp screenshots",
           icon: ImageIcon,
           href: "/admin/whatsapp-screenshots",
         },
         {
           // R-18 — converted dealers' re-order health.
           id: "sh-dealer-health",
-          label: "Dealer Health",
+          label: "Dealer health",
           icon: TrendingUp,
           href: "/admin/reports/dealer-health",
         },
         {
           // ID 65 — dealer accounts: owner, onboarded by, GSTIN.
           id: "sh-account-management",
-          label: "Account Management",
+          label: "Account management",
           icon: Briefcase,
           href: "/admin/accounts",
         },
@@ -1094,19 +1094,19 @@ const roleNavigation: Record<string, any[]> = {
         },
         {
           id: "nbfc-directory",
-          label: "NBFC Directory",
+          label: "NBFC directory",
           icon: Landmark,
           href: "/admin/nbfc",
         },
         {
           id: "loan-products",
-          label: "Loan Products",
+          label: "Loan products",
           icon: Package,
           href: "/admin/loan-products",
         },
         {
           id: "nbfc-risk-cards",
-          label: "Risk Cards",
+          label: "Risk cards",
           icon: AlertTriangle,
           href: "/admin/nbfc/risk-cards",
         },
@@ -1116,7 +1116,7 @@ const roleNavigation: Record<string, any[]> = {
         // by hand-written curl. This is the first way in.
         {
           id: "nbfc-auction-control",
-          label: "Auction Control",
+          label: "Auction control",
           icon: Gavel,
           href: "/admin/nbfc/auction",
         },
@@ -1126,7 +1126,7 @@ const roleNavigation: Record<string, any[]> = {
         // nothing says so.
         {
           id: "nbfc-auction-analytics",
-          label: "Auction Performance",
+          label: "Auction performance",
           icon: Gavel,
           href: "/admin/nbfc/auction/analytics",
         },
@@ -1135,7 +1135,7 @@ const roleNavigation: Record<string, any[]> = {
         // stage had no buyer at all until this desk existed.
         {
           id: "nbfc-scrap-desk",
-          label: "Scrap Purchase",
+          label: "Scrap purchase",
           icon: Recycle,
           href: "/admin/nbfc/scrap",
         },
@@ -1158,7 +1158,7 @@ const roleNavigation: Record<string, any[]> = {
         },
         {
           id: "nbfc-my-drafts",
-          label: "My Submitted Drafts",
+          label: "My submitted drafts",
           icon: FileText,
           href: "/admin/nbfc?owner=me",
         },
@@ -1170,7 +1170,7 @@ const roleNavigation: Record<string, any[]> = {
       items: [
         {
           id: "kyc-review",
-          label: "KYC Review",
+          label: "KYC review",
           icon: Shield,
           href: "/admin/kyc-review",
         },
@@ -1178,19 +1178,19 @@ const roleNavigation: Record<string, any[]> = {
           // ID 182 / 183: files the iTarang house pushed to dealers — open one
           // to act for its dealer.
           id: "pushed-files",
-          label: "Pushed Files",
+          label: "Moved files",
           icon: Handshake,
           href: "/admin/kyc-review/pushed-files",
         },
         {
           id: "product-review",
-          label: "Product Review",
+          label: "Product review",
           icon: Package,
           href: "/admin/product-review",
         },
         {
           id: "dealer-validation",
-          label: "Dealer Validation",
+          label: "Dealer validation",
           icon: ClipboardCheck,
           href: "/admin/dealer-verification",
         },
@@ -1207,25 +1207,25 @@ const roleNavigation: Record<string, any[]> = {
         },
         {
           id: "admin-product-master",
-          label: "Product Master",
+          label: "Product master",
           icon: Package,
           href: "/admin/product-master",
         },
         {
           id: "admin-inventory-upload",
-          label: "Bulk Upload",
+          label: "Bulk upload",
           icon: ShoppingCart,
           href: "/admin/inventory/upload",
         },
         {
           id: "admin-inventory-add",
-          label: "Add Item",
+          label: "Add item",
           icon: Package,
           href: "/admin/inventory/add",
         },
         {
           id: "admin-inventory-ageing",
-          label: "Ageing Report",
+          label: "Ageing report",
           icon: Package,
           href: "/admin/inventory/ageing-report",
         },
@@ -1246,7 +1246,7 @@ const roleNavigation: Record<string, any[]> = {
       items: [
         {
           id: "sh-ai-expense-tracker",
-          label: "AI Expense Tracker",
+          label: "AI expense tracker",
           icon: Receipt,
           href: "/admin/expense-tracker",
         },
@@ -1257,13 +1257,13 @@ const roleNavigation: Record<string, any[]> = {
       items: [
         {
           id: "sh-calculator",
-          label: "Loan Calculator",
+          label: "Loan calculator",
           icon: Calculator,
           href: "/admin/calculator",
         },
         {
           id: "sh-calculator-history",
-          label: "Search History",
+          label: "Search history",
           icon: History,
           href: "/admin/calculator/search-history",
         },
@@ -1302,19 +1302,19 @@ const roleNavigation: Record<string, any[]> = {
       items: [
         {
           id: "partner-my-leads",
-          label: "My Leads",
+          label: "My leads",
           icon: ListChecks,
           href: "/partner/leads",
           // Not `exact` — /partner/lead/[id] must keep this lit (longest match).
         },
         {
           id: "partner-quotations",
-          label: "My Quotations (PI)",
+          label: "My quotes (PI)",
           icon: Receipt,
           href: "/partner/quotations",
         },
         // E-358 — every dealer account, each with its account quotations.
-        { id: "partner-my-dealers", label: "My Dealers", icon: Store, href: "/my-dealers" },
+        { id: "partner-my-dealers", label: "My dealers", icon: Store, href: "/my-dealers" },
       ],
     },
     {
@@ -1329,19 +1329,19 @@ const roleNavigation: Record<string, any[]> = {
         },
         {
           id: "partner-new-lead",
-          label: "New Lead",
+          label: "Create lead",
           icon: UserPlus,
           href: "/leads/new",
         },
         {
           id: "partner-ai-intent",
-          label: "AI Intent Learning",
+          label: "AI intent learning",
           icon: GraduationCap,
           href: "/admin/ai-intent",
         },
         {
           id: "partner-ai-campaigns",
-          label: "AI Campaigns",
+          label: "AI campaigns",
           icon: Megaphone,
           href: "/partner/campaigns",
         },
@@ -1353,32 +1353,32 @@ const roleNavigation: Record<string, any[]> = {
         },
         {
           id: "partner-merge-requests",
-          label: "Merge Requests",
+          label: "Merge requests",
           icon: GitMerge,
           href: "/admin/merge-requests",
         },
         {
           id: "partner-onboarding-dropouts",
-          label: "Onboarding Dropouts",
+          label: "Onboarding dropouts",
           icon: UserMinus,
           href: "/admin/onboarding-dropouts",
         },
         {
           id: "partner-whatsapp-onboarding",
-          label: "WhatsApp Onboarding",
+          label: "WhatsApp onboarding",
           icon: MessageSquare,
           href: "/admin/whatsapp-onboarding",
         },
         {
           id: "partner-lead-upload",
-          label: "Bulk Lead Upload",
+          label: "Bulk lead upload",
           icon: Upload,
           href: "/admin/upload",
         },
         {
           // ID 81 — the event / ad / list a lead came in on.
           id: "partner-acquisition-campaigns",
-          label: "Acquisition Campaigns",
+          label: "Acquisition campaigns",
           icon: Radar,
           href: "/admin/acquisition-campaigns",
         },
@@ -1397,21 +1397,21 @@ const roleNavigation: Record<string, any[]> = {
         {
           // ID 82 — sales-ready leads nobody owns, longest wait first.
           id: "partner-ready-to-assign",
-          label: "Ready to Assign",
+          label: "Ready to assign",
           icon: UserPlus,
           href: "/admin/ready-to-assign",
         },
         {
           // R-15 — idle leads, oldest first, reassign from the row.
           id: "partner-needs-attention",
-          label: "Needs Attention",
+          label: "Needs attention",
           icon: AlertTriangle,
           href: "/admin/reports/needs-attention",
         },
         {
           // R-18 — converted dealers' re-order health.
           id: "partner-dealer-health",
-          label: "Dealer Health",
+          label: "Dealer health",
           icon: TrendingUp,
           href: "/admin/reports/dealer-health",
         },
@@ -1430,13 +1430,13 @@ const roleNavigation: Record<string, any[]> = {
         },
         {
           id: "partner-product-master",
-          label: "Product Master",
+          label: "Product master",
           icon: Package,
           href: "/admin/product-master",
         },
         {
           id: "partner-inventory-upload",
-          label: "Bulk Upload",
+          label: "Bulk upload",
           icon: ShoppingCart,
           href: "/admin/inventory/upload",
         },
@@ -1468,27 +1468,27 @@ const roleNavigation: Record<string, any[]> = {
     {
       section: "SALES",
       items: [
-        { id: "leads", label: "My Leads", icon: Users, href: "/leads" },
+        { id: "leads", label: "My leads", icon: Users, href: "/leads" },
         // ID 5 — the dealers this user owns, with "Order placed".
-        { id: "sm-my-dealers", label: "My Dealers", icon: Store, href: "/my-dealers" },
+        { id: "sm-my-dealers", label: "My dealers", icon: Store, href: "/my-dealers" },
         {
           // ID 82 — sales-ready leads nobody owns, longest wait first.
           id: "sm-ready-to-assign",
-          label: "Ready to Assign",
+          label: "Ready to assign",
           icon: UserPlus,
           href: "/admin/ready-to-assign",
         },
         {
           // ID 81 — the event / ad / list a lead came in on.
           id: "sm-acquisition-campaigns",
-          label: "Acquisition Campaigns",
+          label: "Acquisition campaigns",
           icon: Radar,
           href: "/admin/acquisition-campaigns",
         },
-        { id: "deals", label: "My Deals", icon: FileCheck, href: "/deals" },
+        { id: "deals", label: "My deals", icon: FileCheck, href: "/deals" },
         {
           id: "ai-calls",
-          label: "AI Calls",
+          label: "AI calls",
           icon: Phone,
           href: "/sales-manager/ai-calls",
         },
@@ -1496,14 +1496,14 @@ const roleNavigation: Record<string, any[]> = {
           // ID 36 — dead / non-responsive numbers; owner kept, repair puts the
           // lead back to work.
           id: "sm-number-repair",
-          label: "Number Repair",
+          label: "Number repair",
           icon: PhoneOff,
           href: "/admin/number-repair",
         },
         {
           // ID 79 — WhatsApp chat screenshots reps logged; reused images flagged.
           id: "sm-whatsapp-screenshots",
-          label: "WhatsApp Screenshots",
+          label: "WhatsApp screenshots",
           icon: ImageIcon,
           href: "/admin/whatsapp-screenshots",
         },
@@ -1526,7 +1526,7 @@ const roleNavigation: Record<string, any[]> = {
         // ID 13 — Reports › Data downloads (the Inventory dataset).
         {
           id: "im-data-downloads",
-          label: "Data Downloads",
+          label: "Data downloads",
           icon: BarChart3,
           href: "/admin/reports",
         },
@@ -1537,7 +1537,7 @@ const roleNavigation: Record<string, any[]> = {
       items: [
         {
           id: "product-catalog",
-          label: "Product Catalog",
+          label: "Product catalog",
           icon: Package,
           href: "/product-catalog",
         },
@@ -1549,13 +1549,13 @@ const roleNavigation: Record<string, any[]> = {
         },
         {
           id: "admin-product-master",
-          label: "Product Master",
+          label: "Product master",
           icon: Package,
           href: "/admin/product-master",
         },
         {
           id: "admin-inventory-upload",
-          label: "Bulk Upload",
+          label: "Bulk upload",
           icon: ShoppingCart,
           href: "/admin/inventory/upload",
         },
@@ -1568,7 +1568,7 @@ const roleNavigation: Record<string, any[]> = {
         },
         {
           id: "admin-inventory-ageing",
-          label: "Ageing Report",
+          label: "Ageing report",
           icon: Package,
           href: "/admin/inventory/ageing-report",
         },
@@ -1614,32 +1614,32 @@ const roleNavigation: Record<string, any[]> = {
         },
         {
           id: "admin-merge-requests",
-          label: "Merge Requests",
+          label: "Merge requests",
           icon: GitMerge,
           href: "/admin/merge-requests",
         },
         {
           id: "admin-onboarding-dropouts",
-          label: "Onboarding Dropouts",
+          label: "Onboarding dropouts",
           icon: UserMinus,
           href: "/admin/onboarding-dropouts",
         },
         {
           id: "admin-whatsapp-onboarding",
-          label: "WhatsApp Onboarding",
+          label: "WhatsApp onboarding",
           icon: MessageSquare,
           href: "/admin/whatsapp-onboarding",
         },
         {
           id: "admin-lead-upload",
-          label: "Bulk Lead Upload",
+          label: "Bulk lead upload",
           icon: Upload,
           href: "/admin/upload",
         },
         {
           // ID 81 — the event / ad / list a lead came in on.
           id: "admin-acquisition-campaigns",
-          label: "Acquisition Campaigns",
+          label: "Acquisition campaigns",
           icon: Radar,
           href: "/admin/acquisition-campaigns",
         },
@@ -1660,14 +1660,14 @@ const roleNavigation: Record<string, any[]> = {
         {
           // ID 82 — sales-ready leads nobody owns, longest wait first.
           id: "admin-ready-to-assign",
-          label: "Ready to Assign",
+          label: "Ready to assign",
           icon: UserPlus,
           href: "/admin/ready-to-assign",
         },
         {
           // R-15 — idle leads, oldest first, reassign from the row.
           id: "admin-needs-attention",
-          label: "Needs Attention",
+          label: "Needs attention",
           icon: AlertTriangle,
           href: "/admin/reports/needs-attention",
         },
@@ -1675,21 +1675,21 @@ const roleNavigation: Record<string, any[]> = {
           // ID 36 — dead / non-responsive numbers; owner kept, repair puts the
           // lead back to work.
           id: "admin-number-repair",
-          label: "Number Repair",
+          label: "Number repair",
           icon: PhoneOff,
           href: "/admin/number-repair",
         },
         {
           // ID 79 — WhatsApp chat screenshots reps logged; reused images flagged.
           id: "admin-whatsapp-screenshots",
-          label: "WhatsApp Screenshots",
+          label: "WhatsApp screenshots",
           icon: ImageIcon,
           href: "/admin/whatsapp-screenshots",
         },
         {
           // R-18 — converted dealers' re-order health.
           id: "admin-dealer-health",
-          label: "Dealer Health",
+          label: "Dealer health",
           icon: TrendingUp,
           href: "/admin/reports/dealer-health",
         },
@@ -1703,7 +1703,7 @@ const roleNavigation: Record<string, any[]> = {
         {
           // E-322 (IDs 39, 71) — Vyapar / GSTR-1 import, SKUs, reconciliation.
           id: "admin-invoice-ledger",
-          label: "Invoice Ledger",
+          label: "Invoice ledger",
           icon: Receipt,
           href: "/admin/reports/invoice-ledger",
         },
@@ -1718,14 +1718,14 @@ const roleNavigation: Record<string, any[]> = {
           // Curator-only (admin / ceo / sales_head), unlike the correcting
           // itself, which every reviewer role can do from a lead.
           id: "admin-ai-intent",
-          label: "AI Intent Learning",
+          label: "AI intent learning",
           icon: GraduationCap,
           href: "/admin/ai-intent",
         },
         {
           // E-246 — own entry, not a tab. See the sales_head block above.
           id: "admin-kyc-automation",
-          label: "KYC Automation",
+          label: "KYC automation",
           icon: ShieldCheck,
           href: "/admin/settings/kyc-automation",
         },
@@ -1747,7 +1747,7 @@ const roleNavigation: Record<string, any[]> = {
         {
           // E-255 — own entry, not a tab. See the sales_head block above.
           id: "admin-gdrive-mirror",
-          label: "Drive Backup",
+          label: "Drive backup",
           icon: CloudUpload,
           href: "/admin/settings/gdrive-mirror",
         },
@@ -1759,7 +1759,7 @@ const roleNavigation: Record<string, any[]> = {
       items: [
         {
           id: "kyc-review",
-          label: "KYC Review",
+          label: "KYC review",
           icon: Shield,
           href: "/admin/kyc-review",
         },
@@ -1767,20 +1767,20 @@ const roleNavigation: Record<string, any[]> = {
           // ID 182 / 183: files the iTarang house pushed to dealers — open one
           // to act for its dealer.
           id: "pushed-files",
-          label: "Pushed Files",
+          label: "Moved files",
           icon: Handshake,
           href: "/admin/kyc-review/pushed-files",
         },
         {
           id: "product-review",
-          label: "Product Review",
+          label: "Product review",
           icon: Package,
           href: "/admin/product-review",
         },
         {
           // ID 182: one login per iTarang team member under the house dealer.
           id: "house-team-logins",
-          label: "House Team Logins",
+          label: "House team logins",
           icon: UserPlus,
           href: "/admin/house-team-logins",
         },
@@ -1797,7 +1797,7 @@ const roleNavigation: Record<string, any[]> = {
         },
         {
           id: "admin-product-master",
-          label: "Product Master",
+          label: "Product master",
           icon: Package,
           href: "/admin/product-master",
         },
@@ -1815,13 +1815,13 @@ const roleNavigation: Record<string, any[]> = {
         // gate admits ceo and admin only, so a link there would just bounce.
         {
           id: "admin-oem-pricing",
-          label: "OEM Inventory Pricing",
+          label: "OEM inventory pricing",
           icon: Landmark,
           href: "/oem-pricing",
         },
         {
           id: "admin-inventory-upload",
-          label: "Bulk Upload",
+          label: "Bulk upload",
           icon: ShoppingCart,
           href: "/admin/inventory/upload",
         },
@@ -1834,13 +1834,13 @@ const roleNavigation: Record<string, any[]> = {
         },
         {
           id: "admin-inventory-add",
-          label: "Add Item",
+          label: "Add item",
           icon: Package,
           href: "/admin/inventory/add",
         },
         {
           id: "admin-inventory-ageing",
-          label: "Ageing Report",
+          label: "Ageing report",
           icon: Package,
           href: "/admin/inventory/ageing-report",
         },
@@ -1857,7 +1857,7 @@ const roleNavigation: Record<string, any[]> = {
       items: [
         {
           id: "admin-ai-expense-tracker",
-          label: "AI Expense Tracker",
+          label: "AI expense tracker",
           icon: Receipt,
           href: "/admin/expense-tracker",
         },
@@ -1868,13 +1868,13 @@ const roleNavigation: Record<string, any[]> = {
       items: [
         {
           id: "admin-calculator",
-          label: "Loan Calculator",
+          label: "Loan calculator",
           icon: Calculator,
           href: "/admin/calculator",
         },
         {
           id: "admin-calculator-history",
-          label: "Search History",
+          label: "Search history",
           icon: History,
           href: "/admin/calculator/search-history",
         },
@@ -1895,7 +1895,7 @@ const roleNavigation: Record<string, any[]> = {
       items: [
         {
           id: "it-dashboard",
-          label: "IT Dashboard",
+          label: "IT dashboard",
           icon: LayoutDashboard,
           href: "/it",
         },
@@ -1906,13 +1906,13 @@ const roleNavigation: Record<string, any[]> = {
       items: [
         {
           id: "it-security",
-          label: "Security Risk",
+          label: "Security risk",
           icon: ShieldAlert,
           href: "/it/security",
         },
         {
           id: "it-security-live",
-          label: "Live Attacks",
+          label: "Live attacks",
           icon: Radar,
           href: "/it/security/live",
         },
@@ -1937,7 +1937,7 @@ const roleNavigation: Record<string, any[]> = {
       items: [
         {
           id: "pdi-queue",
-          label: "PDI Queue",
+          label: "PDI queue",
           icon: FileCheck,
           href: "/service-engineer/pdi-queue",
         },
@@ -1968,7 +1968,7 @@ const roleNavigation: Record<string, any[]> = {
         },
         {
           id: "credits",
-          label: "Credit Management",
+          label: "Credit management",
           icon: Landmark,
           href: "/business-head/credits",
         },
@@ -1986,14 +1986,14 @@ const roleNavigation: Record<string, any[]> = {
         {
           // ID 82 — sales-ready leads nobody owns, longest wait first.
           id: "bh-ready-to-assign",
-          label: "Ready to Assign",
+          label: "Ready to assign",
           icon: UserPlus,
           href: "/admin/ready-to-assign",
         },
         {
           // ID 81 — the event / ad / list a lead came in on.
           id: "bh-acquisition-campaigns",
-          label: "Acquisition Campaigns",
+          label: "Acquisition campaigns",
           icon: Radar,
           href: "/admin/acquisition-campaigns",
         },
@@ -2007,7 +2007,7 @@ const roleNavigation: Record<string, any[]> = {
         {
           // R-18 — converted dealers' re-order health.
           id: "bh-dealer-health",
-          label: "Dealer Health",
+          label: "Dealer health",
           icon: TrendingUp,
           href: "/admin/reports/dealer-health",
         },
@@ -2022,26 +2022,26 @@ const roleNavigation: Record<string, any[]> = {
           // ID 36 — dead / non-responsive numbers; owner kept, repair puts the
           // lead back to work.
           id: "bh-number-repair",
-          label: "Number Repair",
+          label: "Number repair",
           icon: PhoneOff,
           href: "/admin/number-repair",
         },
         {
           // ID 79 — WhatsApp chat screenshots reps logged; reused images flagged.
           id: "bh-whatsapp-screenshots",
-          label: "WhatsApp Screenshots",
+          label: "WhatsApp screenshots",
           icon: ImageIcon,
           href: "/admin/whatsapp-screenshots",
         },
         {
           id: "kyc-review",
-          label: "KYC Review",
+          label: "KYC review",
           icon: Shield,
           href: "/admin/kyc-review",
         },
         {
           id: "product-review",
-          label: "Product Review",
+          label: "Product review",
           icon: Package,
           href: "/admin/product-review",
         },
@@ -2087,14 +2087,14 @@ const roleNavigation: Record<string, any[]> = {
         {
           // E-322 (IDs 39, 71) — Vyapar / GSTR-1 import, voids, reconciliation.
           id: "invoice-ledger",
-          label: "Invoice Ledger",
+          label: "Invoice ledger",
           icon: Receipt,
           href: "/admin/reports/invoice-ledger",
         },
         {
           // ID 166 (18 Oct): Finance opens every expense bill, so it gets the tracker.
           id: "fc-ai-expense-tracker",
-          label: "AI Expense Tracker",
+          label: "AI expense tracker",
           icon: Receipt,
           href: "/admin/expense-tracker",
         },
@@ -2106,7 +2106,7 @@ const roleNavigation: Record<string, any[]> = {
         {
           // ID 12 — the Funnel tab; the only tab this role is shown there.
           id: "fc-funnel",
-          label: "Funnel Counts",
+          label: "Funnel counts",
           icon: BarChart3,
           href: "/admin/reports",
         },
@@ -2131,7 +2131,7 @@ const roleNavigation: Record<string, any[]> = {
       items: [
         {
           id: "oem-onboarding",
-          label: "OEM Onboarding",
+          label: "OEM onboarding",
           icon: Building,
           href: "/sales-order-manager/oem-onboarding",
         },
@@ -2149,7 +2149,7 @@ const roleNavigation: Record<string, any[]> = {
         },
         {
           id: "pi-invoices",
-          label: "PI & Invoices",
+          label: "PI & invoices",
           icon: Receipt,
           href: "/sales-order-manager/pi-invoices",
         },
@@ -2172,10 +2172,10 @@ const roleNavigation: Record<string, any[]> = {
     {
       section: "SALES",
       items: [
-        { id: "leads", label: "My Leads", icon: Users, href: "/leads" },
-        { id: "deals", label: "My Deals", icon: FileCheck, href: "/deals" },
+        { id: "leads", label: "My leads", icon: Users, href: "/leads" },
+        { id: "deals", label: "My deals", icon: FileCheck, href: "/deals" },
         // ID 5 — the dealers this user owns, with "Order placed".
-        { id: "se-my-dealers", label: "My Dealers", icon: Store, href: "/my-dealers" },
+        { id: "se-my-dealers", label: "My dealers", icon: Store, href: "/my-dealers" },
       ],
     },
   ],
@@ -2186,7 +2186,7 @@ const roleNavigation: Record<string, any[]> = {
       items: [
         {
           id: "converted-leads",
-          label: "Converted Leads",
+          label: "Converted leads",
           icon: TrendingUp,
           href: "/sales-insight",
         },
@@ -2200,24 +2200,24 @@ const roleNavigation: Record<string, any[]> = {
       items: [
         {
           id: "my-queue",
-          label: "My Queue",
+          label: "My queue",
           icon: ListChecks,
           href: "/inside-sales",
         },
         // E-307 — Ecofy leads the Sales Head assigned to this ISR + the calculator.
         ecofyWorkerSubnav("is", "/inside-sales"),
         // ID 5 — the dealers this user owns, with "Order placed".
-        { id: "is-my-dealers", label: "My Dealers", icon: Store, href: "/my-dealers" },
+        { id: "is-my-dealers", label: "My dealers", icon: Store, href: "/my-dealers" },
         {
           id: "is-performance",
-          label: "My Performance",
+          label: "My performance",
           icon: TrendingUp,
           href: "/inside-sales/performance",
         },
         // ID 13 — Reports › Data downloads, this rep's own rows only.
         {
           id: "is-data-downloads",
-          label: "Data Downloads",
+          label: "Data downloads",
           icon: BarChart3,
           href: "/admin/reports",
         },
@@ -2237,24 +2237,24 @@ const roleNavigation: Record<string, any[]> = {
       items: [
         {
           id: "my-visits",
-          label: "My Visits",
+          label: "My visits",
           icon: MapPinned,
           href: "/asm",
         },
         // E-307 — Ecofy leads the Sales Head assigned to this ASM + the calculator.
         ecofyWorkerSubnav("asm", "/asm"),
         // ID 5 — the dealers this user owns, with "Order placed".
-        { id: "asm-my-dealers", label: "My Dealers", icon: Store, href: "/my-dealers" },
+        { id: "asm-my-dealers", label: "My dealers", icon: Store, href: "/my-dealers" },
         {
           id: "asm-performance",
-          label: "My Performance",
+          label: "My performance",
           icon: TrendingUp,
           href: "/asm/performance",
         },
         // ID 13 — Reports › Data downloads, this ASM's own rows only.
         {
           id: "asm-data-downloads",
-          label: "Data Downloads",
+          label: "Data downloads",
           icon: BarChart3,
           href: "/admin/reports",
         },
@@ -2324,19 +2324,19 @@ const roleNavigation: Record<string, any[]> = {
         },
         {
           id: "vendor-inbox",
-          label: "Quotation Inbox",
+          label: "Quote inbox",
           icon: FileText,
           href: "/vendor-portal/inbox",
         },
         {
           id: "vendor-bids",
-          label: "My Bids",
+          label: "My bids",
           icon: Handshake,
           href: "/vendor-portal/bids",
         },
         {
           id: "vendor-orders",
-          label: "Orders & Documents",
+          label: "Orders & documents",
           icon: FolderOpen,
           href: "/vendor-portal/orders",
         },
@@ -2373,20 +2373,20 @@ const roleNavigation: Record<string, any[]> = {
       items: [
         {
           id: "leads",
-          label: "Lead Management",
+          label: "Lead management",
           icon: Users,
           href: "/dealer-portal/leads",
         },
         {
           // E-277 — WhatsApp salespersons who create leads on the dealer's behalf.
           id: "team",
-          label: "My Team",
+          label: "My team",
           icon: Users,
           href: "/dealer-portal/team",
         },
         {
           id: "drafts",
-          label: "My Drafts",
+          label: "My drafts",
           icon: FileText,
           href: "/dealer-portal/leads/drafts",
         },
@@ -2394,7 +2394,7 @@ const roleNavigation: Record<string, any[]> = {
           // ID 182 / 183: iTarang house logins only (HOUSE_ONLY_ITEM_IDS) —
           // the files the house pushed to dealers, to look at.
           id: "pushed-files",
-          label: "Pushed Files",
+          label: "Moved files",
           icon: Handshake,
           href: "/dealer-portal/pushed-files",
         },
@@ -2406,25 +2406,25 @@ const roleNavigation: Record<string, any[]> = {
         },
         {
           id: "loans",
-          label: "Loan Processing",
+          label: "Loan processing",
           icon: Landmark,
           href: "/dealer-portal/loans",
         },
         {
           id: "loan-mgmt",
-          label: "Loan Management",
+          label: "Loan management",
           icon: CreditCard,
           href: "/dealer-portal/loans/management",
         },
         {
           id: "assets",
-          label: "Asset Management",
+          label: "Asset management",
           icon: Car,
           href: "/dealer-portal/assets",
         },
         {
           id: "batteries",
-          label: "Battery Management",
+          label: "Battery management",
           icon: Battery,
           href: "/dealer-portal/batteries",
         },
@@ -2455,7 +2455,7 @@ const roleNavigation: Record<string, any[]> = {
         },
         {
           id: "service",
-          label: "Service Management",
+          label: "Service management",
           icon: Wrench,
           href: "/dealer-portal/service",
         },
@@ -2476,7 +2476,7 @@ const roleNavigation: Record<string, any[]> = {
       items: [
         {
           id: "buyback",
-          label: "Buyback Dashboard",
+          label: "Buyback dashboard",
           icon: Recycle,
           href: "/dealer-portal/buyback",
           // Task 6: /dealer-portal/buyback now has children (requests, new,
@@ -2488,13 +2488,13 @@ const roleNavigation: Record<string, any[]> = {
         },
         {
           id: "buyback-requests",
-          label: "My Requests",
+          label: "My requests",
           icon: FileText,
           href: "/dealer-portal/buyback/requests",
         },
         {
           id: "buyback-new",
-          label: "Sell Batteries",
+          label: "Sell batteries",
           icon: Coins,
           href: "/dealer-portal/buyback/new",
         },
@@ -2529,7 +2529,7 @@ const roleNavigation: Record<string, any[]> = {
       items: [
         {
           id: "auctions",
-          label: "Live Auctions",
+          label: "Live auctions",
           icon: Gavel,
           // Deliberately NOT `exact`. The detail route
           // /dealer-portal/auctions/[id] should highlight this item, and the
@@ -2540,7 +2540,7 @@ const roleNavigation: Record<string, any[]> = {
         },
         {
           id: "auction-my-bids",
-          label: "My Bids",
+          label: "My bids",
           icon: Gavel,
           href: "/dealer-portal/auctions/my-bids",
         },
@@ -2566,7 +2566,7 @@ const roleNavigation: Record<string, any[]> = {
       items: [
         {
           id: "ops-slide",
-          label: "One-Slide Board",
+          label: "One-slide board",
           icon: LayoutDashboard,
           href: "/operations",
         },
@@ -2583,25 +2583,25 @@ const roleNavigation: Record<string, any[]> = {
       items: [
         {
           id: "ops-infrastructure",
-          label: "Hosts & Processes",
+          label: "Hosts & processes",
           icon: Server,
           href: "/operations/infrastructure",
         },
         {
           id: "ops-database",
-          label: "Database Health",
+          label: "Database health",
           icon: Database,
           href: "/operations/database",
         },
         {
           id: "ops-logs",
-          label: "Logs & Errors",
+          label: "Logs & errors",
           icon: FileText,
           href: "/operations/logs",
         },
         {
           id: "ops-system",
-          label: "System Usage",
+          label: "System usage",
           icon: Activity,
           href: "/operations/system",
         },
@@ -2612,25 +2612,25 @@ const roleNavigation: Record<string, any[]> = {
       items: [
         {
           id: "ops-spend",
-          label: "Vendor Spend",
+          label: "Vendor spend",
           icon: Wallet,
           href: "/operations/spend",
         },
         {
           id: "ops-elevenlabs",
-          label: "ElevenLabs Usage",
+          label: "ElevenLabs usage",
           icon: AudioLines,
           href: "/operations/elevenlabs",
         },
         {
           id: "ops-business",
-          label: "Business Metrics",
+          label: "Business metrics",
           icon: TrendingUp,
           href: "/operations/business",
         },
         {
           id: "ops-team",
-          label: "Team Usage",
+          label: "Team usage",
           icon: Users,
           href: "/operations/team",
         },
@@ -2639,7 +2639,7 @@ const roleNavigation: Record<string, any[]> = {
           // from Supabase sign-in recency, this one is observed CRM usage from
           // our own tables (E-214) and is the only per-person surface here.
           id: "ops-usage",
-          label: "CRM Usage",
+          label: "CRM usage",
           icon: UserCheck,
           href: "/operations/usage",
         },
