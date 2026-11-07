@@ -131,7 +131,7 @@ describe("transfer_to_asm", () => {
         expect(a.plan).toMatchObject({ asm_id: "asm-3", out_of_territory_reason: "dealer asked for Kiran", suggested_visit_date: null });
         expect(a.preview.title).toBe("Transfer ABC Traders → Kiran Patil");
         expect(a.preview.warning).toMatch(/read-only for you/);
-        expect(a.preview.lines).toContainEqual({ label: "Status", value: "Under Discussion → Transferred to ASM" });
+        expect(a.preview.lines).toContainEqual({ label: "Status", value: "Under discussion → Transferred to ASM" });
         expect(listAsmOptions).toHaveBeenCalledWith({ state: "Maharashtra", city: "Pune", includeOutOfTerritory: true });
     });
 
@@ -307,7 +307,7 @@ describe("mark_converted", () => {
         expect(r.kind).toBe("preview");
         expect(stored().plan).toEqual({ lead_id: "DL-7", gstin: "27AAACB1234C1ZF", notes: null });
         // ID 74: the rep's action sets Won; Converted comes with onboarding approval.
-        expect(stored().preview.lines).toContainEqual({ label: "Status", value: "Under Discussion → Won" });
+        expect(stored().preview.lines).toContainEqual({ label: "Status", value: "Under discussion → Won" });
         expect(stored().preview.warning).toMatch(/CRM screen/);
     });
 

@@ -76,7 +76,7 @@ describe("log_call proposals (UC-02, UC-03)", () => {
             lost: { reason: "price_high", notes: "price too high" },
             follow_up_at: null,
         });
-        expect(a.preview.lines).toContainEqual({ label: "Status", value: "Under Discussion → Lost (price high)" });
+        expect(a.preview.lines).toContainEqual({ label: "Status", value: "Under discussion → Lost (price high)" });
         expect(a.preview.resets_idle_clock).toBe(true);
         expect(a.preview.needs_second_confirm).toBe(false);
         expect(a.before).toMatchObject({ lead_status: "Under_Discussion", interest_level: "warm" });

@@ -201,7 +201,7 @@ export function MyDealersView() {
                 </table>
             </div>
 
-            {data?.can_record_orders && <OrderClaimsList canWithdraw mine title="My orders with no invoice raised" />}
+            {data?.can_record_orders && <OrderClaimsList canWithdraw mine title="My orders placed, no invoice yet" />}
         </div>
     );
 }

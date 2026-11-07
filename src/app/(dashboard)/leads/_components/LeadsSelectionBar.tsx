@@ -203,7 +203,7 @@ export function LeadsSelectionBar({
                             <select
                                 value={typeDraft}
                                 onChange={(e) => setTypeDraft(e.target.value)}
-                                aria-label="Set type of business"
+                                aria-label="Set business type"
                                 className="rounded-lg border border-sky-200 bg-white px-2 py-1 text-xs text-sky-900 outline-none focus:border-sky-400"
                             >
                                 <option value="">Set business type…</option>

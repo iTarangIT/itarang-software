@@ -66,11 +66,11 @@ export const QUEUE_FILTER_KEYS = Object.keys(
 export const LEAD_STATUS_LABEL: Record<LeadStatus, string> = {
   New_Unassigned: "Unassigned",
   Assigned_Not_Contacted: "Assigned",
-  Under_Discussion: "Under Discussion",
+  Under_Discussion: "Under discussion",
   // ID 215 (accepted 2 Nov, Kartik): shown words only; the stored codes stay.
   Commercials_Explained: "Quote given",
   Commercials_Finalised: "Dealer agreed",
-  Awaiting_Customer_Decision: "Awaiting Decision",
+  Awaiting_Customer_Decision: "Awaiting decision",
   // ID 77: shown as "Awaiting field visit" — only a visit (or "Visit not needed") ends it.
   Transferred_to_ASM: "Awaiting field visit",
   Won: "Won — onboarding",

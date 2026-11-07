@@ -28,9 +28,9 @@ const REASONS = [
 
 // Names tab rule 3: a label per reason; the REASONS codes stay the saved values.
 const REASON_LABEL: Record<(typeof REASONS)[number], string> = {
-    Commercials_Finalised: "Dealer agreed",
+    Commercials_Finalised: "Dealer agreed to quote",
     Site_Visit_Needed: "Site visit needed",
-    Negotiation_Beyond_IS_Authority: "Negotiation beyond ISR's authority",
+    Negotiation_Beyond_IS_Authority: "Price talks need ASM",
     Demo_Requested: "Demo requested",
     Other: "Other",
 };
