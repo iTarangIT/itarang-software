@@ -320,7 +320,7 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
                 body: JSON.stringify(body),
             });
             const json = await res.json();
-            if (!res.ok) throw new Error(json?.error?.message ?? "Failed to update commercials");
+            if (!res.ok) throw new Error(json?.error?.message ?? "Couldn't save the quote. Try again.");
             // E-226 — a quote either went to the dealer just now or is waiting
             // on the CEO, and which one it is changes what the rep does next.
             // Saying only "saved" leaves them to guess.

@@ -66,7 +66,7 @@ export type OrderClaimStatus = "pending" | "confirmed" | "unconfirmed" | "withdr
 export const ORDER_CLAIM_STATUS_LABELS: Record<OrderClaimStatus, string> = {
     pending: "Order placed — awaiting invoice",
     confirmed: "Confirmed by an invoice",
-    unconfirmed: "Order claimed, no invoice raised",
+    unconfirmed: "Order placed, no invoice yet",
     withdrawn: "Withdrawn",
 };
 

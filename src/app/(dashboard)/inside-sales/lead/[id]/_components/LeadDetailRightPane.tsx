@@ -210,7 +210,7 @@ export function LeadDetailRightPane({ bundle, viewerRole, onReviseQuote, focusQu
                                             <Field label="Shop Name" value={lead.shop_name} />
                                             {/* E-296 — always rendered; NULL reads "Not set". */}
                                             <Field
-                                                label="Type of Business"
+                                                label="Business type"
                                                 value={
                                                     <span
                                                         className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${businessTypeTone(lead.business_type)}`}
@@ -257,8 +257,8 @@ export function LeadDetailRightPane({ bundle, viewerRole, onReviseQuote, focusQu
                                     {g.key === "business" && (
                                         <div className="grid grid-cols-2 gap-3">
                                             <Field label="Total Attempts" value={lead.total_attempts ?? 0} />
-                                            <Field label="AI Intent Score" value={lead.final_intent_score} />
-                                            <Field label="Interest Level" value={lead.interest_level} />
+                                            <Field label="AI score" value={lead.final_intent_score} />
+                                            <Field label="Interest" value={lead.interest_level ? INTEREST_LABEL[lead.interest_level] ?? lead.interest_level : null} />
                                             <Field label="Timezone" value={lead.timezone} />
                                             <div className="col-span-2">
                                                 <div>
@@ -272,7 +272,7 @@ export function LeadDetailRightPane({ bundle, viewerRole, onReviseQuote, focusQu
                                                 </div>
                                             </div>
                                             <div className="col-span-2">
-                                                <Field label="Overall Summary" value={lead.overall_summary ? <p className="whitespace-pre-wrap">{lead.overall_summary}</p> : null} />
+                                                <Field label="Summary" value={lead.overall_summary ? <p className="whitespace-pre-wrap">{lead.overall_summary}</p> : null} />
                                             </div>
                                         </div>
                                     )}

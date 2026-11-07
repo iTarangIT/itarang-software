@@ -123,7 +123,7 @@ describe("log_visit proposals (UC-01)", () => {
         expect(stored().plan).toMatchObject({
             lost: { reason: "not_interested", notes: "owner Ramesh, needs 10 batteries at X" }, next_action: "lost", next_visit_date: null,
         });
-        expect(stored().preview.lines).toContainEqual({ label: "Status", value: "Under Discussion → Lost (not interested)" });
+        expect(stored().preview.lines).toContainEqual({ label: "Status", value: "Under discussion → Lost (not interested)" });
     });
 
     it("INV6 + date and next-step sanity: every doubtful case is a question and creates NOTHING", async () => {
@@ -192,7 +192,7 @@ describe("mark_lost proposals", () => {
         expect(stored().plan).toEqual({ lead_id: "DL-1042", reason: "not_interested", notes: "bought elsewhere", competitor_name: null });
         expect(stored().preview).toMatchObject({ title: "Mark Lost — ABC Traders", resets_idle_clock: true, needs_second_confirm: false, warning: null });
         expect(stored().preview.lines).toEqual([
-            { label: "Status", value: "Under Discussion → Lost (not interested)" },
+            { label: "Status", value: "Under discussion → Lost (not interested)" },
             { label: "Notes", value: "bought elsewhere" },
         ]);
     });

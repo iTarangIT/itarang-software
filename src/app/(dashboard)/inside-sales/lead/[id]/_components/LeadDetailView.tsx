@@ -142,7 +142,7 @@ export function LeadDetailView({ leadId, viewerId, viewerRole, backHref = "/insi
                 </div>
                 <Link href={backHref} className="mt-4 inline-flex items-center gap-1 text-sm text-blue-700 hover:underline">
                     <ArrowLeft className="h-4 w-4" />
-                    Back to queue
+                    Back
                 </Link>
             </div>
         );

@@ -19,7 +19,7 @@ const lead = (over: Partial<LeadSummary> = {}): LeadSummary => ({
     dealer_name: "Ramesh",
     city: "Pune",
     status: "Under_Discussion",
-    status_label: "Under Discussion",
+    status_label: "Under discussion",
     interest: "hot",
     phone: "9876543210",
     last_activity_at: "2026-09-30T06:30:00.000Z",
@@ -153,9 +153,9 @@ describe("renderTurn", () => {
         if (p.kind !== "text") return;
         expect(p.body).toBe(
             "Aapke 3 hot leads hain.\n\n*Hot leads — 3*\n(open leads you own, by current temperature; age = days since it became Hot)\n\n" +
-                "1. Shop 1 (Pune) · 9876543210 · Under Discussion · Hot 1 day · last activity Wed 30 Sep\n" +
-                "2. Shop 2 (Pune) · 9876543210 · Under Discussion · Hot 2 days · last activity Wed 30 Sep\n" +
-                "3. Shop 3 (Pune) · 9876543210 · Under Discussion · Hot 3 days · last activity Wed 30 Sep",
+                "1. Shop 1 (Pune) · 9876543210 · Under discussion · Hot 1 day · last activity Wed 30 Sep\n" +
+                "2. Shop 2 (Pune) · 9876543210 · Under discussion · Hot 2 days · last activity Wed 30 Sep\n" +
+                "3. Shop 3 (Pune) · 9876543210 · Under discussion · Hot 3 days · last activity Wed 30 Sep",
         );
     });
 

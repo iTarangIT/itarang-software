@@ -89,7 +89,7 @@ export function LeadDetailHeader({
                 <div className="min-w-0 flex-1">
                     <Link href={backHref} className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 mb-2">
                         <ArrowLeft className="h-3 w-3" />
-                        Back to queue
+                        Back
                     </Link>
                     <div className="flex items-center gap-3 flex-wrap">
                         <h1 className="text-xl font-semibold text-gray-900 truncate">
@@ -148,7 +148,7 @@ export function LeadDetailHeader({
                         </span>
                         <span className="inline-flex items-center gap-1">
                             <AlarmCheck className="h-3 w-3 text-gray-400" />
-                            Last touch: {daysAgo(lead.last_touchpoint_at)}
+                            Last activity: {daysAgo(lead.last_touchpoint_at)}
                         </span>
                         <OwnerIndicator
                             currentOwnerId={lead.current_owner_id}

@@ -85,7 +85,7 @@ export function CallNowButton({
                 variant="outline"
                 onClick={() => setOpen(true)}
                 disabled={disabled}
-                title="Push this lead to the NeoDove priority queue so it is called next"
+                title="Move this lead to the top of the NeoDove calling queue so it is called next"
                 className={`flex items-center gap-2 text-amber-700 border-amber-200 hover:bg-amber-50 ${
                     disabled ? "opacity-40 cursor-not-allowed" : ""
                 }`}

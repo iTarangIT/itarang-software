@@ -251,7 +251,7 @@ export function LogTouchpointModal({
                     onStaleConflict(json.error);
                     return;
                 }
-                throw new Error(json?.error?.message ?? "Failed to log touchpoint");
+                throw new Error(json?.error?.message ?? "Couldn't log the activity. Try again.");
             }
             toast.success("Activity logged.");
             // ID 76: a Lost-type outcome prompts Mark Lost, reason pre-filled —

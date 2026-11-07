@@ -96,7 +96,7 @@ describe("auto status + temperature on the cards", () => {
         // No pre-transfer stage on record → first contact.
         await run(ASM, "log_visit", visit);
         expect(stored().plan).toMatchObject({ status_to: "Under_Discussion", auto: { status: true } });
-        expect(stored().preview.lines).toContainEqual({ label: "Status", value: "Awaiting field visit → Under Discussion (auto)" });
+        expect(stored().preview.lines).toContainEqual({ label: "Status", value: "Awaiting field visit → Under discussion (auto)" });
 
         // Transferred at Commercials finalised → restored, not dropped back.
         rowsFor.push({ match: /SELECT pre_transfer_status FROM dealer_leads/, rows: [{ pre_transfer_status: "Commercials_Finalised" }] });
