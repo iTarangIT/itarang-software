@@ -821,14 +821,40 @@ export async function finalizeCampaign(
 ): Promise<void> {
   if (!campaignId) return;
   try {
-    await db
+    // E-315 — 'completed' means no work is left. A campaign whose unreached
+    // leads still have an automatic retry booked is idle, not done: closing it
+    // strands every booked retry, because wakeDueRetries only wakes 'running'
+    // campaigns. advanceCampaign already checks this before finalizing, but the
+    // legacy /api/ai-dialer/status timeout path (polled by /leads) finalized on
+    // its own Redis queue running dry — "Bajaj Dealers part 7", 4 Nov: closed
+    // at 16:38 IST with 9 retries booked from 16:42, none ever dialled. The
+    // guard lives here, in the same UPDATE, so no caller can skip it.
+    // 'stopped' / 'failed' are deliberate and always apply.
+    const updated = await db
       .update(dialerCampaigns)
       .set({
         status,
         completed_at: new Date(),
         stopped_by: stoppedBy ?? null,
       })
-      .where(eq(dialerCampaigns.id, campaignId));
+      .where(
+        status === "completed"
+          ? and(
+              eq(dialerCampaigns.id, campaignId),
+              sql`NOT EXISTS (
+                SELECT 1 FROM dialer_campaign_leads l
+                 WHERE l.campaign_id = ${campaignId}
+                   AND l.next_attempt_at IS NOT NULL
+              )`,
+            )
+          : eq(dialerCampaigns.id, campaignId),
+      )
+      .returning({ id: dialerCampaigns.id });
+    if (status === "completed" && updated.length === 0) {
+      console.log("[CAMPAIGN] not finalized — automatic retries still booked", {
+        campaignId,
+      });
+    }
   } catch (err) {
     console.error("[campaignTracker.finalizeCampaign] failed:", err);
   }
