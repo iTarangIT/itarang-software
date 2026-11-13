@@ -48,6 +48,7 @@ import { noteTriggerResult } from "@/lib/ai-dialer/lineHealth";
 import { dialTimeSkip, ENROL_SKIP_OUTCOME } from "@/lib/ai-dialer/numberHygiene";
 import { observedNumbers } from "@/lib/ai-dialer/phoneTypeStore";
 import { dialableContactFor, noteContactDialled } from "@/lib/ai-dialer/contactStore";
+import { dialConflict, priorDialsFor } from "@/lib/ai-dialer/dialGuard";
 import { classifyTriggerDetail } from "@/lib/ai-dialer/failureReason";
 import {
   leadsWithRedialNotDue,
@@ -591,6 +592,39 @@ export async function advanceCampaign(
             status: "skipped",
             completed_at: new Date(),
             call_outcome: ENROL_SKIP_OUTCOME.open_callback,
+          })
+          .where(eq(dialerCampaignLeads.id, claimed.campaignLeadId));
+        await syncCampaignCounters(campaignId);
+        continue;
+      }
+
+      // AI dialer list item 7 — one dial per number per campaign, and never two
+      // campaigns on one number at once. Enrolment already dropped duplicate
+      // numbers; this catches a number edited (or an owner mobile captured)
+      // since, and a second campaign running over the same leads.
+      const conflict = dialConflict(
+        await priorDialsFor({
+          phone: dialPhone ?? lead[0].phone,
+          campaignId,
+          campaignLeadId: claimed.campaignLeadId,
+        }),
+        { campaignId, leadId: lead[0].id, now: new Date() },
+      );
+      if (conflict) {
+        console.warn("[advanceCampaign] skipping a number already dialled", {
+          campaignId,
+          leadId: lead[0].id,
+          conflict,
+        });
+        await db
+          .update(dialerCampaignLeads)
+          .set({
+            status: "skipped",
+            completed_at: new Date(),
+            call_outcome:
+              conflict === "same_campaign_other_lead"
+                ? ENROL_SKIP_OUTCOME.duplicate_number
+                : "skipped_dialled_by_another_campaign",
           })
           .where(eq(dialerCampaignLeads.id, claimed.campaignLeadId));
         await syncCampaignCounters(campaignId);
