@@ -109,9 +109,10 @@ export function effectiveMaxRetries(maxRetries: number | null | undefined): numb
 const NOT_A_FINISHED_DIAL = new Set(["skipped", "pending", "calling"]);
 
 // 13 Nov 2026 — "call every lead except completed and wrong number". The only
-// outcomes that end an unreached lead are a wrong / invalid number and leads
-// that were never dialable. Busy, no answer, voicemail, switchboard, silent,
-// hung up, any failure and a dial the user stopped are all redialled.
+// outcomes that end an unreached lead are a wrong / invalid number, a
+// switchboard / IVR / company bot, and leads that were never dialable. Busy,
+// no answer, voicemail, silent, hung up, any failure and a dial the user
+// stopped are all redialled.
 const NEVER_RETRY_OUTCOME = [
     /invalid_number/i,
     /no_phone/i,
@@ -126,6 +127,9 @@ const NEVER_RETRY_OUTCOME = [
  */
 export const DISCONNECTED_OUTCOME = "disconnected";
 
+/** dialer_campaign_leads.status of an IVR / switchboard / company-bot answer. */
+export const SWITCHBOARD_STATUS = "switchboard";
+
 /**
  * "Retry unless done": done = the dealer spoke (completed, except a call cut
  * off mid-conversation) or the number is wrong.
@@ -133,6 +137,11 @@ export const DISCONNECTED_OUTCOME = "disconnected";
 export function isAutoRetryable(status: string, callOutcome: string | null): boolean {
     const outcome = callOutcome ?? "";
     if (NOT_A_FINISHED_DIAL.has(status)) return false;
+    // AI dialer list item 2 (13 Nov 2026): a switchboard / IVR / company bot
+    // never puts a person on the line, so it is not redialled. The number is
+    // listed under Needs dealer mobile; an owner mobile the AI captured is
+    // dialled instead (dealer_lead_contacts).
+    if (status === SWITCHBOARD_STATUS) return false;
     if (NEVER_RETRY_OUTCOME.some((re) => re.test(outcome))) return false;
     if (status === "completed") return outcome === DISCONNECTED_OUTCOME;
     // A wrong number also arrives as a trigger failure (SIP 404 / 484) or a raw
@@ -274,11 +283,11 @@ export type ReattemptRule =
 
 export const REATTEMPT_RULES: Readonly<Record<string, ReattemptRule>> = {
     // Connected › Machine
-    // 13 Nov 2026: switchboards are redialled like any unreached lead (was
-    // "none"); the number is still listed under Needs dealer mobile.
-    "IVR / auto-attendant": { kind: "next_day", window: "same" },
+    // An IVR / tracking number never reaches a person: not redialled (13 Nov
+    // 2026, AI dialer list item 2). Listed under Needs dealer mobile.
+    "IVR / auto-attendant": { kind: "none" },
     "Recording / voicemail": { kind: "next_day", window: "same", maxTimes: 1 },
-    "Tracking number, no voice": { kind: "next_day", window: "same" },
+    "Tracking number, no voice": { kind: "none" },
     "Dead audio (no sound either way)": { kind: "after", ms: 15 * MIN, maxTimes: 1, thenNextDay: true },
     // Connected › Cold
     "Loan Procedure Issue": { kind: "none" }, // a person calls back within 24 h
