@@ -16,7 +16,7 @@
 // the org default working hours, so an automatic retry never rings a dealer at
 // night even though a manual 'now' campaign may be started at any hour.
 
-import { isRetryableFailure } from "./failureReason";
+import { deriveFailureReason } from "./failureReason";
 import { DIALER_HOURS } from "@/lib/queue/campaignSchedule";
 import { CARRIER_PAUSE_THRESHOLD, lineBlockKind } from "./carrierPause";
 
@@ -92,23 +92,30 @@ type Gap = number | "next_window";
 const BUSY_GAPS: Gap[] = [15 * MIN, HOUR, 3 * HOUR];
 const DEFAULT_GAPS: Gap[] = [HOUR, 3 * HOUR, "next_window"];
 
-/** Non-conversation statuses that are always worth another dial. */
-const RETRY_STATUSES = new Set([
-    "busy",
-    "no_response",
-    "rejected",
-    "voicemail",
-    "silent",
-    "hung_up",
-    "no_conversation",
-]);
+// E-315 — automatic redials per unreached lead. A lead gets at most 1 + this
+// many dials. 5 since Dispositions v3 (5 Nov 2026): "Did not pick" is redialled
+// in the next window, up to 2 a day for 3 days — six dials — and the sheet's
+// rule, not this budget, should be what stops it. Since 13 Nov 2026 a campaign
+// with max_retries NULL (created before E-315) gets this default too; an
+// explicit 0 still means one dial.
+export const DEFAULT_MAX_RETRIES = 5;
 
-// Outcomes that no amount of redialling fixes, or that a person chose.
+/** max_retries as stored → the budget the planners use. NULL = the default. */
+export function effectiveMaxRetries(maxRetries: number | null | undefined): number {
+    return maxRetries == null ? DEFAULT_MAX_RETRIES : maxRetries;
+}
+
+/** Rows that were never dialled or are mid-dial: nothing to retry. */
+const NOT_A_FINISHED_DIAL = new Set(["skipped", "pending", "calling"]);
+
+// 13 Nov 2026 — "call every lead except completed and wrong number". The only
+// outcomes that end an unreached lead are a wrong / invalid number and leads
+// that were never dialable. Busy, no answer, voicemail, switchboard, silent,
+// hung up, any failure and a dial the user stopped are all redialled.
 const NEVER_RETRY_OUTCOME = [
     /invalid_number/i,
     /no_phone/i,
     /ineligible/i,
-    /stopped_by_user/i,
 ];
 
 /**
@@ -119,17 +126,21 @@ const NEVER_RETRY_OUTCOME = [
  */
 export const DISCONNECTED_OUTCOME = "disconnected";
 
+/**
+ * "Retry unless done": done = the dealer spoke (completed, except a call cut
+ * off mid-conversation) or the number is wrong.
+ */
 export function isAutoRetryable(status: string, callOutcome: string | null): boolean {
     const outcome = callOutcome ?? "";
+    if (NOT_A_FINISHED_DIAL.has(status)) return false;
     if (NEVER_RETRY_OUTCOME.some((re) => re.test(outcome))) return false;
-    if (RETRY_STATUSES.has(status)) return true;
-    if (status === "completed" && outcome === DISCONNECTED_OUTCOME) return true;
-    if (status === "failed") {
-        // The watchdog's "we never heard back" — the call may never have rung.
-        if (outcome === "no_webhook") return true;
-        return isRetryableFailure({ status, callOutcome });
+    if (status === "completed") return outcome === DISCONNECTED_OUTCOME;
+    // A wrong number also arrives as a trigger failure (SIP 404 / 484) or a raw
+    // provider status ("wrong_number"), not only as the literal invalid_number.
+    if (status === "failed" && deriveFailureReason({ status, callOutcome })?.code === "invalid_number") {
+        return false;
     }
-    return false; // completed (a finished conversation), skipped, pending, calling, unknown
+    return true;
 }
 
 // ── Line blocked on OUR side ────────────────────────────────────────────────
@@ -219,8 +230,8 @@ export function countDialsOnIstDay(
  * attempt budget. null = the lead is done.
  */
 export function planRetryDetailed(input: RetryInput): RetryPlan | null {
-    const { maxRetries } = input;
-    if (maxRetries == null || maxRetries <= 0) return null;
+    const maxRetries = effectiveMaxRetries(input.maxRetries);
+    if (maxRetries <= 0) return null;
     const window = withinDialerHours(input.window);
     if (
         isLineBlockedFailure(input.callOutcome) &&
@@ -263,9 +274,11 @@ export type ReattemptRule =
 
 export const REATTEMPT_RULES: Readonly<Record<string, ReattemptRule>> = {
     // Connected › Machine
-    "IVR / auto-attendant": { kind: "none" }, // number retired for the campaign
+    // 13 Nov 2026: switchboards are redialled like any unreached lead (was
+    // "none"); the number is still listed under Needs dealer mobile.
+    "IVR / auto-attendant": { kind: "next_day", window: "same" },
     "Recording / voicemail": { kind: "next_day", window: "same", maxTimes: 1 },
-    "Tracking number, no voice": { kind: "none" }, // retired; find the shop's mobile
+    "Tracking number, no voice": { kind: "next_day", window: "same" },
     "Dead audio (no sound either way)": { kind: "after", ms: 15 * MIN, maxTimes: 1, thenNextDay: true },
     // Connected › Cold
     "Loan Procedure Issue": { kind: "none" }, // a person calls back within 24 h
@@ -411,8 +424,9 @@ export function planReattempt(input: RetryInput): RetryPlan | null {
     }
 
     // A redial inside the campaign: the E-315 budget is the outer cap.
-    const { maxRetries, attemptCount } = input;
-    if (maxRetries == null || maxRetries <= 0) return null;
+    const { attemptCount } = input;
+    const maxRetries = effectiveMaxRetries(input.maxRetries);
+    if (maxRetries <= 0) return null;
     if (attemptCount < 1 || attemptCount >= 1 + maxRetries) return null;
 
     let at: Date | null = null;
@@ -469,8 +483,9 @@ export function planReattempt(input: RetryInput): RetryPlan | null {
  * gets at most 4 dials in total.
  */
 export function planRetry(input: RetryInput): Date | null {
-    const { maxRetries, attemptCount } = input;
-    if (maxRetries == null || maxRetries <= 0) return null;
+    const { attemptCount } = input;
+    const maxRetries = effectiveMaxRetries(input.maxRetries);
+    if (maxRetries <= 0) return null;
     if (attemptCount < 1 || attemptCount >= 1 + maxRetries) return null;
     if (!isAutoRetryable(input.status, input.callOutcome)) return null;
 

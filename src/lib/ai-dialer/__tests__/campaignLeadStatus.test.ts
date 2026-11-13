@@ -341,7 +341,8 @@ describe("vocabulary invariants", () => {
         expect(NON_CONVERSATION_STATUSES).not.toContain("completed");
         for (const s of NON_CONVERSATION_STATUSES) expect(attempted.has(s)).toBe(true);
         // D2 — a switchboard is never re-queued; every other non-conversation is.
-        expect([...RETRYABLE_STATUSES]).toEqual(NON_CONVERSATION_STATUSES.filter((s) => s !== "switchboard"));
+        // 13 Nov 2026 — every non-conversation is re-queued, switchboard included.
+        expect([...RETRYABLE_STATUSES]).toEqual([...NON_CONVERSATION_STATUSES]);
         expect(TERMINAL_STATUSES).toContain("skipped");
         expect(TERMINAL_STATUSES).not.toContain("pending");
     });
@@ -840,5 +841,17 @@ describe("early hang-up: before the conversation began or during the introductio
         expect(isGreetingOnly("battery chahiye")).toBe(false);
         expect(isGreetingOnly("haan haan haan haan haan haan haan")).toBe(false);
         expect(isGreetingOnly("")).toBe(false);
+    });
+});
+
+// 13 Nov 2026 — the agent now waits for the dealer's hello (empty
+// first_message), so a pickup where nobody speaks can leave NO transcript.
+describe("wait-for-hello: answered, nobody spoke, empty transcript", () => {
+    it("is hung_up under EARLY_HANGUP_SECS, silent past it, no_response at 0 s", () => {
+        const call = (durationSecs: number) =>
+            classifyCallEnd({ providerStatus: "completed", transcript: "", durationSecs }).status;
+        expect(call(7)).toBe("hung_up");
+        expect(call(15)).toBe("silent");
+        expect(call(0)).toBe("no_response");
     });
 });

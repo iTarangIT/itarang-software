@@ -113,8 +113,8 @@ const SPECS: Record<FailureReasonCode, Spec> = {
     switchboard: {
         code: "switchboard",
         label: "IVR / company line",
-        hint: "A company IVR menu, hold message or voice bot answered. Not redialled; the number is listed under Needs dealer mobile.",
-        retryable: false,
+        hint: "A company IVR menu, hold message or voice bot answered. Redialled like any unreached lead; the number is also listed under Needs dealer mobile.",
+        retryable: true,
         ourFault: false,
     },
     disconnected: {

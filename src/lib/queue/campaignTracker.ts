@@ -32,17 +32,15 @@ import {
 } from "./campaignWindow";
 import {
   countDialsOnIstDay,
+  DEFAULT_MAX_RETRIES,
   planRetryDetailed,
   type RetryWindow,
 } from "@/lib/ai-dialer/retryPolicy";
 import { planLongHorizonRedial } from "@/lib/ai/storage/dialDisposition";
 
-// E-315 — automatic redials per unreached lead for every NEW campaign. A lead
-// gets at most 1 + this many dials. Old campaigns keep max_retries NULL (off).
-// 5 since Dispositions v3 (5 Nov 2026): "Did not pick" is redialled in the next
-// window, up to 2 a day for 3 days — six dials — and the sheet's rule, not this
-// budget, should be what stops it. Campaigns created earlier keep their value.
-export const DEFAULT_MAX_RETRIES = 5;
+// E-315 — automatic redials per unreached lead. Lives in retryPolicy since
+// 13 Nov 2026, where a NULL max_retries (pre-E-315 campaign) also reads as it.
+export { DEFAULT_MAX_RETRIES };
 
 // Bolna typically resolves a call within ~2 minutes. After 4 minutes with no
 // webhook the call is effectively orphaned — flip the row to failed and let
@@ -514,7 +512,8 @@ export async function recordAttemptOutcome(opts: {
   let longHorizon: { at: Date; once: boolean } | null = null;
   // false = our line refused the dial (SIP 403 etc.) — refund the attempt.
   let consumesAttempt = true;
-  if (r && r.max_retries != null && r.max_retries > 0) {
+  // max_retries NULL (pre-E-315 campaign) = DEFAULT_MAX_RETRIES; 0 = off.
+  if (r && (r.max_retries == null || r.max_retries > 0)) {
     const scheduled =
       r.schedule_mode && r.schedule_mode !== "now" && r.window_start && r.window_end;
     const window: RetryWindow = scheduled
