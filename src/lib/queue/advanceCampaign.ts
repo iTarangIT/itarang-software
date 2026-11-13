@@ -566,7 +566,11 @@ export async function advanceCampaign(
       // "AI-connected", and redialling it is the point of the retry.
       const resumingDroppedCall =
         claimed.attemptCount > 1 && claimed.lastOutcome === DISCONNECTED_OUTCOME;
-      if (lead[0].ai_connected && !resumingDroppedCall) {
+      // AI dialer list item 6 — also exempt: a first dial to the owner's mobile
+      // a call captured. That call (with his staff, or an IVR) is what made the
+      // lead "AI-connected"; the owner himself was never spoken to. Once a
+      // person answers on it the contact is 'dialled_ok' and not picked again.
+      if (lead[0].ai_connected && !resumingDroppedCall && !dialPhone) {
         console.warn("[advanceCampaign] skipping lead the AI has already spoken to", {
           campaignId,
           leadId: claimed.leadId,
@@ -611,22 +615,34 @@ export async function advanceCampaign(
         { campaignId, leadId: lead[0].id, now: new Date() },
       );
       if (conflict) {
-        console.warn("[advanceCampaign] skipping a number already dialled", {
+        console.warn("[advanceCampaign] number already dialled", {
           campaignId,
           leadId: lead[0].id,
           conflict,
         });
-        await db
-          .update(dialerCampaignLeads)
-          .set({
-            status: "skipped",
-            completed_at: new Date(),
-            call_outcome:
-              conflict === "same_campaign_other_lead"
-                ? ENROL_SKIP_OUTCOME.duplicate_number
-                : "skipped_dialled_by_another_campaign",
-          })
-          .where(eq(dialerCampaignLeads.id, claimed.campaignLeadId));
+        if (conflict.kind === "same_campaign_other_lead") {
+          await db
+            .update(dialerCampaignLeads)
+            .set({
+              status: "skipped",
+              completed_at: new Date(),
+              call_outcome: ENROL_SKIP_OUTCOME.duplicate_number,
+            })
+            .where(eq(dialerCampaignLeads.id, claimed.campaignLeadId));
+        } else {
+          // Another campaign rang this number lately: wait out the gap, then
+          // the claim picks the row up again (next_attempt_at). The claim's
+          // attempt is given back — no call was placed.
+          await db
+            .update(dialerCampaignLeads)
+            .set({
+              status: "skipped",
+              call_outcome: "deferred_dialled_by_another_campaign",
+              next_attempt_at: conflict.until,
+              attempt_count: sql`GREATEST(${dialerCampaignLeads.attempt_count} - 1, 0)`,
+            })
+            .where(eq(dialerCampaignLeads.id, claimed.campaignLeadId));
+        }
         await syncCampaignCounters(campaignId);
         continue;
       }

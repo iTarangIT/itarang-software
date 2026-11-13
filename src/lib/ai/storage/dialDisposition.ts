@@ -144,7 +144,11 @@ async function applyEffects(input: RecordDialInput, d: DispositionV3, key: strin
         // retires that contact instead of the lead's main number.
         const mark = d.rule === "3" ? "dead_number" : "switchboard";
         const { applyResultToContact } = await import("@/lib/ai-dialer/contactStore");
-        if (!(await applyResultToContact(input.dialKey, mark))) await markNumber(input.leadId, mark);
+        const toContact = await applyResultToContact(input.dialKey, mark, {
+            leadId: input.leadId,
+            phone: input.phone ?? null,
+        });
+        if (!toContact) await markNumber(input.leadId, mark);
     }
     if (!key) return;
     // A dial that reached a person resets the reject streak; another reject adds one.

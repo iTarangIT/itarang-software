@@ -89,7 +89,7 @@ export async function noteCallResultForNumber(
     // says nothing about the lead's main number: the result goes to the contact.
     if (callId) {
         const { applyResultToContact } = await import("./contactStore");
-        if (await applyResultToContact(callId, observed)) return;
+        if (await applyResultToContact(callId, observed, { reached: status === "completed" })) return;
     }
     if (!observed && status !== "completed") return;
     if (observed) {

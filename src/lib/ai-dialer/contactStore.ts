@@ -171,23 +171,32 @@ export async function noteContactDialled(leadId: string, phone: string, callId: 
 }
 
 /**
- * The result of a dial TO a captured contact. An IVR / dead number retires
- * the contact (status 'wrong'); anything else leaves it. Returns true when the
+ * The result of a dial TO a captured contact, found by the call id the dial
+ * stored (last_call_id) or — for a dial refused before it got a call id — by
+ * the lead and the number dialled. An IVR / dead number retires the contact
+ * ('wrong'); a person answering marks it 'dialled_ok' (reached once: not
+ * dialled again by the AI); anything else leaves it. Returns true when the
  * call was such a dial — the caller then must NOT mark or clear the lead's
  * main number, which this call never rang.
  */
 export async function applyResultToContact(
     callId: string | null | undefined,
     mark: "switchboard" | "dead_number" | null,
+    opts: { reached?: boolean; leadId?: string | null; phone?: string | null } = {},
 ): Promise<boolean> {
-    if (!callId || !(await hasContactsTable())) return false;
+    const digits = (opts.phone ?? "").replace(/\D/g, "");
+    const key = digits.length >= 10 ? digits.slice(-10) : null;
+    const byPhone = !!(opts.leadId && key);
+    if ((!callId && !byPhone) || !(await hasContactsTable())) return false;
+    const next = mark ? "wrong" : opts.reached ? "dialled_ok" : null;
     try {
         const r = rowsOf<{ id: string }>(
             await db.execute(sql`
                 UPDATE dealer_lead_contacts
-                   SET status = CASE WHEN ${mark}::text IS NULL THEN status ELSE 'wrong' END,
+                   SET status = COALESCE(${next}::text, status),
                        updated_at = now()
-                 WHERE last_call_id = ${callId}
+                 WHERE (last_call_id = ${callId ?? ""}
+                        ${byPhone ? sql`OR (lead_id = ${opts.leadId ?? ""} AND phone = ${key ?? ""})` : sql``})
                 RETURNING id
             `),
         );

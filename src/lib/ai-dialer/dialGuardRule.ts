@@ -14,19 +14,29 @@
 export const CROSS_CAMPAIGN_GAP_MS = 2 * 60 * 60_000;
 
 export type PriorDial = { campaignId: string | null; leadId: string | null; at: Date; inFlight?: boolean };
-export type DialConflict = "same_campaign_other_lead" | "other_campaign_recent" | null;
+/** How long to wait when another campaign's call on the number is still ringing. */
+export const IN_FLIGHT_WAIT_MS = 30 * 60_000;
 
-/** Pure: does an earlier dial on this number block this one? */
+export type DialConflict =
+    | { kind: "same_campaign_other_lead" }
+    | { kind: "other_campaign_recent"; until: Date }
+    | null;
+
+/** Pure: does an earlier dial on this number block this one — and until when? */
 export function dialConflict(
     prior: ReadonlyArray<PriorDial>,
     me: { campaignId: string; leadId: string; now: Date },
 ): DialConflict {
     for (const p of prior) {
-        if (p.campaignId === me.campaignId && p.leadId && p.leadId !== me.leadId) return "same_campaign_other_lead";
+        if (p.campaignId === me.campaignId && p.leadId && p.leadId !== me.leadId) {
+            return { kind: "same_campaign_other_lead" };
+        }
     }
+    let until = 0;
     for (const p of prior) {
         if (p.campaignId === me.campaignId) continue;
-        if (p.inFlight || me.now.getTime() - p.at.getTime() < CROSS_CAMPAIGN_GAP_MS) return "other_campaign_recent";
+        const end = p.inFlight ? me.now.getTime() + IN_FLIGHT_WAIT_MS : p.at.getTime() + CROSS_CAMPAIGN_GAP_MS;
+        if (end > me.now.getTime()) until = Math.max(until, end);
     }
-    return null;
+    return until ? { kind: "other_campaign_recent", until: new Date(until) } : null;
 }

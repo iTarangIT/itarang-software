@@ -62,6 +62,8 @@ export async function checkZeroAnswer(
               JOIN dialer_campaigns c ON c.id = d.campaign_id AND c.status = 'running'
              WHERE d.direction = 'outbound'
                AND d.campaign_id IS NOT NULL
+               -- a carrier refusal is the carrier pause's job, not "nobody answered"
+               AND NOT COALESCE((d.effects ->> 'carrierRefusal')::boolean, false)
                AND (d.dialled_at AT TIME ZONE 'Asia/Kolkata')::date = ${day}::date
         `),
     ).map((d): CampaignDial => ({ campaignId: d.campaign_id, l1: d.l1, l2: d.l2, rule: d.rule_no }));

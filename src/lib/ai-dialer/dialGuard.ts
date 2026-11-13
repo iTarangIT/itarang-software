@@ -14,6 +14,7 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { hasDialDispositionTables } from "@/lib/ai/storage/dialDisposition";
 
+import { hasContactsTable } from "./contactStore";
 import { CROSS_CAMPAIGN_GAP_MS, type PriorDial } from "./dialGuardRule";
 export { CROSS_CAMPAIGN_GAP_MS, dialConflict, type DialConflict, type PriorDial } from "./dialGuardRule";
 
@@ -40,6 +41,7 @@ export async function priorDialsFor(input: {
                     SELECT campaign_id, lead_id, dialled_at::text AS dialled_at
                       FROM ai_dial_dispositions
                      WHERE direction = 'outbound' AND phone_key = ${key}
+                       AND campaign_id IS NOT NULL
                        AND (campaign_id = ${input.campaignId} OR dialled_at > ${since}::timestamptz)
                      LIMIT 50
                 `),
@@ -47,6 +49,7 @@ export async function priorDialsFor(input: {
                 out.push({ campaignId: r.campaign_id, leadId: r.lead_id, at: new Date(r.dialled_at) });
             }
         }
+        const contacts = await hasContactsTable();
         // A call on that number still ringing in another running campaign
         // (its disposition is only written when it ends).
         for (const r of rowsOf<{ campaign_id: string; lead_id: string }>(
@@ -58,7 +61,10 @@ export async function priorDialsFor(input: {
                    AND x.campaign_id <> ${input.campaignId}
                    AND x.status = 'calling'
                    AND x.id <> ${input.campaignLeadId}
-                   AND right(regexp_replace(COALESCE(dl.phone, ''), '[^0-9]', '', 'g'), 10) = ${key}
+                   AND (right(regexp_replace(COALESCE(dl.phone, ''), '[^0-9]', '', 'g'), 10) = ${key}
+                        ${contacts ? sql`OR EXISTS (SELECT 1 FROM dealer_lead_contacts c
+                                                    WHERE c.lead_id = x.lead_id AND c.phone = ${key}
+                                                      AND c.last_call_id = x.bolna_call_id)` : sql``})
                  LIMIT 5
             `),
         )) {

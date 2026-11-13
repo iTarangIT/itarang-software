@@ -278,11 +278,17 @@ export async function resolveAudience(
     };
     let aiConnectedCount = 0;
     const dialable: AudienceRow[] = [];
+    // AI dialer list item 6 — the AI spoke to his staff, who gave the owner's
+    // mobile (E-379): the owner is still to be called, on that number.
+    const { dialableContactsFor } = await import("./contactStore");
+    const ownerMobiles = selection.excludeAiConnected
+        ? await dialableContactsFor(rows.filter((r) => r.already_ai_connected).map((r) => r.id))
+        : new Map<string, string>();
     for (const r of rows) {
         // Counted for both purposes; only EXCLUDED for the AI dialer.
         if (r.already_ai_connected) aiConnectedCount += 1;
 
-        if (selection.excludeAiConnected && r.already_ai_connected) {
+        if (selection.excludeAiConnected && r.already_ai_connected && !ownerMobiles.has(r.id)) {
             excludedByReason.already_ai_connected += 1;
             continue;
         }
