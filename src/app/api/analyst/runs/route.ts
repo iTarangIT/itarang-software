@@ -5,7 +5,7 @@ import { z } from "zod";
 import { ownsThread, requireAnalystUser } from "@/lib/analyst/access";
 import { agentFetch, agentJson } from "@/lib/analyst/client";
 import { errorResponse, normalizeAgentError } from "@/lib/analyst/errors";
-import { ANALYST_QUESTION_MAX, stripMetricRules, withMetricRules } from "@/lib/analyst/metricRules";
+import { ANALYST_QUESTION_MAX, cleanRun, metricInstructions } from "@/lib/analyst/metricRules";
 import { canAskSource, CRM_SOURCE_NAME, crmDsnIsMasked } from "@/lib/analyst/sources-routes";
 import type { Connection, RunPage } from "@/lib/analyst/types";
 
@@ -18,7 +18,7 @@ export const maxDuration = 180;
 const RunBody = z.object({
   connection_id: z.string().min(1).max(100),
   thread_id: z.string().min(1).max(100),
-  // ID 32: capped so the CRM metric rules always ride with it (metricRules.ts).
+  // The agent's own question limit; the CRM metric rules go in `instructions` (metricRules.ts).
   question: z
     .string()
     .trim()
@@ -115,8 +115,9 @@ export async function POST(request: Request) {
   try {
     upstream = await agentFetch("/runs", {
       method: "POST",
-      // ID 32 — the agreed metric rules travel with the question.
-      body: { ...parsed.data, question: withMetricRules(parsed.data.question) },
+      // ID 32 — the agreed metric rules travel beside the question, in the agent's `instructions`
+      // field (13 Nov), so the question, title and history stay the user's own words.
+      body: { ...parsed.data, instructions: metricInstructions(parsed.data.question) || undefined },
       accept: "text/event-stream",
       // Covers the wait before headers arrive; the stream's own cancel covers the rest.
       signal: request.signal,
@@ -175,7 +176,7 @@ export async function GET(request: Request) {
     );
     return Response.json({
       ...page,
-      items: page.items.map((r) => ({ ...r, question: stripMetricRules(r.question) })),
+      items: page.items.map(cleanRun),
     });
   } catch (error) {
     return errorResponse(error, "could not load that conversation");

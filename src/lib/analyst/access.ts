@@ -45,6 +45,13 @@ export async function requireAnalystManager(): Promise<AnalystUser> {
   return user;
 }
 
+/** Who works the answer-feedback review queue (E-380): the CEO, and admin for support. */
+export const FEEDBACK_REVIEWER_ROLES = new Set(["ceo", "admin"]);
+
+export function canReviewFeedback(role: string): boolean {
+  return FEEDBACK_REVIEWER_ROLES.has(role);
+}
+
 export function threadPrefix(userId: string): string {
   return `crm.${userId}.`;
 }
