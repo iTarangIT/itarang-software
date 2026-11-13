@@ -6,9 +6,10 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 
-import { canManageSources, newThreadId, ownsThread, requireAnalystUser } from "@/lib/analyst/access";
+import { canManageSources, canReviewFeedback, newThreadId, ownsThread, requireAnalystUser } from "@/lib/analyst/access";
 import { agentJson, analystConfigured } from "@/lib/analyst/client";
 import { AnalystError } from "@/lib/analyst/errors";
+import { cleanRun, cleanThread } from "@/lib/analyst/metricRules";
 import { crmDsnIsMasked } from "@/lib/analyst/sources-routes";
 import { ownThreads } from "@/lib/analyst/threads";
 import type { Connection, RunPage, Thread } from "@/lib/analyst/types";
@@ -80,12 +81,15 @@ export async function AnalystPage({
       basePath={basePath}
       threadId={threadId}
       connections={connections}
-      // The agent returns newest first; a transcript reads oldest first.
-      history={[...history.items].reverse()}
-      threads={ownThreads(user, threads)}
+      // The agent returns newest first; a transcript reads oldest first. Runs asked before 13 Nov
+      // stored the CRM metric rules inside the question (and so the title): both are cleaned
+      // here, or a reopened conversation shows them and "Ask again" re-sends them.
+      history={[...history.items].reverse().map(cleanRun)}
+      threads={ownThreads(user, threads).map(cleanThread)}
       unreachable={false}
       problem={null}
       canManage={canManageSources(user.role)}
+      canReview={canReviewFeedback(user.role)}
       crmMasked={crmDsnIsMasked(process.env.ANALYST_CRM_READONLY_DSN)}
     />
   );

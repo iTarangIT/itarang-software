@@ -1,18 +1,18 @@
 // ID 32 — the AI Analyst gets the CRM's agreed metric rules with every question.
 //
-// The agent (a separate service) takes only { connection_id, thread_id,
-// question ≤ 2000 chars } — no system prompt or context field — so the rules
-// ride AFTER the question. After, not before: the agent titles a thread from
-// the start of its first question, which must stay the user's own words.
-// The run, run-detail and thread routes strip them back off before anything
-// reaches the browser.
+// 13 Nov: the rules travel in the agent's own `instructions` field (POST /runs,
+// agent 9316960), which reaches the model's system prompt only. They used to
+// ride glued to the end of the question, which put them into the thread's
+// title, its replayed history, the agent's memory and its table ranker, and
+// into every reopened conversation. The question now goes as the user typed it.
 //
-// All the rules no longer fit beside a real question (revenue, margin,
-// batteries and salesperson rules were added, ID 32), so a question carries
-// the rules of the topics it is about — "revenue by salesperson last month"
-// gets the revenue and people rules — plus the always-on ones. A question
-// that names no topic gets every rule that fits. Questions are capped at
-// ANALYST_QUESTION_MAX so the always-on rules always fit: never sent bare.
+// A question still gets the rules of the topics it is about ("revenue by
+// salesperson last month" gets the revenue and people rules) plus the
+// always-on ones; a question that names no topic gets every rule. Rules no
+// longer compete with the question for room, so none is ever dropped.
+//
+// Runs asked before 13 Nov still have the rules inside their stored question:
+// stripMetricRules takes them back off wherever a question or title is shown.
 
 import { ANALYST_RULES, type AnalystTopic } from "@/lib/reports/metricDefinitions";
 
@@ -20,9 +20,15 @@ export { ANALYST_QUESTION_MAX } from "./questionLimit";
 
 /** The agent's RunCreate.question maxLength. */
 export const AGENT_QUESTION_MAX = 2000;
+/** The agent's RunCreate.instructions maxLength. */
+export const AGENT_INSTRUCTIONS_MAX = 12000;
 
-// One line, no newlines: the agent may fold whitespace when it makes a title.
-const MARK = " [CRM metric rules - answer with these definitions] ";
+/** What heads the rules in the agent's system prompt. */
+export const INSTRUCTIONS_HEAD = "CRM metric rules - answer with these definitions:";
+
+// The marker the rules were glued on with before 13 Nov. Only read now, to clean old runs.
+export const LEGACY_RULES_MARK = " [CRM metric rules - answer with these definitions] ";
+const MARK = LEGACY_RULES_MARK;
 
 /** Words that put a question on a topic. Broad on purpose: a spare rule costs little, a missing one a wrong number. */
 const TOPIC_WORDS: Record<AnalystTopic, RegExp> = {
@@ -41,42 +47,38 @@ const TOPIC_WORDS: Record<AnalystTopic, RegExp> = {
     idle: /idle|stale|untouched|not worked|no work|sitting|needs attention|neglect|follow[- ]?up/i,
 };
 
-/** Room the rules get beside the longest allowed question (tests hold it). */
-export const RULES_ROOM_AT_MAX = (questionMax: number) => AGENT_QUESTION_MAX - questionMax - MARK.length;
-
 /** The topics a question is about. */
 export function questionTopics(question: string): AnalystTopic[] {
     return (Object.keys(TOPIC_WORDS) as AnalystTopic[]).filter((t) => TOPIC_WORDS[t].test(question));
 }
 
-/** The rules for a question, in their written order, inside `room` characters. */
-export function rulesForQuestion(question: string, room: number): string {
+/** The rules for a question, in their written order, inside `room` characters, joined by `sep`. */
+export function rulesForQuestion(question: string, room: number, sep = " "): string {
     const topics = new Set(questionTopics(question));
     const matched = ANALYST_RULES.filter((r) => r.topics.length === 0 || topics.size === 0 || r.topics.some((t) => topics.has(t)));
     // ID 184: a rule the question names exactly goes first (then written order).
     const named = matched.filter((r) => r.first?.test(question));
     const wanted = [...named, ...matched.filter((r) => !named.includes(r))];
     const picked: string[] = [];
-    let used = -1;
+    let used = -sep.length;
     for (const r of wanted) {
-        if (used + 1 + r.text.length > room) continue;
+        if (used + sep.length + r.text.length > room) continue;
         picked.push(r.text);
-        used += 1 + r.text.length;
+        used += sep.length + r.text.length;
     }
-    return picked.join(" ");
+    return picked.join(sep);
 }
 
-/** The question as sent to the agent: with the rules it needs, inside the agent's limit. */
-export function withMetricRules(question: string, max = AGENT_QUESTION_MAX): string {
-    const room = max - question.length - MARK.length;
-    if (room <= 0) return question;
-    const rules = rulesForQuestion(question, room);
-    return rules ? question + MARK + rules : question;
+/** The `instructions` sent beside a question: the rules it needs, one per line, inside the agent's limit. */
+export function metricInstructions(question: string, max = AGENT_INSTRUCTIONS_MAX): string {
+    const room = max - INSTRUCTIONS_HEAD.length - 3; // "\n- " before the first rule
+    const rules = rulesForQuestion(question, room, "\n- ");
+    return rules ? `${INSTRUCTIONS_HEAD}\n- ${rules}` : "";
 }
 
 /**
- * The user's own question back from what the agent stored — also from a thread
- * title cut part-way into the rules ("…how many? [CRM metric ru…").
+ * The user's own question back from what the agent stored before 13 Nov — also
+ * from a thread title cut part-way into the rules ("…how many? [CRM metric ru…").
  */
 export function stripMetricRules(text: string): string {
     const i = text.indexOf(MARK);
@@ -87,4 +89,14 @@ export function stripMetricRules(text: string): string {
         if (body.endsWith(MARK.slice(0, k))) return body.slice(0, body.length - k);
     }
     return text;
+}
+
+/** A run as the browser may see it: its question without any old rules. */
+export function cleanRun<T extends { question: string }>(run: T): T {
+    return { ...run, question: stripMetricRules(run.question) };
+}
+
+/** A conversation as the browser may see it: its title without any old rules. */
+export function cleanThread<T extends { title: string }>(thread: T): T {
+    return { ...thread, title: stripMetricRules(thread.title) };
 }

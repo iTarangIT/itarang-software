@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildChart, isTimeAxis } from "../chart";
-import { questionTopics, withMetricRules } from "../metricRules";
+import { questionTopics, metricInstructions } from "../metricRules";
 import type { ResultTable } from "../run-types";
 
 // A35 — a trend question gets a line chart, not bars.
@@ -45,7 +45,7 @@ describe("trend questions carry the line-chart and 2-month forecast rule (A35)",
     it("a trend or forecast question is on the trend topic and gets the rule", () => {
         expect(questionTopics("revenue trend month on month")).toContain("trend");
         expect(questionTopics("forecast batteries sold")).toContain("trend");
-        const sent = withMetricRules("Show revenue month-wise and forecast the next months");
+        const sent = metricInstructions("Show revenue month-wise and forecast the next months");
         expect(sent).toMatch(/line chart, never bars/);
         expect(sent).toMatch(/next 2 months/);
     });

@@ -33,18 +33,27 @@ import {
   type RunState,
 } from "@/lib/analyst/run-types";
 import type { Attempt, RunDetail, RunSummary } from "@/lib/analyst/types";
+import { formatWhen } from "@/lib/analyst/when";
 import { cn } from "@/lib/utils";
 
+import { FeedbackButtons } from "./feedback";
 import { useTypedAnswer } from "./hooks";
 
 // ── Messages ──────────────────────────────────────────────────────────────────
 
-export function UserMessage({ children }: { children: React.ReactNode }) {
+/** A question. `at` is when it was asked; shown under the bubble in IST. */
+export function UserMessage({ children, at }: { children: React.ReactNode; at?: string | number | null }) {
+  const when = formatWhen(at);
   return (
-    <div className="flex justify-end">
+    <div className="flex flex-col items-end gap-1">
       <div className="max-w-[85%] rounded-3xl bg-bg px-4 py-2.5 text-[0.9375rem] leading-relaxed break-words whitespace-pre-wrap text-ink sm:max-w-[75%]">
         {children}
       </div>
+      {when ? (
+        <time dateTime={new Date(at!).toISOString()} className="px-2 text-[0.6875rem] text-ink-muted">
+          {when}
+        </time>
+      ) : null}
     </div>
   );
 }
@@ -88,18 +97,26 @@ export function AnswerText({ shown, full }: { shown: string; full: string }) {
   );
 }
 
-/** Copy, ask again, and the run's details. Results are never stored — asking again refreshes them. */
+/**
+ * Copy, ask again, thumbs up / down, and the run's details. Results are never stored — asking
+ * again refreshes them. `at` is when the answer came back, shown in IST.
+ */
 export function MessageActions({
   copyText,
   onAskAgain,
   persistent,
+  runId,
+  at,
   children,
 }: {
   copyText?: string | null;
   onAskAgain?: () => void;
   persistent: boolean;
+  runId?: string | null;
+  at?: string | number | null;
   children?: React.ReactNode;
 }) {
+  const when = formatWhen(at);
   return (
     <div
       className={cn(
@@ -118,6 +135,12 @@ export function MessageActions({
         <RotateCcw className="size-4" strokeWidth={1.75} />
       </ActionButton>
       {children}
+      {when ? (
+        <time dateTime={new Date(at!).toISOString()} className="px-2 text-[0.6875rem] text-ink-muted">
+          Answered {when}
+        </time>
+      ) : null}
+      <FeedbackButtons runId={runId} />
     </div>
   );
 }
@@ -627,7 +650,7 @@ export function PastTurn({ run, latest, onAskAgain }: { run: RunSummary; latest:
 
   return (
     <div ref={root} className="flex flex-col gap-5">
-      <UserMessage>{run.question}</UserMessage>
+      <UserMessage at={run.created_at}>{run.question}</UserMessage>
       <AssistantMessage>
         {near ? <Reply runId={run.id} latest={latest} onAskAgain={onAskAgain} /> : <ReplySkeleton />}
       </AssistantMessage>
@@ -662,11 +685,23 @@ function Reply({ runId, latest, onAskAgain }: { runId: string; latest: boolean; 
       {!detail.answer && !detail.error ? (
         <p className="text-[0.875rem] text-ink-muted">No answer was recorded for this run.</p>
       ) : null}
-      <MessageActions copyText={detail.answer} onAskAgain={onAskAgain} persistent={latest}>
+      <MessageActions
+        copyText={detail.answer}
+        onAskAgain={onAskAgain}
+        persistent={latest}
+        runId={detail.id}
+        at={answeredAt(detail.created_at, detail.duration_ms)}
+      >
         <RunProcess detail={detail} />
       </MessageActions>
     </>
   );
+}
+
+/** When a run's answer came back: it started at `created_at` and took `duration_ms`. */
+function answeredAt(createdAt: string, durationMs: number | null | undefined): number | null {
+  const start = new Date(createdAt).getTime();
+  return Number.isNaN(start) ? null : start + Math.max(0, durationMs ?? 0);
 }
 
 function ReplySkeleton() {

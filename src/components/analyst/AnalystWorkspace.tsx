@@ -13,7 +13,7 @@
 //    the page instead of scrolling inside its own box.
 
 import { CRM_SOURCE_NAME } from "@/lib/analyst/sources-routes";
-import { BarChart3, ChevronDown, Database, FileSpreadsheet, MessageSquarePlus, Plus, Settings2, Sparkles } from "lucide-react";
+import { BarChart3, ChevronDown, Database, FileSpreadsheet, MessageSquarePlus, MessageSquareWarning, Plus, Settings2, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState, useTransition } from "react";
@@ -23,8 +23,10 @@ import { isRunning, type RunState } from "@/lib/analyst/run-types";
 import { ANALYST_QUESTION_MAX } from "@/lib/analyst/questionLimit";
 import { withAskedThread } from "@/lib/analyst/threads";
 import type { Connection, RunSummary, Thread } from "@/lib/analyst/types";
+import { formatWhenShort } from "@/lib/analyst/when";
 import { cn } from "@/lib/utils";
 
+import { FeedbackProvider } from "./feedback";
 import { useRun, useTranscriptScroll } from "./hooks";
 import {
   AssistantMessage,
@@ -42,12 +44,15 @@ import { ResultChart } from "./result-chart";
 import { sourcesApi } from "./sources/api";
 import { SourcesPanel, type PanelView } from "./sources/SourcesPanel";
 
-/** Starter questions for an empty conversation. Phrased for what the connected data can answer. */
+/**
+ * Starter questions for an empty conversation: the business questions the CEO and Sales Head
+ * actually ask (13 Nov), each answerable from the agreed metric rules.
+ */
 const SUGGESTIONS = [
-  "How many leads were created this month, by status?",
-  "Which 10 dealers brought in the most leads in the last 90 days?",
-  "Show the monthly trend of converted leads this year",
-  "What share of AI calls last week ended with the dealer speaking?",
+  "How many visits did each ASM make this week?",
+  "Revenue this month vs last month, by salesperson",
+  "How many leads came in today, by source?",
+  "Which dealers have not placed an order in the last 30 days?",
 ];
 
 export type AnalystWorkspaceProps = {
@@ -64,6 +69,8 @@ export type AnalystWorkspaceProps = {
   canManage?: boolean;
   /** ID 167: this server's iTarang database login is the masked analyst_ro. */
   crmMasked?: boolean;
+  /** CEO / admin: link to the answer-feedback review queue (E-380). */
+  canReview?: boolean;
 };
 
 export function AnalystWorkspace({
@@ -76,6 +83,7 @@ export function AnalystWorkspace({
   problem,
   canManage = false,
   crmMasked = false,
+  canReview = false,
 }: AnalystWorkspaceProps) {
   const { state, turns, ask, cancel } = useRun();
   const { viewportRef, contentRef, onSubmit: followSubmittedQuestion } = useTranscriptScroll();
@@ -163,6 +171,7 @@ export function AnalystWorkspace({
   const askAgain = ready && !busy ? (asked: string) => () => void send(asked) : null;
 
   return (
+    <FeedbackProvider threadId={threadId}>
     <div className="flex h-[calc(100dvh-10rem)] min-h-[32rem] min-w-0 overflow-hidden rounded-xl border border-border bg-surface shadow-card">
       <ThreadColumn basePath={basePath} threads={threads} activeId={threadId} />
 
@@ -190,6 +199,16 @@ export function AnalystWorkspace({
                 <span className="hidden sm:inline">Data sources</span>
               </button>
             )}
+            {canReview ? (
+              <Link
+                href="/ceo/analyst/feedback"
+                title="Answer feedback to review"
+                className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[0.8125rem] font-medium text-ink-muted transition-colors hover:bg-bg hover:text-ink"
+              >
+                <MessageSquareWarning aria-hidden className="size-4" />
+                <span className="hidden sm:inline">Feedback</span>
+              </Link>
+            ) : null}
             <Link
               href={basePath}
               className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[0.8125rem] font-medium text-ink-muted transition-colors hover:bg-bg hover:text-ink lg:hidden"
@@ -301,6 +320,7 @@ export function AnalystWorkspace({
         />
       ) : null}
     </div>
+    </FeedbackProvider>
   );
 }
 
@@ -324,7 +344,7 @@ function Turn({
 
   return (
     <div className="flex flex-col gap-5">
-      <UserMessage>{turn.question}</UserMessage>
+      <UserMessage at={turn.startedAt}>{turn.question}</UserMessage>
       <AssistantMessage>
         {running ? <RunStatus state={turn} /> : null}
         {turn.answer ? <LiveAnswer text={turn.answer} live={Boolean(live)} /> : null}
@@ -334,7 +354,13 @@ function Turn({
         {turn.error ? <RunErrorPanel error={turn.error} /> : null}
         {turn.phase === "cancelled" ? <p className="text-[0.875rem] text-ink-muted">You stopped this run.</p> : null}
         {running ? null : (
-          <MessageActions copyText={turn.answer} onAskAgain={onAskAgain} persistent={latest}>
+          <MessageActions
+            copyText={turn.answer}
+            onAskAgain={onAskAgain}
+            persistent={latest}
+            runId={turn.runId}
+            at={turn.startedAt !== null && turn.durationMs !== null ? turn.startedAt + turn.durationMs : null}
+          >
             <RunProcess state={turn} />
           </MessageActions>
         )}
@@ -370,13 +396,21 @@ function ThreadColumn({ basePath, threads, activeId }: { basePath: string; threa
                   title={thread.title}
                   aria-current={thread.thread_id === activeId ? "page" : undefined}
                   className={cn(
-                    "block truncate rounded-lg px-2.5 py-2 text-[0.8125rem] transition-colors",
+                    "block rounded-lg px-2.5 py-2 text-[0.8125rem] transition-colors",
                     thread.thread_id === activeId
                       ? "bg-brand-50 font-medium text-brand-800"
                       : "text-ink hover:bg-surface",
                   )}
                 >
-                  {thread.title}
+                  <span className="block truncate">{thread.title}</span>
+                  {thread.last_run_at ? (
+                    <time
+                      dateTime={thread.last_run_at}
+                      className="block truncate text-[0.6875rem] font-normal text-ink-muted"
+                    >
+                      {formatWhenShort(thread.last_run_at)}
+                    </time>
+                  ) : null}
                 </Link>
               </li>
             ))}
