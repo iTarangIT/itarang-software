@@ -34,6 +34,7 @@ import { failedSendTimelineEntries, mergeNewestFirst } from "@/lib/leads/quoteSe
 import { listLeadQuoteSends } from "@/lib/leads/quoteSendsStore";
 import { IvrTag } from "@/components/leads/ivr-tag";
 import { CallbackBriefCard } from "@/components/leads/callback-brief-card";
+import { AiCallProfileCard } from "@/components/leads/ai-call-profile-card";
 import { fetchIvrLeadIds, observedMarkOf } from "@/lib/ai-dialer/phoneTypeStore";
 import { ClearPhoneMarkButton } from "@/components/leads/clear-phone-mark-button";
 
@@ -219,6 +220,8 @@ export default async function LeadDetailPage({ params }: any) {
 
         {/* D8 — the promised callback and its brief. */}
         {lead && <CallbackBriefCard leadId={lead.id} className="mb-4" />}
+        {/* AI dialer list items 3 / 6 — what the AI says and dials. */}
+        {lead && <AiCallProfileCard leadId={lead.id} className="mb-4" />}
 
         {/* Header — light CRM card */}
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 mb-6">

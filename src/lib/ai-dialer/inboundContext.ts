@@ -18,12 +18,16 @@
 //
 // Pure: no database, no clock of its own. The I/O is in inbound.ts.
 
+import { resolveSpokenName } from "./spokenName";
+
 export type InboundBranch = "confirm_slot" | "do_it_now" | "warm_opener" | "complaint" | "unknown";
 
 export type InboundMatch = {
     lead: {
         id: string;
         shopName: string | null;
+        /** E-378 — a rep's override of the spoken shop name, if any. */
+        spokenNameOverride?: string | null;
         dealerName: string | null;
         language: string | null;
         city: string | null;
@@ -82,6 +86,7 @@ export function inboundDynamicVariables(
         lead_id: m.lead?.id ?? "",
         phone_number: callerPhone,
         shop_name: m.lead?.shopName?.trim() || "",
+        shop_name_spoken: m.lead ? resolveSpokenName(m.lead.shopName, m.lead.spokenNameOverride) : "",
         location: m.lead?.city?.trim() || "",
         language: m.lead?.language?.trim() || "",
         callback_slot_text: cb && !cb.timeNotSet ? istSlot(cb.dueAt) : "",

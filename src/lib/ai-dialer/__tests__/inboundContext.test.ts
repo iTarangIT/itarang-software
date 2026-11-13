@@ -82,6 +82,17 @@ describe("inboundDynamicVariables", () => {
         expect(v.callback_time_set).toBe("0");
     });
 
+    it("sends the spoken shop name; a rep's override wins (E-378)", () => {
+        const none = inboundDynamicVariables({ lead: null, openCallback: null, lastOutcome: null }, "9971027907", now);
+        expect(none.shop_name_spoken).toBe("");
+        const raw = { ...lead, shopName: "Exide Care - Sharma Batteries Pvt Ltd" };
+        expect(inboundDynamicVariables({ lead: raw, openCallback: null, lastOutcome: null }, "9971027907", now).shop_name_spoken)
+            .toBe("Sharma Batteries");
+        const over = { ...raw, spokenNameOverride: "Sharma ji ki dukaan" };
+        expect(inboundDynamicVariables({ lead: over, openCallback: null, lastOutcome: null }, "9971027907", now).shop_name_spoken)
+            .toBe("Sharma ji ki dukaan");
+    });
+
     it("a not-connected last outcome names its L2", () => {
         const v = inboundDynamicVariables({ lead, openCallback: null, lastOutcome: notConnected }, "9971027907", now);
         expect(v.last_outcome).toBe("Did not pick");

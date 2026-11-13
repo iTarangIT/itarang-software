@@ -22,6 +22,7 @@ import { EscalateModal } from "../../../_components/modals/EscalateModal";
 import { ClaimLeadConfirm } from "../../../_components/modals/ClaimLeadConfirm";
 import { canExportLeadHistory } from "@/lib/leads/access";
 import { CallbackBriefCard } from "@/components/leads/callback-brief-card";
+import { AiCallProfileCard } from "@/components/leads/ai-call-profile-card";
 import { InfoTip } from "@/components/ui/info-tip";
 
 export const LEAD_NOT_ACCESSIBLE =
@@ -167,6 +168,7 @@ export function LeadDetailView({ leadId, viewerId, viewerRole, backHref = "/insi
 
             {/* D8 — the promised callback and its brief, before anything else. */}
             <CallbackBriefCard leadId={leadId} className="mx-6 mt-3" />
+            <AiCallProfileCard leadId={leadId} className="mx-6 mt-3" />
 
             {staleInfo && (
                 <div className="px-6 pt-3">

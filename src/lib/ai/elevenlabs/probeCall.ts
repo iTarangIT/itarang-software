@@ -30,6 +30,7 @@ export const PROBE_DYNAMIC_VARIABLES = {
     owner_name: "",
     location: "",
     shop_name: "iTarang line check",
+    shop_name_spoken: "iTarang line check",
     language: "",
     interest: "cold",
     status: "",

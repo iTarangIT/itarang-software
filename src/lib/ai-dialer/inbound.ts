@@ -26,6 +26,7 @@ import { classifyCallEnd, dealerSpoke } from "./campaignLeadStatus";
 import { buildCallbackBrief, type CallbackKind } from "./callbackBrief";
 import { callbackDueDetail } from "./callCategory";
 import { parseFlag } from "./dispositionV3";
+import { spokenNameOverride } from "./spokenNameStore";
 import {
     callerKey,
     inboundBranch,
@@ -100,6 +101,7 @@ export async function lookupInbound(callerPhone: string): Promise<InboundMatch> 
             lead: {
                 id: lead.id,
                 shopName: lead.shop_name,
+                spokenNameOverride: await spokenNameOverride(lead.id),
                 dealerName: lead.dealer_name,
                 language: lead.language,
                 city: lead.city,

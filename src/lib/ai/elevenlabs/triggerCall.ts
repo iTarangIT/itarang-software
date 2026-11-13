@@ -9,6 +9,7 @@ import { openingLanguageOverride } from "@/lib/ai-dialer/callLanguage";
 import { ElevenLabsCallPayload, ElevenLabsCallResponse } from "./types";
 import { redialHints } from "@/lib/ai-dialer/dispositionV3";
 import { lastDispositionRuleFor } from "@/lib/ai/storage/dialDisposition";
+import { spokenNameFor } from "@/lib/ai-dialer/spokenNameStore";
 
 // One ElevenLabs call per (lead, phone, day). Same rationale as Bolna —
 // stops QStash retries from billing 3x for the same daily outreach attempt.
@@ -249,6 +250,9 @@ export async function triggerElevenLabsCall(
       owner_name: ownerName,
       location,
       shop_name: shopName,
+      // AI dialer list item 3 — the short name the agent says ("Bansal Battery
+      // House", not the full Maps title). A rep's override wins (E-378).
+      shop_name_spoken: await spokenNameFor({ id: lead.id, shop_name: lead.shop_name }),
       language,
       interest,
       status,
