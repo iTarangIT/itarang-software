@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import {
     clampIntoWindow,
+    DEFAULT_MAX_RETRIES,
     DISCONNECTED_OUTCOME,
     isAutoRetryable,
     isLineBlockedFailure,
@@ -55,14 +56,32 @@ describe("isAutoRetryable", () => {
         expect(isAutoRetryable("no_response", "invalid_number: number does not exist")).toBe(false);
     });
 
-    it("never retries a row the user stopped", () => {
-        expect(isAutoRetryable("failed", "stopped_by_user")).toBe(false);
+    // 13 Nov 2026 — "call every lead except completed and wrong number".
+    it.each([
+        ["failed", "stopped_by_user"],
+        ["switchboard", null],
+        ["failed", "trigger_failed: sip status: 500"],
+        ["failed", null],
+    ])("retries %s / %s", (status, outcome) => {
+        expect(isAutoRetryable(status, outcome)).toBe(true);
+    });
+
+    it("never retries a wrong number sent as SIP 404, or a lead never dialable", () => {
+        expect(isAutoRetryable("failed", "trigger_failed: INVITE failed: sip status: 404: Not Found")).toBe(false);
+        expect(isAutoRetryable("failed", "no_phone")).toBe(false);
+        expect(isAutoRetryable("failed", "ineligible_active_lead")).toBe(false);
     });
 });
 
 describe("planRetry — attempt budget", () => {
-    it("is off when max_retries is null (pre-E-315 campaigns)", () => {
-        expect(planRetry(base({ maxRetries: null }))).toBeNull();
+    it("gives a pre-E-315 campaign (max_retries null) the default budget", () => {
+        expect(planRetry(base({ maxRetries: null }))).not.toBeNull();
+        expect(planRetry(base({ maxRetries: null, attemptCount: DEFAULT_MAX_RETRIES }))).not.toBeNull();
+        expect(planRetry(base({ maxRetries: null, attemptCount: DEFAULT_MAX_RETRIES + 1 }))).toBeNull();
+    });
+
+    it("is off only when max_retries is explicitly 0", () => {
+        expect(planRetry(base({ maxRetries: 0 }))).toBeNull();
     });
 
     it("allows 1 + max_retries dials in total", () => {
@@ -82,7 +101,7 @@ describe("planRetry — attempt budget", () => {
             ist("2026-09-28T12:00:00"),
         );
         expect(planRetry(base({ status: "completed", callOutcome: DISCONNECTED_OUTCOME, attemptCount: 4 }))).toBeNull();
-        expect(planRetry(base({ status: "completed", callOutcome: DISCONNECTED_OUTCOME, maxRetries: null }))).toBeNull();
+        expect(planRetry(base({ status: "completed", callOutcome: DISCONNECTED_OUTCOME, maxRetries: 0 }))).toBeNull();
     });
 });
 
@@ -166,8 +185,8 @@ describe("line blocked on our side (refunded attempts)", () => {
         expect(plan).toBeNull(); // 4th dial, budget spent
     });
 
-    it("is off for campaigns without auto-retry", () => {
-        expect(planRetryDetailed(base({ status: "failed", callOutcome: SIP_403, maxRetries: null }))).toBeNull();
+    it("is off for campaigns created with auto-retry off", () => {
+        expect(planRetryDetailed(base({ status: "failed", callOutcome: SIP_403, maxRetries: 0 }))).toBeNull();
     });
 
     it("a normal outcome consumes the attempt", () => {

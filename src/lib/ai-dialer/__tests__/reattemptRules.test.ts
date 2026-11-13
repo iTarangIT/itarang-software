@@ -142,8 +142,6 @@ describe("planReattempt — sheet rules", () => {
 
     it("rules that hand the lead to a person, or retire the number, never redial", () => {
         for (const label of [
-            "IVR / auto-attendant",
-            "Tracking number, no voice",
             "Information Collected",
             "Bad Experience with Trontek",
             "Loan Procedure Issue",
@@ -158,7 +156,7 @@ describe("planReattempt — sheet rules", () => {
 
     it("the campaign budget still caps in-campaign redials", () => {
         expect(plan("Busy in another call", { attemptCount: 6, maxRetries: 5 })).toBeNull();
-        expect(plan("Busy in another call", { maxRetries: null })).toBeNull();
+        expect(plan("Busy in another call", { maxRetries: null })).not.toBeNull(); // NULL = default budget
         expect(plan("Busy in another call", { maxRetries: 0 })).toBeNull();
     });
 
@@ -200,4 +198,15 @@ describe("planRetryDetailed — how v3 and the old policy meet", () => {
         });
         expect(p?.consumesAttempt).toBe(false);
     });
+});
+
+// 13 Nov 2026 — switchboards / tracking numbers are redialled next day.
+describe("switchboard dispositions are redialled", () => {
+    it.each(["IVR / auto-attendant", "Tracking number, no voice"])("%s gets a next-day redial", (label) => {
+        expect(plan(label)).not.toBeNull();
+    });
+    it.each(["Incorrect / Invalid number", "Number not in use / does not exist / out of service"])(
+        "%s (wrong number) is never redialled",
+        (label) => expect(plan(label)).toBeNull(),
+    );
 });

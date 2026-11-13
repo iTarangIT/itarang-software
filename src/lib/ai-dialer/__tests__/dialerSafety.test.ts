@@ -137,10 +137,11 @@ describe("B3 — at most two dials a day", () => {
     });
 });
 
-describe("D2 — a switchboard is never redialled", () => {
-    it("is not auto-retried, a personal voicemail still is", () => {
-        expect(isAutoRetryable("switchboard", null)).toBe(false);
+describe("D2 — a switchboard is redialled since 13 Nov 2026", () => {
+    it("is auto-retried like a personal voicemail", () => {
+        // 13 Nov 2026 — switchboards are redialled like any unreached lead.
+        expect(isAutoRetryable("switchboard", null)).toBe(true);
         expect(isAutoRetryable("voicemail", null)).toBe(true);
-        expect(planRetry(base({ status: "switchboard" }))).toBeNull();
+        expect(planRetry(base({ status: "switchboard" }))).not.toBeNull();
     });
 });

@@ -136,7 +136,10 @@ export function planEnrolment(leads: EnrolCandidate[]): EnrolDecision[] {
         if (l.openCallback) return { id: l.id, phoneType, skip: "open_callback" };
         if (!(l.phone ?? "").trim()) return { id: l.id, phoneType, skip: "no_phone" };
         if (!isDialablePhoneType(phoneType)) return { id: l.id, phoneType, skip: "not_mobile" };
-        if (l.observed) return { id: l.id, phoneType: l.observed, skip: l.observed };
+        // D7 — only a dead (wrong) number is skipped. A switchboard is dialled
+        // again since 13 Nov 2026 ("call every lead except completed and wrong
+        // number"); it stays listed under Needs dealer mobile.
+        if (l.observed === "dead_number") return { id: l.id, phoneType: l.observed, skip: l.observed };
         if (isVehicleShowroom(l.name)) return { id: l.id, phoneType, skip: "vehicle_showroom" };
         const key = phoneKey(l.phone);
         if (key && seen.has(key)) return { id: l.id, phoneType, skip: "duplicate_number" };

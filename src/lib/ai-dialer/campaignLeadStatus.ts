@@ -94,11 +94,10 @@ export const NON_CONVERSATION_STATUSES = [
 /**
  * Rows the Retry / Recall flows may re-queue. `failed` is further narrowed by
  * isRetryableFailure (a config error is retryable, an invalid number is not).
- * `switchboard` (D2) is not: a company IVR answers every redial the same way.
+ * Since 13 Nov 2026 this includes `switchboard`: every unreached lead is
+ * redialled except a wrong number.
  */
-export const RETRYABLE_STATUSES = NON_CONVERSATION_STATUSES.filter(
-    (s): s is Exclude<(typeof NON_CONVERSATION_STATUSES)[number], "switchboard"> => s !== "switchboard",
-);
+export const RETRYABLE_STATUSES = NON_CONVERSATION_STATUSES;
 
 /** Finished rows — nothing moves a row out of these. */
 export const TERMINAL_STATUSES = [
