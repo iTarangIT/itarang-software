@@ -6,6 +6,8 @@
  *   probeNumber    the number the carrier probe rings (10-digit mobile)
  *   agentVersion   label printed on the readout ("v27")
  *   changeTested   "change tested" line printed on the readout
+ *   zeroAnswerMinDials  dials today on a running campaign with nobody answering
+ *                  before the zero-answer alert (AI dialer list item 5)
  *
  * Stored in app_settings['dialer_alerts'] (src/lib/ai-dialer/dialerAlerts.ts).
  */
@@ -26,6 +28,7 @@ const BodySchema = z.object({
     probeNumber: z.string().trim().min(10).max(16),
     agentVersion: z.string().max(40).default(""),
     changeTested: z.string().max(200).default(""),
+    zeroAnswerMinDials: z.coerce.number().int().min(5).max(500).optional(),
 });
 
 export const GET = withErrorHandler(async () => {

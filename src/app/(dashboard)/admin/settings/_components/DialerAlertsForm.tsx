@@ -17,6 +17,7 @@ type Settings = {
     probeNumber: string;
     agentVersion: string;
     changeTested: string;
+    zeroAnswerMinDials: number;
     updatedAt: string | null;
 };
 type Draft = Omit<Settings, "updatedAt">;
@@ -69,6 +70,7 @@ export function DialerAlertsForm() {
         probeNumber: saved.probeNumber,
         agentVersion: saved.agentVersion,
         changeTested: saved.changeTested,
+        zeroAnswerMinDials: saved.zeroAnswerMinDials,
     };
     const users = usersQ.data ?? [];
     const labelOf = (id: string) => {
@@ -106,7 +108,8 @@ export function DialerAlertsForm() {
                     When the carrier refuses 10 calls in a row (SIP 401 / 403 / 407 / 429 / 503) the campaign pauses and
                     these people get one alert. A test call to the probe number then runs every 30 minutes between
                     10:00 and 19:00 (up to 6) and resumes the campaign once one goes through. The same people get the
-                    AI dialer quality readout every evening by 19:30.
+                    AI dialer quality readout every evening by 19:30, an alert when all the test calls fail, and an
+                    alert when a running campaign has placed the set number of calls in a day with nobody answering.
                 </p>
             </div>
 
@@ -209,7 +212,19 @@ export function DialerAlertsForm() {
                 </div>
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-3">
+            <div className="grid gap-4 sm:grid-cols-4">
+                <label className="space-y-1 text-xs">
+                    <span className="font-medium text-ink">No-answer alert after</span>
+                    <input
+                        type="number"
+                        min={5}
+                        max={500}
+                        value={current.zeroAnswerMinDials}
+                        onChange={(e) => update({ zeroAnswerMinDials: Number(e.target.value) })}
+                        className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm"
+                    />
+                    <span className="block text-ink-muted">Calls in a day on one campaign with nobody answering.</span>
+                </label>
                 <label className="space-y-1 text-xs">
                     <span className="font-medium text-ink">Probe number</span>
                     <input

@@ -12,6 +12,7 @@ import { db } from "@/lib/db";
 import { dialerCampaigns, dialerCampaignLeads } from "@/lib/db/schema";
 import { advanceCampaign } from "./advanceCampaign";
 import { runCarrierProbes } from "@/lib/ai-dialer/lineHealth";
+import { checkZeroAnswer } from "@/lib/ai-dialer/zeroAnswerCheck";
 import { windowOpenSql } from "./campaignWindow";
 import {
   runAiCallbackTick,
@@ -31,6 +32,8 @@ export type WindowTickOutcome = {
   callbacks?: AiCallbackTickOutcome;
   /** Task 10 (E-374) — carrier probes placed, and the campaigns they resumed. */
   probes?: { probed: number; resumed: string[] };
+  /** AI dialer list item 5 — campaigns alerted for zero answers today. */
+  zeroAnswer?: { checked: boolean; alerted: string[] };
 };
 
 /**
@@ -259,5 +262,16 @@ export async function runCampaignWindowTick(): Promise<WindowTickOutcome> {
       err instanceof Error ? err.message : err,
     );
   }
-  return { parked, resumed, advanced, retried, callbacks, probes };
+  // AI dialer list item 5 — a running campaign with many dials today and nobody
+  // answering gets one alert (checked every 10 min). Isolated too.
+  let zeroAnswer: { checked: boolean; alerted: string[] } | undefined;
+  try {
+    zeroAnswer = await checkZeroAnswer();
+  } catch (err) {
+    console.error(
+      "[runCampaignWindowTick] checkZeroAnswer failed:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+  return { parked, resumed, advanced, retried, callbacks, probes, zeroAnswer };
 }

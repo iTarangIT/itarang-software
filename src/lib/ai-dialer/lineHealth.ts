@@ -346,11 +346,33 @@ export async function runCarrierProbes(
                 await resumeCampaign(row.campaign_id);
                 out.resumed.push(row.campaign_id);
             }
+            // AI dialer list item 1 — the last automatic probe failed: nothing
+            // will resume this campaign until a person presses Resume, so say so.
+            if (next.kind === "exhausted") {
+                await alertProbesExhausted(row.campaign_id, probesUsed, result.detail);
+            }
         } catch (err) {
             console.error("[lineHealth] probe failed:", err instanceof Error ? err.message : err);
         }
     }
     return out;
+}
+
+async function alertProbesExhausted(campaignId: string, probesUsed: number, detail: string): Promise<void> {
+    const name =
+        rows<{ name: string }>(
+            await db.execute(sql`SELECT name FROM dialer_campaigns WHERE id = ${campaignId}`),
+        )[0]?.name ?? campaignId;
+    await sendDialerAlert({
+        type: "dialer.probes_exhausted",
+        title: `AI dialer still blocked: campaign "${name}" needs a manual Resume`,
+        message:
+            `All ${probesUsed} automatic test calls were refused (last: "${detail.slice(0, 160)}"). ` +
+            `The campaign stays paused until someone checks the line with the provider and presses Resume ` +
+            `(a test call runs first).`,
+        href: `/leads/campaigns/${campaignId}`,
+        data: { campaignId, probesUsed, lastProbe: detail.slice(0, 200) },
+    });
 }
 
 /**

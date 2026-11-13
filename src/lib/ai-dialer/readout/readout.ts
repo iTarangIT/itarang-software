@@ -15,6 +15,7 @@
 // Pure: no database, no clock. The I/O is in readoutQuery.ts.
 
 import { isHumanDisposition, languageFlipped } from "../dispositionV3";
+import { isZeroAnswerDay, ZERO_ANSWER_MIN_DIALS_DEFAULT } from "../zeroAnswer";
 import { parseTranscriptTurns } from "../call-quality/transcript";
 
 /** "a callback, a polite no, not a fit". Apoorv to confirm the set. */
@@ -189,7 +190,10 @@ export function readoutTurnsFromProvider(raw: unknown): ReadoutTurn[] | null {
 }
 
 /** The readout as plain text lines (email body, console). Newest first. */
-export function readoutLines(rows: ReadonlyArray<ReadoutRow>, meta: { version: string; changeTested: string }): string[] {
+export function readoutLines(
+    rows: ReadonlyArray<ReadoutRow>,
+    meta: { version: string; changeTested: string; zeroAnswerMinDials?: number },
+): string[] {
     const head = "Date        Dials  Humans  Complete  Per100  Gone<15s  Inbound";
     const body = rows.map((r) =>
         [
@@ -212,7 +216,13 @@ export function readoutLines(rows: ReadonlyArray<ReadoutRow>, meta: { version: s
                   `, language flip ${today.defects.languageFlipCalls}, gone in ${GONE_SECS} s ${today.defects.goneIn15Calls}.`,
           ]
         : [];
+    // AI dialer list item 5 — say it in words when nobody answered all day.
+    const zero =
+        today && isZeroAnswerDay(today, meta.zeroAnswerMinDials ?? ZERO_ANSWER_MIN_DIALS_DEFAULT)
+            ? [`ZERO ANSWERED today: ${today.dials} dials and not one person picked up. Check the caller id and the provider route.`, ""]
+            : [];
     return [
+        ...zero,
         `Version: ${meta.version || "—"} · Change tested: ${meta.changeTested || "—"}`,
         "",
         head,

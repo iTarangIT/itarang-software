@@ -23,6 +23,7 @@ import {
     parseDialerAlertSettings,
     type DialerAlertSettings,
 } from "./dialerAlertSettings";
+import { zeroAnswerMinDials } from "./zeroAnswer";
 
 export {
     DEFAULT_ALERT_EMAILS,
@@ -57,6 +58,7 @@ export async function setDialerAlertSettings(input: {
     probeNumber: string;
     agentVersion: string;
     changeTested: string;
+    zeroAnswerMinDials?: number;
     updatedBy: string;
 }): Promise<DialerAlertSettings> {
     const probe = normaliseProbeNumber(input.probeNumber);
@@ -69,6 +71,7 @@ export async function setDialerAlertSettings(input: {
         probe_number: probe,
         agent_version: input.agentVersion.trim().slice(0, 40),
         change_tested: input.changeTested.trim().slice(0, 200),
+        zero_answer_min_dials: zeroAnswerMinDials(input.zeroAnswerMinDials),
         updated_by: input.updatedBy,
     };
     const now = new Date();
