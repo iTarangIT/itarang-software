@@ -27,6 +27,7 @@ import { buildCallbackBrief, type CallbackKind } from "./callbackBrief";
 import { callbackDueDetail } from "./callCategory";
 import { parseFlag } from "./dispositionV3";
 import { spokenNameOverride } from "./spokenNameStore";
+import { leadIdsForContactPhone } from "./contactStore";
 import {
     callerKey,
     inboundBranch,
@@ -69,13 +70,14 @@ export async function lookupInbound(callerPhone: string): Promise<InboundMatch> 
     if (!key) return empty;
     try {
         const v3 = await hasDialDispositionTables();
-        const lead = rowsOf<{
+        type LeadRow = {
             id: string;
             shop_name: string | null;
             dealer_name: string | null;
             language: string | null;
             city: string | null;
-        }>(
+        };
+        let lead = rowsOf<LeadRow>(
             await db.execute(sql`
                 SELECT dl.id, dl.shop_name, dl.dealer_name, dl.language, dl.city
                   FROM dealer_leads dl
@@ -85,6 +87,19 @@ export async function lookupInbound(callerPhone: string): Promise<InboundMatch> 
                  LIMIT 1
             `),
         )[0];
+        // AI dialer list item 6 — the owner calling back from the mobile he
+        // (or his staff) gave on an AI call (E-379).
+        if (!lead) {
+            const viaContact = (await leadIdsForContactPhone(key))[0];
+            if (viaContact) {
+                lead = rowsOf<LeadRow>(
+                    await db.execute(sql`
+                        SELECT dl.id, dl.shop_name, dl.dealer_name, dl.language, dl.city
+                          FROM dealer_leads dl WHERE dl.id = ${viaContact}
+                    `),
+                )[0];
+            }
+        }
         if (!lead) return empty;
         const cb = await openCallbackForLead(lead.id);
         const last = v3

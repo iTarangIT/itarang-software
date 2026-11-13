@@ -5,6 +5,7 @@ import { PRODUCT_LINE_LABELS, type ProductLine } from "@/lib/ai/scoring/signals"
 import { extractDealerLines } from "@/lib/ai/analysis/postCallHelpers";
 import { workingDaysDueAt } from "@/lib/calendar/officeCalendar";
 import type { OfficeHoursArg } from "@/lib/calendar/officeHours";
+import { normaliseIndianMobile } from "./contactCapture";
 
 export type CallbackKind = "sales" | "complaint" | "qualified";
 
@@ -26,6 +27,9 @@ export type CallbackBrief = {
     promise: string;
     openQuestions: string[];
     secondNumber: string | null;
+    /** AI dialer list item 6 — the owner's name / the complaint, when the call gave them. */
+    ownerName?: string | null;
+    complaint?: string | null;
     summary: string | null;
     /** Task 11 — the dealer named no time; the due time is the window opening. */
     timeNotSet?: boolean;
@@ -53,6 +57,11 @@ export function buildCallbackBrief(input: {
     summary?: string | null;
     /** Task 11 — false when the dealer gave no time (callbackDueDetail). */
     timeSet?: boolean;
+    /** AI dialer list item 6 — what the analyser read (signals-2.5.0). */
+    ownerName?: string | null;
+    ownerMobile?: string | null;
+    alternateNumber?: string | null;
+    complaintText?: string | null;
 }): CallbackBrief {
     const when = input.dueAt.toLocaleString("en-IN", {
         timeZone: "Asia/Kolkata",
@@ -68,7 +77,10 @@ export function buildCallbackBrief(input: {
     if (/emi|kist|किस्त|finance|loan|लोन/.test(dealer)) open.push("EMI / finance");
     if (/whatsapp|व्हाट्सएप|वॉट्सऐप/.test(dealer)) open.push("WhatsApp details");
     const own = (input.leadPhone ?? "").replace(/\D/g, "").slice(-10);
-    const second = (dealer.match(/(?<!\d)[6-9]\d{9}(?!\d)/g) ?? []).find((n) => n !== own) ?? null;
+    const heard = [input.ownerMobile, input.alternateNumber]
+        .map((n) => normaliseIndianMobile(n))
+        .find((n): n is string => !!n && n !== own);
+    const second = heard ?? (dealer.match(/(?<!\d)[6-9]\d{9}(?!\d)/g) ?? []).find((n) => n !== own) ?? null;
     return {
         purpose: PURPOSE[input.kind],
         shop: input.shop,
@@ -83,6 +95,8 @@ export function buildCallbackBrief(input: {
                   : `Priya promised a call${input.callbackWhen ? ` (“${input.callbackWhen}”)` : ""} — due ${when}`,
         openQuestions: open,
         secondNumber: second,
+        ownerName: input.ownerName?.trim() || null,
+        complaint: input.kind === "complaint" ? input.complaintText?.trim() || null : null,
         summary: input.summary?.trim() || null,
         timeNotSet: input.kind === "qualified" || input.timeSet === false,
     };
@@ -97,7 +111,9 @@ export function briefLines(b: CallbackBrief): string[] {
         b.volume ? `Volume: ${b.volume}` : "",
         b.promise,
         b.openQuestions.length ? `Not answered on the call: ${b.openQuestions.join(", ")}` : "",
+        b.ownerName ? `Owner: ${b.ownerName}` : "",
         b.secondNumber ? `Second number: ${b.secondNumber}` : "",
+        b.complaint ? `Complaint: ${b.complaint}` : "",
         b.summary ? `Call: ${b.summary}` : "",
     ].filter(Boolean);
 }

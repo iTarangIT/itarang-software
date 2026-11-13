@@ -47,6 +47,7 @@ import {
 import { noteTriggerResult } from "@/lib/ai-dialer/lineHealth";
 import { dialTimeSkip, ENROL_SKIP_OUTCOME } from "@/lib/ai-dialer/numberHygiene";
 import { observedNumbers } from "@/lib/ai-dialer/phoneTypeStore";
+import { dialableContactFor, noteContactDialled } from "@/lib/ai-dialer/contactStore";
 import { classifyTriggerDetail } from "@/lib/ai-dialer/failureReason";
 import {
   leadsWithRedialNotDue,
@@ -457,10 +458,19 @@ export async function advanceCampaign(
       // B1 — mobiles only, no vehicle showrooms. createCampaign already
       // enrols these as skipped; this catches campaigns created before that,
       // and a number edited to a landline after enrolment.
-      const hygieneSkip = dialTimeSkip({
+      //
+      // AI dialer list item 6 — when the main number cannot reach a person
+      // (not a mobile, or a switchboard / dead number a call found), ring the
+      // owner's mobile a call learned instead (E-379). ElevenLabs only.
+      let dialPhone: string | null = null;
+      const contactInstead = async (): Promise<string | null> =>
+        provider === "elevenlabs" ? ((await dialableContactFor(lead[0].id))?.phone ?? null) : null;
+      const mainSkip = dialTimeSkip({
         phone: lead[0].phone,
         name: [lead[0].shop_name, lead[0].dealer_name].filter(Boolean).join(" | ") || null,
       });
+      if (mainSkip === "not_mobile") dialPhone = await contactInstead();
+      const hygieneSkip = dialPhone ? null : mainSkip;
       if (hygieneSkip) {
         console.warn("[advanceCampaign] skipping lead that is not dialable", {
           campaignId,
@@ -483,7 +493,11 @@ export async function advanceCampaign(
       // number, SIP 404 / 410) is skipped at dial time too, not only when the
       // next campaign enrols it. Matched on the number, so another lead on the
       // same switchboard is skipped with it.
-      const retired = (await observedNumbers([lead[0].phone])).values().next().value;
+      let retired = dialPhone ? undefined : (await observedNumbers([lead[0].phone])).values().next().value;
+      if (retired) {
+        dialPhone = await contactInstead();
+        if (dialPhone) retired = undefined;
+      }
       if (retired) {
         await db
           .update(dialerCampaignLeads)
@@ -602,6 +616,7 @@ export async function advanceCampaign(
             phone: lead[0].phone,
             leadId: lead[0].id,
             bypassIdempotency,
+            ...(dialPhone ? { dialPhone } : {}),
           })) as typeof trigResult;
         } else {
           trigResult = (await triggerBolnaCall({
@@ -634,7 +649,7 @@ export async function advanceCampaign(
           campaignLeadId: claimed.campaignLeadId,
           attempt: claimed.attemptCount,
           leadId: lead[0].id,
-          phone: lead[0].phone,
+          phone: dialPhone ?? lead[0].phone,
           reason: exReason,
           callEnd: classifyCallEnd({ triggerError: exReason }),
         });
@@ -677,7 +692,7 @@ export async function advanceCampaign(
           campaignLeadId: claimed.campaignLeadId,
           attempt: claimed.attemptCount,
           leadId: lead[0].id,
-          phone: lead[0].phone,
+          phone: dialPhone ?? lead[0].phone,
           reason,
           callEnd: classifyCallEnd({ triggerError: reason }),
         });
@@ -719,6 +734,9 @@ export async function advanceCampaign(
             },
           );
         }
+        // AI dialer list item 6 — rang the owner's captured mobile: its result
+        // belongs to that contact, not to the lead's main number.
+        if (dialPhone) await noteContactDialled(lead[0].id, dialPhone, trigResult.call_id);
       }
 
       // E-228 — stamp real activity. The stall watchdog measures inactivity

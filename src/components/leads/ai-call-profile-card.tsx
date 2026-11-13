@@ -12,7 +12,17 @@ import { Mic, Pencil } from "lucide-react";
 import { InfoTip } from "@/components/ui/info-tip";
 
 type SpokenNameView = { computed: string; override: string | null; spoken: string; editable: boolean };
-type Profile = { spokenName: SpokenNameView };
+type Contact = {
+    id: string;
+    kind: "owner_mobile" | "alternate";
+    phone: string;
+    name: string | null;
+    status: string;
+    capturedAt: string;
+};
+type Profile = { spokenName: SpokenNameView; contacts?: Contact[] };
+
+const KIND_LABEL: Record<Contact["kind"], string> = { owner_mobile: "Owner's mobile", alternate: "Other number" };
 
 export function AiCallProfileCard({ leadId, className = "" }: { leadId: string; className?: string }) {
     const qc = useQueryClient();
@@ -31,6 +41,24 @@ export function AiCallProfileCard({ leadId, className = "" }: { leadId: string; 
     });
     const [editing, setEditing] = useState(false);
     const [draft, setDraft] = useState("");
+
+    const setContact = useMutation({
+        mutationFn: async (v: { contactId: string; status: "active" | "wrong" }) => {
+            const res = await fetch(`/api/inside-sales/lead/${encodeURIComponent(leadId)}/ai-call-profile`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(v),
+            });
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok || !json.success) throw new Error(json?.error?.message ?? "Could not save");
+            return json?.data as Profile;
+        },
+        onSuccess: (p) => {
+            qc.setQueryData(key, p);
+            toast.success("Saved");
+        },
+        onError: (e: Error) => toast.error(e.message),
+    });
 
     const save = useMutation({
         mutationFn: async (spokenName: string | null) => {
@@ -52,7 +80,8 @@ export function AiCallProfileCard({ leadId, className = "" }: { leadId: string; 
     });
 
     const sn = data?.spokenName;
-    if (!sn || (!sn.spoken && !sn.editable)) return null;
+    const contacts = data?.contacts ?? [];
+    if (!sn || (!sn.spoken && !sn.editable && contacts.length === 0)) return null;
 
     return (
         <div className={`rounded-xl border border-gray-100 bg-white px-4 py-3 text-sm shadow-sm ${className}`}>
@@ -122,6 +151,39 @@ export function AiCallProfileCard({ leadId, className = "" }: { leadId: string; 
                     </form>
                 )}
             </div>
+            {contacts.length > 0 && (
+                <ul className="mt-2 space-y-1 border-t border-gray-100 pt-2 text-xs text-gray-700">
+                    {contacts.map((c) => (
+                        <li key={c.id} className="flex flex-wrap items-center gap-2">
+                            <span className="text-gray-500">{KIND_LABEL[c.kind]}:</span>
+                            <a
+                                href={`tel:${c.phone}`}
+                                className={`font-mono ${c.status === "wrong" ? "text-gray-400 line-through" : "text-gray-900"}`}
+                            >
+                                {c.phone}
+                            </a>
+                            {c.name && <span>({c.name})</span>}
+                            <span className="text-gray-400">
+                                heard on an AI call{" "}
+                                {new Date(c.capturedAt).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
+                            </span>
+                            <button
+                                type="button"
+                                disabled={setContact.isPending}
+                                onClick={() =>
+                                    setContact.mutate({ contactId: c.id, status: c.status === "wrong" ? "active" : "wrong" })
+                                }
+                                className="rounded-md px-1.5 py-0.5 text-gray-500 hover:bg-gray-100 hover:text-gray-800"
+                            >
+                                {c.status === "wrong" ? "Use again" : "Wrong number"}
+                            </button>
+                        </li>
+                    ))}
+                    <li className="text-gray-400">
+                        When the shop number is an IVR or a landline, the AI dialer rings the owner&apos;s mobile instead.
+                    </li>
+                </ul>
+            )}
         </div>
     );
 }

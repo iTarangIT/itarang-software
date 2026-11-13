@@ -55,6 +55,7 @@ import {
 import type { QualificationSignals } from "@/lib/ai/scoring/signals";
 import { buildCallbackBrief, handOffToOwner, type CallbackKind } from "./callbackLoop";
 import { nextWorkingMorning } from "./callCategory";
+import { saveCallContacts } from "./contactStore";
 
 export const CALLBACK_NOTIFICATION_TYPE = "lead.callback_requested";
 
@@ -131,7 +132,7 @@ export async function preparePostCall(input: {
             console.warn("[postCallOutcome] qualified hand-off not planned:", e instanceof Error ? e.message : e);
         }
     }
-    if (!cat.callbackOwner || !input.analysis) return { cat, callbackDue: null };
+    if (!cat.callbackOwner || !input.analysis) return { cat, callbackDue: null, signals };
     const kind: CallbackKind = cat.callbackTopic === "complaint" ? "complaint" : "sales";
 
     try {
@@ -142,7 +143,7 @@ export async function preparePostCall(input: {
                   FROM dealer_leads WHERE id = ${input.leadId}
             `));
             // Already won business needs no callback record — the category stays.
-            if (l[0]?.won) return { cat: { ...cat, callbackOwner: null }, callbackDue: null };
+            if (l[0]?.won) return { cat: { ...cat, callbackOwner: null }, callbackDue: null, signals };
             // A lead a person already owns, or that is in the sales lifecycle, is
             // never re-dialled by the AI: the callback goes to the people instead.
             if (cat.callbackOwner === "ai" && l[0]?.owned) {
@@ -217,6 +218,10 @@ export async function applyPostCall(input: {
         });
         if (!leadId) return;
 
+        // AI dialer list item 6 — the owner's mobile / another number the
+        // dealer gave: stored (E-379) and dialled instead of a switchboard.
+        await saveContactsFromCall(leadId, input.callId, plan.signals ?? null);
+
         // ── An AI callback re-dial: settle the callback it was placed for. ──
         const redial = await findCallbackByCallId(input.callId);
         if (redial && !cat.callbackOwner) {
@@ -248,7 +253,10 @@ export async function applyPostCall(input: {
             owner: cat.callbackOwner,
             topic: cat.callbackTopic,
             category: cat.category,
-            requestedText: input.requestedText ?? null,
+            // A complaint keeps his own line of what is wrong (signals-2.5.0).
+            requestedText:
+                (cat.callbackTopic === "complaint" ? plan.signals?.complaint_text?.trim() : "") ||
+                (input.requestedText ?? null),
             dueAt: plan.callbackDue,
             summary: input.summary,
             transcriptExcerpt: input.transcript ? input.transcript.slice(-1500) : null,
@@ -271,6 +279,22 @@ export async function applyPostCall(input: {
         }
     } catch (e) {
         console.error("[postCallOutcome] post-call outcome failed:", e instanceof Error ? e.message : e);
+    }
+}
+
+async function saveContactsFromCall(
+    leadId: string,
+    callId: string,
+    signals: Partial<QualificationSignals> | null,
+): Promise<void> {
+    if (!signals || !(signals.owner_mobile || signals.alternate_number)) return;
+    try {
+        const phone = rows<{ phone: string | null }>(
+            await db.execute(sql`SELECT phone FROM dealer_leads WHERE id = ${leadId}`),
+        )[0]?.phone ?? null;
+        await saveCallContacts({ leadId, callId, signals, leadPhone: phone, dialledPhone: null });
+    } catch (e) {
+        console.warn("[postCallOutcome] contacts not saved:", e instanceof Error ? e.message : e);
     }
 }
 
@@ -339,6 +363,10 @@ async function handOffSalesCallback(input: {
             transcript: input.transcript,
             summary: input.summary,
             timeSet: input.timeSet,
+            ownerName: input.signals?.owner_name ?? null,
+            ownerMobile: input.signals?.owner_mobile ?? null,
+            alternateNumber: input.signals?.alternate_number ?? null,
+            complaintText: input.signals?.complaint_text ?? null,
         });
         const isr = await handOffToOwner({
             leadId,

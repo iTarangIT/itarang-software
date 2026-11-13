@@ -140,8 +140,11 @@ async function applyEffects(input: RecordDialInput, d: DispositionV3, key: strin
     if (input.leadId && e.retireNumber) {
         // A Google tracking number behaves like a switchboard: it answers and
         // reaches nobody. Both are skipped by later dials and listed under
-        // Needs dealer mobile.
-        await markNumber(input.leadId, d.rule === "3" ? "dead_number" : "switchboard");
+        // Needs dealer mobile. A dial to a captured owner mobile (E-379)
+        // retires that contact instead of the lead's main number.
+        const mark = d.rule === "3" ? "dead_number" : "switchboard";
+        const { applyResultToContact } = await import("@/lib/ai-dialer/contactStore");
+        if (!(await applyResultToContact(input.dialKey, mark))) await markNumber(input.leadId, mark);
     }
     if (!key) return;
     // A dial that reached a person resets the reject streak; another reject adds one.

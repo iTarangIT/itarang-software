@@ -124,6 +124,17 @@ RULES for each field:
   "no". The agent's script itself offers "our sales manager will call you";
   agreeing to that offer (giving a time, "ok", "theek hai") is callback_agreed,
   NOT wants_human.
+- owner_name = the shop owner's / decision maker's name if anyone said it
+  (e.g. "Sharma ji", "Rakesh"), else "".
+- owner_mobile = the owner's own mobile number if the dealer gave it (typically
+  when the person who answered is staff: "malik ka number likh lo …"), written
+  as 10 digits even when spoken in words ("nau aath shunya …" → "980…"), else "".
+- alternate_number = any OTHER number he asked us to call instead (a second
+  shop line, "is number pe call karo"), 10 digits, else "". Never the number we
+  dialled. If it is the owner's own number, put it in owner_mobile only.
+- complaint_text = when callback_topic is "complaint", one short line of what
+  is wrong in his words (e.g. "battery 3 mahine me kharab, service nahi mili"),
+  else "".
 - disqualifier = "dont_call" (asked not to be called again), "hostile" (abusive),
   "not_interested" (firm no after the pitch), "call_dropped" (the call ended
   before its natural close), else "none". Allowed: ${DISQUALIFIERS.join(" | ")}.
@@ -153,6 +164,10 @@ OUTPUT EXACTLY THIS JSON SHAPE (fill every field):
   "callback_at": "<ISO 8601 IST timestamp, or empty>",
   "callback_topic": ${CALLBACK_TOPICS.map((t) => `"${t}"`).join(" | ")},
   "wants_human": "yes" | "no",
+  "owner_name": "<owner's name, or empty>",
+  "owner_mobile": "<10 digits, or empty>",
+  "alternate_number": "<10 digits, or empty>",
+  "complaint_text": "<one line, or empty>",
   "disqualifier": "none" | "dont_call" | "hostile" | "not_interested" | "call_dropped",
   "evidence": {
     "lithium_dealer": "<his answer to the lithium-dealer question>",

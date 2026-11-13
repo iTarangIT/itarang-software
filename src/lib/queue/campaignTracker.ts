@@ -174,6 +174,10 @@ export async function createCampaign(opts: {
     // D8 — a lead with an open promised callback is a person's to call.
     const { leadsWithOpenCallback } = await import("@/lib/ai-dialer/callbackLoop");
     const promised = await leadsWithOpenCallback(enrolIds);
+    // AI dialer list item 6 — the owner's mobile a call learned (E-379), rung
+    // instead of a landline / switchboard main number. ElevenLabs only.
+    const { dialableContactsFor } = await import("@/lib/ai-dialer/contactStore");
+    const contacts = opts.provider === "elevenlabs" ? await dialableContactsFor(enrolIds) : new Map<string, string>();
     const plan = planEnrolment(
       enrolIds.map((id) => {
         const info = leadInfo.get(id) ?? { phone: null, name: null };
@@ -182,6 +186,7 @@ export async function createCampaign(opts: {
           ...info,
           observed: observed.get(phoneKey(info.phone) ?? "") ?? null,
           openCallback: promised.has(id),
+          contactPhone: contacts.get(id) ?? null,
         };
       }),
     );
@@ -591,7 +596,7 @@ export async function recordAttemptOutcome(opts: {
   // (Needs dealer mobile, skipped by later campaigns); a person answering
   // clears it. Best-effort, never throws.
   if (written && r?.lead_id) {
-    await noteCallResultForNumber(r.lead_id, opts.status, opts.outcome ?? null);
+    await noteCallResultForNumber(r.lead_id, opts.status, opts.outcome ?? null, opts.bolnaCallId ?? null);
     if (longHorizon && opts.disposition) {
       await planLongHorizonRedial({
         leadId: r.lead_id,
