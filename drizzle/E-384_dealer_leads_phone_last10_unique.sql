@@ -19,8 +19,9 @@
 --
 -- SAFE TO RUN EARLY: if any two ACTIVE leads still share the last 10 digits it
 -- does nothing and says how many numbers are shared. A lead closed as a
--- duplicate (lead_status 'Lost', lost_reason 'duplicate_lead') is left out of
--- the rule, so a merged copy never blocks it.
+-- duplicate (lead_status 'Lost', lost_reason 'duplicate_lead') and an inactive
+-- lead (soft-deleted, or closed as a test lead, ID 233) are left out of the
+-- rule, so neither blocks it.
 --
 -- Additive, idempotent. Index only: nothing for schema.ts to mirror.
 -- =============================================================================
@@ -42,6 +43,7 @@ BEGIN
         SELECT right(regexp_replace(phone, '[^0-9]', '', 'g'), 10)
           FROM dealer_leads
          WHERE length(regexp_replace(COALESCE(phone, ''), '[^0-9]', '', 'g')) >= 10
+           AND is_active IS NOT FALSE
            AND NOT (lead_status = 'Lost' AND lost_reason = 'duplicate_lead')
          GROUP BY 1 HAVING count(*) > 1
     ) d;
@@ -53,6 +55,7 @@ BEGIN
     CREATE UNIQUE INDEX IF NOT EXISTS dealer_leads_phone_last10_uniq
         ON dealer_leads ((right(regexp_replace(phone, '[^0-9]', '', 'g'), 10)))
      WHERE length(regexp_replace(COALESCE(phone, ''), '[^0-9]', '', 'g')) >= 10
+       AND is_active IS NOT FALSE
        AND NOT (lead_status = 'Lost' AND lost_reason = 'duplicate_lead');
 END
 $do$;
