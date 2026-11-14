@@ -1,7 +1,8 @@
 /**
  * E-280 — PATCH /api/admin/sales-invoices/[id]
  *
- * Clears the "needs a look" flag on an imported sales invoice. Admin-only, and
+ * Clears the "needs a look" flag on an imported sales invoice. Admin, Sales
+ * Head and Finance (ID 166 item 1; the CEO views only), and
  * deliberately the only thing this route can do: the figures on these rows come
  * off the invoice PDF and belong to the document, not to whoever is triaging.
  *
@@ -26,7 +27,7 @@ import { z } from "zod";
 
 import { db } from "@/lib/db";
 import { salesInvoices } from "@/lib/db/schema";
-import { requireApiAdmin } from "@/lib/auth/requireApiAdmin";
+import { expenseWriteForbidden, requireApiExpenseWriteOrFinance } from "@/lib/auth/requireApiAdmin";
 import { isNextRedirectError, errorMessage } from "@/lib/api-utils";
 
 export const runtime = "nodejs";
@@ -39,7 +40,9 @@ const PatchSchema = z.object({
 
 export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   try {
-    const guard = await requireApiAdmin();
+    // ID 166 item 1: Admin / Sales Head / Finance may clear the flag; the CEO
+    // views only.
+    const guard = await requireApiExpenseWriteOrFinance();
     if (!guard.ok) return guard.response;
 
     const { id } = await ctx.params;
@@ -50,7 +53,15 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
       );
     }
 
-    const parsed = PatchSchema.safeParse(await req.json().catch(() => ({})));
+    const body = await req.json().catch(() => ({}));
+    if (guard.access === "finance") {
+      // Raw body, because zod strips unknown keys: exactly { needs_attention: false }.
+      const keys = body && typeof body === "object" ? Object.keys(body) : [];
+      if (keys.length !== 1 || keys[0] !== "needs_attention") {
+        return expenseWriteForbidden("Finance can only clear \"needs a look\" on a sales invoice.");
+      }
+    }
+    const parsed = PatchSchema.safeParse(body);
     if (!parsed.success) {
       return NextResponse.json(
         { success: false, error: { message: "Validation failed" } },

@@ -13,7 +13,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { and, eq, isNotNull, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { expenseSubmissions } from "@/lib/db/schema";
-import { requireApiAdmin } from "@/lib/auth/requireApiAdmin";
+import { requireApiExpenseWriter } from "@/lib/auth/requireApiAdmin";
 import { isNextRedirectError, errorMessage } from "@/lib/api-utils";
 import { createClient } from "@/lib/supabase/server";
 import { extractInvoice } from "@/lib/ai/invoices/extractInvoice";
@@ -46,7 +46,7 @@ type ImportedRow = {
 
 export async function POST(req: NextRequest) {
   try {
-    const guard = await requireApiAdmin();
+    const guard = await requireApiExpenseWriter(); // ID 166 item 1
     if (!guard.ok) return guard.response;
     const user = guard.user;
 

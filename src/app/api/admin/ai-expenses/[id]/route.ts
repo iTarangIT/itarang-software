@@ -1,7 +1,8 @@
 /**
  * E-106 — PATCH /api/admin/ai-expenses/[id]
  *
- * Admin-only. Corrects a recorded AI expense — primarily the department /
+ * Admin / Sales Head. Finance may only clear needs_attention (ID 166 item 1).
+ * Corrects a recorded AI expense — primarily the department /
  * project tag the AI may have misclassified, but vendor/amount/date/description
  * are editable too.
  */
@@ -10,7 +11,7 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { expenseSubmissions } from "@/lib/db/schema";
-import { requireApiAdmin } from "@/lib/auth/requireApiAdmin";
+import { expenseWriteForbidden, requireApiExpenseWriteOrFinance } from "@/lib/auth/requireApiAdmin";
 import { isNextRedirectError, errorMessage } from "@/lib/api-utils";
 import { EXPENSE_BUCKET_VALUES, EXPENSE_DEPARTMENT_VALUES } from "@/lib/expenses";
 
@@ -45,11 +46,21 @@ export async function PATCH(
   ctx: { params: Promise<{ id: string }> },
 ) {
   try {
-    const guard = await requireApiAdmin();
+    // ID 166 item 1: Admin / Sales Head edit; Finance may only clear the flag;
+    // the CEO views only.
+    const guard = await requireApiExpenseWriteOrFinance();
     if (!guard.ok) return guard.response;
 
     const { id } = await ctx.params;
     const body = await req.json();
+    if (guard.access === "finance") {
+      // Checked on the raw body: zod drops unknown keys, so a parsed check
+      // could miss a field Finance sent. Exactly { needs_attention: false }.
+      const keys = body && typeof body === "object" ? Object.keys(body) : [];
+      if (keys.length !== 1 || keys[0] !== "needs_attention" || body.needs_attention !== false) {
+        return expenseWriteForbidden("Finance can only clear \"needs a look\" on an expense.");
+      }
+    }
     const parsed = PatchSchema.safeParse(body);
     if (!parsed.success) {
       return NextResponse.json(
