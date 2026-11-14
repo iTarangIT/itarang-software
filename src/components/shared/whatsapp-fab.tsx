@@ -1,8 +1,18 @@
 "use client";
 
+import { usePathname } from "next/navigation";
+
 import { whatsappOnboardingChatUrl } from "@/lib/whatsapp/chat-link";
 
+/**
+ * ID 244: pages where the floating button sat over the table's last column and its action
+ * buttons (My visits and the ASM lead pages). The rep has "Link WhatsApp" in the menu.
+ */
+const HIDDEN_ON = [/^\/asm(\/|$)/];
+
 export function WhatsAppFab({ number }: { number?: string }) {
+  const pathname = usePathname();
+  if (pathname && HIDDEN_ON.some((re) => re.test(pathname))) return null;
   const handleClick = () => {
     window.open(whatsappOnboardingChatUrl(number), "_blank", "noopener,noreferrer");
   };

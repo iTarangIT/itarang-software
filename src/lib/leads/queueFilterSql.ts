@@ -224,6 +224,23 @@ export function queueSortOrder(sort: QueueSort | undefined, tabOrder: SQL): SQL 
         case "city":
             expr = sql`NULLIF(btrim(dl.city), '')`;
             break;
+        // ID 244: written on `dl` alone so any queue can use them (the ISR queue has no
+        // visit join).
+        case "dealer":
+            expr = sql`lower(COALESCE(NULLIF(btrim(dl.dealer_name), ''), NULLIF(btrim(dl.shop_name), '')))`;
+            break;
+        case "visit":
+            // The lead's one open booking (ID 247: the newest open visit).
+            expr = sql`(SELECT b.scheduled_date FROM lead_visits b
+                         WHERE b.dealer_lead_id = dl.id AND b.visit_status IN ('scheduled', 'pending_scheduling')
+                         ORDER BY b.created_at DESC LIMIT 1)`;
+            break;
+        case "owner":
+            expr = sql`(SELECT lower(u.name) FROM users u WHERE u.id::text = dl.current_owner_id)`;
+            break;
+        case "last_action":
+            // Oldest first means a lead nobody has worked comes first, not last.
+            return sql`ORDER BY dl.last_worked_at ${dir} ${sql.raw(sort.dir === "desc" ? "NULLS LAST" : "NULLS FIRST")}, ${tabOrder}`;
     }
     return sql`ORDER BY ${expr} ${dir} NULLS LAST, ${tabOrder}`;
 }

@@ -13,6 +13,7 @@
 import { readQueueFilters, type QueueFilters } from "@/lib/leads/queueFilters";
 import { readQueueSort, type QueueSort } from "@/lib/leads/queueSort";
 import { VISIT_OUTCOME, VISIT_STATUS } from "./types";
+import { DATE_MODES, type DateMode } from "./dateMode";
 
 export type AsmQueueFilterParams = {
     filters: QueueFilters;
@@ -22,6 +23,8 @@ export type AsmQueueFilterParams = {
     finalisedOnly: boolean;
     /** Order, not a filter — the list and the CSV honour it, the counts ignore it. */
     sort: QueueSort;
+    /** ID 236: `?date_mode=booked|visited` — what the date range means. Absent = the old reading. */
+    dateMode: DateMode | null;
 };
 
 /**
@@ -43,5 +46,6 @@ export function readAsmQueueFilters(sp: URLSearchParams): AsmQueueFilterParams {
             ? visitOutcome
             : null,
         finalisedOnly: sp.get("finalised") === "1",
+        dateMode: (DATE_MODES as readonly string[]).includes(sp.get("date_mode") ?? "") ? (sp.get("date_mode") as DateMode) : null,
     };
 }
