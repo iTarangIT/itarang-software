@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
@@ -11,7 +12,9 @@ export type NewDealerCreds = {
   dealerCode: string | null;
 };
 
-const TEMP_PASSWORD = 'E2EFlow@1234';
+// A fresh random password per run unless the env pins one (ID 225: no login password in the code).
+const TEMP_PASSWORD =
+  process.env.E2E_DEALER_TEMP_PASSWORD ?? `E2e@${randomBytes(12).toString('base64url')}`;
 
 let _supabase: SupabaseClient | null = null;
 let _db: ReturnType<typeof drizzle> | null = null;

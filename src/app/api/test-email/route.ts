@@ -29,7 +29,7 @@ export async function GET() {
       companyName: "Test Company Pvt Ltd",
       dealerId: "ACC-TEST-001",
       userId: "test@example.com",
-      password: "Temp@12345",
+      password: "<sample-password>", // sample text for the email body, not a login
       loginUrl: process.env.DEALER_LOGIN_URL || "http://localhost:3000/login",
       supportEmail: "support@itarang.com",
       supportPhone: "+91-0000000000",

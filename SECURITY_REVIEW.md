@@ -62,7 +62,7 @@ The core plumbing is solid: SQL is parameterized, there is no XSS surface, no co
 ## 5. API Security
 
 - **[Medium] No rate limiting.** No limiter library or middleware anywhere. The only throttle is a per-session OTP counter (3 sends / 30 min). Login, KYC, and AI-call routes have nothing — brute-force / abuse exposure.
-- **[Medium] Debug/test routes exposed in prod.** `api/debug/*` dumps `information_schema` and can alter tables; `api/test-email` contains a hardcoded `password: "Temp@12345"`; also `test-aws`, `test-sheet`, `bolna-test`. These should be removed or env-gated.
+- **[Medium] Debug/test routes exposed in prod.** `api/debug/*` dumps `information_schema` and can alter tables; `api/test-email` put a sample password text in the test mail (now a `<sample-password>` placeholder, 13 Nov); also `test-aws`, `test-sheet`, `bolna-test`. These should be removed or env-gated.
 - **CORS — safe.** No `Access-Control-Allow-*` headers set; same-origin only.
 - **Webhook signatures — mixed:**
   - Verified (good): Razorpay QR, Razorpay EMI, WhatsApp, modern Bolna.
