@@ -199,6 +199,12 @@ export async function recordVisit(
                   .insert(leadVisits)
                   .values({ ...plan.visitRow, photos: plan.visitRow.photos as never })
                   .returning({ visit_id: leadVisits.visit_id });
+        // ID 247 item 1 (waiting for Kartik's OK, so behind VISIT_ONE_OPEN_BOOKING=1):
+        // a done visit also closes the lead's LATER open bookings, so the lead keeps one
+        // open booking: the next visit the rep sets now (scheduleVisit below).
+        if (input.visit_status === "visited" && oneOpenBookingRule() && plan.visitRow.actual_visit_date) {
+            await cancelOtherOpenBookings(tx, input.leadId, inserted[0]?.visit_id ?? null, plan.visitRow.actual_visit_date);
+        }
         if (capture && inserted[0]?.visit_id) await applyCaptureToVisit(tx, inserted[0].visit_id, capture);
         await writeTouchpoint(plan.touchpoint, { tx });
         const scheduled = plan.scheduled
@@ -208,6 +214,29 @@ export async function recordVisit(
     };
 
     return opts?.tx ? run(opts.tx) : db.transaction(run);
+}
+
+/** ID 247 item 1: one open booking per lead. Off until Kartik approves the rule. */
+export function oneOpenBookingRule(): boolean {
+    return process.env.VISIT_ONE_OPEN_BOOKING === "1";
+}
+
+/** The remark on a booking a visit replaced (ID 247; the clean-up script writes the same). */
+export function replacedByVisitRemark(day: string): string {
+    return `replaced by the visit on ${day}`;
+}
+
+/** Cancels every open booking on the lead except `keepId`, with the "replaced by" remark. */
+async function cancelOtherOpenBookings(tx: Tx, leadId: string, keepId: string | null, day: string): Promise<void> {
+    await tx.execute(sql`
+        UPDATE lead_visits
+           SET visit_status = 'cancelled',
+               visit_remarks = concat_ws(' · ', NULLIF(visit_remarks, ''), ${replacedByVisitRemark(day)}::text),
+               updated_at = NOW()
+         WHERE dealer_lead_id = ${leadId}
+           AND visit_status IN ('scheduled', 'pending_scheduling')
+           AND (${keepId}::text IS NULL OR visit_id::text <> ${keepId}::text)
+    `);
 }
 
 /**

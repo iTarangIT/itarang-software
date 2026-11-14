@@ -14,6 +14,7 @@ import { AlertTriangle, Download, Inbox, Loader2, X } from "lucide-react";
 
 import type { DrillRow } from "@/lib/dashboard/salesDrill";
 import { LEAD_STATUS_LABEL } from "@/lib/leads/queueFilters";
+import { dateOnlyWords, isDateOnly } from "@/lib/visits/visitTimeText";
 
 export type SalesDrillTarget = {
     title: string;
@@ -29,6 +30,8 @@ const statusText = (v: string | null) => (v && (LEAD_STATUS_LABEL as Record<stri
 
 function fmtWhen(v: string | null): string {
     if (!v) return "—";
+    // ID 237: a visit with no photo time shows its date and says so (never 10:00 am / midnight).
+    if (isDateOnly(v)) return dateOnlyWords(v);
     const d = new Date(v);
     return Number.isNaN(d.getTime()) ? v : d.toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Kolkata" });
 }
@@ -44,7 +47,7 @@ function downloadRows(rows: DrillRow[], name: string) {
     const lines = [
         head.map(esc).join(","),
         ...rows.map((r) =>
-            [r.person_name ?? "", r.id, r.name, r.phone ?? "", r.city ?? "", r.state ?? "", statusText(r.status), r.rating ?? "", r.owner_name ?? "", r.at ?? "", r.detail ?? ""]
+            [r.person_name ?? "", r.id, r.name, r.phone ?? "", r.city ?? "", r.state ?? "", statusText(r.status), r.rating ?? "", r.owner_name ?? "", r.at ? fmtWhen(r.at) : "", r.detail ?? ""]
                 .map(esc)
                 .join(","),
         ),

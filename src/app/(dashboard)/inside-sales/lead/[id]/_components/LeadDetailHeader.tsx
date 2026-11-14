@@ -41,14 +41,21 @@ function daysAgo(iso: string | null): string {
     return `${days} days ago`;
 }
 
-function pad2(n: number): string {
-    return String(n).padStart(2, "0");
-}
+
+// ID 245 item 4: in IST whatever the viewer's computer clock is set to ("14 Nov 2026, 2:27 pm").
+const IST_DATE_TIME = new Intl.DateTimeFormat("en-IN", {
+    timeZone: "Asia/Kolkata",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+});
 
 function formatDateTime(iso: string | null): string {
     if (!iso) return "—";
     const d = new Date(iso);
-    return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+    return Number.isNaN(d.getTime()) ? "—" : IST_DATE_TIME.format(d);
 }
 
 // Short, human-friendly application reference (BRD §0.13 "Application ID: APP-XXXX").

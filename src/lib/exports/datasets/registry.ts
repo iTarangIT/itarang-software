@@ -424,6 +424,8 @@ const leads: Dataset = {
             columns: [
                 { key: "lead_id", header: "Lead ID", meaning: "The lead's id in the CRM.", width: 24 },
                 { key: "dealer_name", header: "Dealer name", meaning: "Dealer or shop name on the lead.", width: 28 },
+                // ID 224 (12 Nov): the four columns only the old Leads-page file had.
+                { key: "shop_name", header: "Shop name", meaning: "The shop's name as recorded on the lead.", width: 28 },
                 { key: "phone", header: "Phone", meaning: "Dealer's mobile number. Masked unless full numbers were requested with a reason.", kind: "phone" },
                 { key: "city", header: "City", meaning: "Lead's city." },
                 { key: "state", header: "State", meaning: "Lead's state." },
@@ -433,14 +435,18 @@ const leads: Dataset = {
                 { key: "owner_name", header: "Current owner", meaning: "Who holds the lead today. Open-lead counts follow this person.", width: 22 },
                 { key: "closed_by_name", header: "Closed by", meaning: "Who held the lead when it was won or lost. Conversions are credited here and never move with reassignment.", width: 22 },
                 { key: "won_at", header: "Won on", meaning: "When the rep marked the lead Won.", kind: "datetime" },
+                { key: "won_without_approved_quote", header: "Won without approved quote", meaning: "Yes when the lead was marked Won with no quote the dealer approved. Shown only while Won or Converted." },
                 { key: "last_visit_date", header: "Last visit", meaning: "Latest logged field visit.", kind: "date" },
-                { key: "next_visit_date", header: "Next visit", meaning: "Earliest open scheduled visit from today.", kind: "date" },
+                { key: "next_visit_date", header: "Next visit", meaning: "ID 247: the lead's one open booking, also when its date has passed (then it is overdue).", kind: "date" },
+                { key: "visit_overdue_days", header: "Visit overdue (days)", meaning: "Days past the booked visit date, counted in IST. Blank when the booking is today or later, or there is none.", kind: "number" },
                 { key: "last_call_at", header: "Last call", meaning: "Latest call touchpoint.", kind: "datetime" },
                 { key: "next_call_at", header: "Next call", meaning: "Earliest planned next action from now.", kind: "datetime" },
                 { key: "latest_remarks", header: "Latest remarks", meaning: "Remarks on the most recent touchpoint.", width: 50 },
                 { key: "invoices", header: "Invoices matched", meaning: "Count of non-void invoices matched to this lead on GSTIN.", kind: "number" },
                 { key: "billed", header: "Billed (₹)", meaning: "Total of those invoices. Void excluded, drafts counted.", kind: "money" },
                 { key: "last_invoice", header: "Last invoice", meaning: "Date of the latest matched invoice.", kind: "date" },
+                { key: "billing_match", header: "Billing match", meaning: "How the invoices were matched to the lead: 'hand link', 'account', 'gstin', or 'none' (so a blank is never read as zero business)." },
+                { key: "visits_before_first_billing", header: "Visits before first billing", meaning: "Field visits made before the dealer's first invoice date.", kind: "number" },
                 { key: "gstin", header: "GSTIN", meaning: "GSTIN on the lead, when one was recorded." },
                 { key: "created_on", header: "Created on", meaning: "When the lead was created.", kind: "datetime" },
                 { key: "source_door", header: "Door", meaning: "How the lead came in (the lead-source door): the door stamped on the lead, else the one its older source field implies — the same as the Leads list." },
@@ -591,6 +597,14 @@ const leads: Dataset = {
                         lead_status: lostCode === "test_lead" ? "Lost (test lead)" : leadStatusText(r.lead_status),
                         // ID 224 item 3: the lost reason in words.
                         lost_reason: lostReasonWords(lostCode) || null,
+                        // ID 224 item 3: Temperature as on the lead page ("Cold", not "cold").
+                        interest_level: r.interest_level ? r.interest_level.charAt(0).toUpperCase() + r.interest_level.slice(1).toLowerCase() : null,
+                        won_without_approved_quote:
+                            r.won_without_approved_quote === null || r.won_without_approved_quote === undefined
+                                ? null
+                                : r.won_without_approved_quote
+                                  ? "Yes"
+                                  : "No",
                         business_type: businessTypeLabel(r.business_type),
                         invoices: b?.n ?? 0,
                         billed: b?.total ?? null,
