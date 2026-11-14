@@ -18,7 +18,7 @@ import { formatINRCompact, formatINRExact } from "@/lib/format";
 import {
   SortableTh,
   sortRows,
-  useTableSort,
+  useUrlTableSort,
   type SortSpec,
 } from "@/components/shared/TableSort";
 import { expenseBucketColor, expenseBucketLabel } from "@/lib/expenses";
@@ -87,7 +87,7 @@ export function LedgerSummaryTable({
     });
 
   const { sort, toggle, comparator } =
-    useTableSort<DepartmentSummary>(SUMMARY_SORT_SPECS);
+    useUrlTableSort<DepartmentSummary>(SUMMARY_SORT_SPECS, { prefix: "dept_" }); // ID 243: kept in the page link
   const sorted = React.useMemo(
     () => sortRows(departments, comparator),
     [departments, comparator],

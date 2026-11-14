@@ -17,7 +17,7 @@ import { Pagination, usePagination } from "@/components/shared/Pagination";
 import {
   SortableTh,
   sortRows,
-  useTableSort,
+  useUrlTableSort,
   type SortSpec,
 } from "@/components/shared/TableSort";
 import {
@@ -78,7 +78,7 @@ export function LedgerDetailTable({
   totalCaption,
   resetKey,
 }: Props) {
-  const { sort, toggle, comparator } = useTableSort<LedgerRow>(LEDGER_SORT_SPECS);
+  const { sort, toggle, comparator } = useUrlTableSort<LedgerRow>(LEDGER_SORT_SPECS, { prefix: "ledger_" }); // ID 243: kept in the page link
   const sorted = React.useMemo(
     () => sortRows(rows, comparator),
     [rows, comparator],

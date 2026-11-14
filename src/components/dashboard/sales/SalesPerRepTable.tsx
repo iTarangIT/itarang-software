@@ -5,7 +5,7 @@
 
 import { useMemo } from "react";
 
-import { SortableTh, sortRows, useTableSort, type SortSpec } from "@/components/shared/TableSort";
+import { SortableTh, sortRows, useUrlTableSort, type SortSpec } from "@/components/shared/TableSort";
 import type { InterestLevel, SalesDashboardSections, SalesSpocBlock } from "@/lib/admin/salesDashboardTypes";
 import { batteryReading, type BatteryReading } from "@/lib/admin/batteryReading";
 import { freshRepeatSplit } from "@/lib/visits/freshRepeat";
@@ -95,7 +95,7 @@ export function SalesPerRepTable({
     unassigned?: SalesDashboardSections | null;
     onPick: (spocId: string) => void;
 }) {
-    const { sort, toggle, comparator } = useTableSort<Row>(SPECS);
+    const { sort, toggle, comparator } = useUrlTableSort<Row>(SPECS, { prefix: "rep_" }); // ID 243: kept in the page link
     const rows = useMemo(() => sortRows(reps.map(toRow), comparator), [reps, comparator]);
     const rest = useMemo(
         () => (unassigned ? toRow({ ...unassigned, spoc_id: "", name: "Unassigned", role: "no owner" }) : null),

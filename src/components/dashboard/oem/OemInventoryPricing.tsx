@@ -31,7 +31,7 @@ import { Pagination, usePagination } from "@/components/shared/Pagination";
 import {
     SortableTh,
     sortRows,
-    useTableSort,
+    useUrlTableSort,
     type SortSpec,
 } from "@/components/shared/TableSort";
 import { OemPriceScheduleDrawer } from "./OemPriceScheduleDrawer";
@@ -242,7 +242,7 @@ export function OemInventoryPricing() {
         });
     }, [products, assetFilter, attentionOnly, search, now]);
 
-    const { sort, toggle, comparator } = useTableSort<OemCatalogueRow>(SORT_SPECS);
+    const { sort, toggle, comparator } = useUrlTableSort<OemCatalogueRow>(SORT_SPECS, { prefix: "cat_" }); // ID 243: kept in the page link
     const sorted = React.useMemo(() => sortRows(filtered, comparator), [filtered, comparator]);
     const paged = usePagination(sorted, 15);
 
