@@ -76,7 +76,19 @@ describe("search_lead phone normalisation", () => {
         expect(digits.sql).toMatch(/regexp_replace\(COALESCE\(dl\.phone, ''\), '\[\^0-9\]', '', 'g'\) LIKE/);
         expect(digits.params).toContain("%9812345678%");
         const text = dialect.sqlToQuery(assistantSearchClause("Gupta"));
-        expect(text.sql).not.toMatch(/regexp_replace/);
+        expect(text.sql).not.toMatch(/dl\.phone, ''\), '\[\^0-9\]'/);
+    });
+
+    it("ID 253: names match with spaces, dots and hyphens removed on both sides", () => {
+        const dialect = new PgDialect();
+        for (const typed of ["Zamzam", "Zam Zam", "Zam-Zam", "zam.zam"]) {
+            const q = dialect.sqlToQuery(assistantSearchClause(typed));
+            expect(q.sql).toMatch(/regexp_replace\(lower\(COALESCE\(dl\.dealer_name, ''\)\), '\[\[:space:\]\.-\]\+', '', 'g'\) LIKE/);
+            expect(q.sql).toMatch(/regexp_replace\(lower\(COALESCE\(dl\.shop_name, ''\)\)/);
+            expect(q.params).toContain("%zamzam%");
+        }
+        // Too short to squeeze, or digits: the plain clause only.
+        expect(dialect.sqlToQuery(assistantSearchClause("ab")).sql).not.toMatch(/lower\(COALESCE/);
     });
 });
 

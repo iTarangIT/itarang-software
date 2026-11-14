@@ -30,7 +30,22 @@ export type QueueFilterInput = Partial<Record<keyof QueueFilters, string | null>
  */
 export function leadSearchClause(q: string): SQL {
     const like = `%${q}%`;
-    return sql` AND (dl.dealer_name ILIKE ${like} OR dl.phone ILIKE ${like} OR dl.shop_name ILIKE ${like})`;
+    const compact = compactName(q);
+    // ID 253 (13 Nov): "Zamzam" found nothing for "Zam Zam E Rikshaw" because of the
+    // space. Names and shops are also compared with spaces, dots and hyphens removed
+    // on BOTH sides, so "Zamzam", "Zam Zam" and "Zam-Zam" all match each other.
+    if (compact.length < 3 || /^\d+$/.test(compact)) {
+        return sql` AND (dl.dealer_name ILIKE ${like} OR dl.phone ILIKE ${like} OR dl.shop_name ILIKE ${like})`;
+    }
+    const squeezed = `%${compact}%`;
+    return sql` AND (dl.dealer_name ILIKE ${like} OR dl.phone ILIKE ${like} OR dl.shop_name ILIKE ${like}
+        OR regexp_replace(lower(COALESCE(dl.dealer_name, '')), '[[:space:].-]+', '', 'g') LIKE ${squeezed}
+        OR regexp_replace(lower(COALESCE(dl.shop_name, '')), '[[:space:].-]+', '', 'g') LIKE ${squeezed})`;
+}
+
+/** A name for the space-blind search: lower case, spaces, dots and hyphens removed ("Zam-Zam E." → "zamzame"). */
+export function compactName(q: string): string {
+    return q.toLowerCase().replace(/[\s.-]+/g, "");
 }
 
 /** YYYY-MM-DD, enforced before the value reaches a `::date` cast. */
