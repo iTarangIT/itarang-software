@@ -21,6 +21,8 @@ import {
     AI_DIALABLE_PREDICATE,
     IN_LIVE_DIALER_QUEUE_PREDICATE,
     isAiDialable,
+    isListDialableAssigned,
+    NON_CONTACT_TOUCHPOINT_TYPES,
 } from "@/lib/ai-dialer/exclusionFilter";
 import { dealerSpokeSql } from "@/lib/ai-dialer/campaignLeadStatus";
 
@@ -157,5 +159,33 @@ describe("the AI-only predicates", () => {
         ]) {
             expect(p).toMatch(/= dl\.id/);
         }
+    });
+});
+
+// 14 Nov 2026 — Bhopal lists: every lead was bulk-assigned to a rep the day
+// before, so the dialer skipped all of them as ineligible_active_lead.
+describe("isListDialableAssigned — uploaded lists ring assigned, uncontacted leads", () => {
+    it("allows Assigned_Not_Contacted with no human contact", () => {
+        expect(isListDialableAssigned({ lead_status: "Assigned_Not_Contacted", humanContacted: false })).toBe(true);
+    });
+    it("refuses once a person has worked the lead", () => {
+        expect(isListDialableAssigned({ lead_status: "Assigned_Not_Contacted", humanContacted: true })).toBe(false);
+    });
+    it.each(["Under_Discussion", "Transferred_to_ASM", "Commercials_Explained", "Converted", "Lost", "New_Unassigned"])(
+        "refuses %s",
+        (lead_status) => expect(isListDialableAssigned({ lead_status, humanContacted: false })).toBe(false),
+    );
+    it("refuses the permanent do-not-call list", () => {
+        expect(
+            isListDialableAssigned({ lead_status: "Assigned_Not_Contacted", ai_recall_status: "excluded", humanContacted: false }),
+        ).toBe(false);
+    });
+    it("counts a rep's call, a visit and a note as contact", () => {
+        for (const t of ["inside_sales_call", "visit", "status_change_note", "asm_transfer"]) {
+            expect(NON_CONTACT_TOUCHPOINT_TYPES as readonly string[]).not.toContain(t);
+        }
+    });
+    it("leaves the shared isAiDialable() strict", () => {
+        expect(isAiDialable({ lead_status: "Assigned_Not_Contacted" })).toBe(false);
     });
 });

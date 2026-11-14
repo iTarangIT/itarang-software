@@ -179,3 +179,36 @@ export function notYetAiConnectedCondition(): SQL {
 // When blocking, the scheduler MUST also clear next_call_at — leaving it set
 // makes the cron re-select the same lead every tick, forever.
 export const AI_FOLLOWUP_LOOP_RETIRES_CONNECTED = true;
+
+// ── AI-DIALER ONLY: assigned to a rep, not contacted yet (14 Nov 2026) ──────
+//
+// A calling list a sales head uploads names the dealers to ring. A dealer on it
+// that was bulk-assigned to a rep (lead_status Assigned_Not_Contacted) and that
+// no person has worked since is still dialled from that list: the AI's call is
+// the first contact, and the outcome lands in the rep's queue as usual. Anything
+// a person did on the lead (a call, a visit, a note, a status change) ends it.
+// List campaigns only — region / segment audiences keep the strict rule above,
+// and isAiDialable() itself is unchanged (it is shared with the human push).
+
+/** Touchpoints that are bookkeeping, not a person reaching the dealer. */
+export const NON_CONTACT_TOUCHPOINT_TYPES = [
+    "lead_created",
+    "lead_reinquiry",
+    "lead_assigned",
+    "ownership_transfer",
+    "sales_ready",
+    "ai_call",
+] as const;
+
+/** An uploaded-list campaign may dial this lead although isAiDialable() says no. */
+export function isListDialableAssigned(row: {
+    lead_status?: string | null;
+    ai_recall_status?: string | null;
+    humanContacted: boolean;
+}): boolean {
+    return (
+        row.lead_status === "Assigned_Not_Contacted" &&
+        row.ai_recall_status !== "excluded" &&
+        !row.humanContacted
+    );
+}
