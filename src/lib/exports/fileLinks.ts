@@ -40,6 +40,14 @@ export function recordingCell(stored: unknown, aiCallId: unknown, origin: string
     return RECORDING_NOT_COPIED;
 }
 
+/** ID 241-4: a visit's shop photo in the Dealer visits download (first photo; checked link). */
+export const PHOTO_OUTSIDE_STORAGE = "Kept outside iTarang storage - open it from the dealer page in the CRM";
+export function photoCell(stored: unknown, origin: string): string | null {
+    const url = typeof stored === "string" ? stored.trim() : "";
+    if (!url) return null;
+    return fileOpenHref(url, origin) ?? PHOTO_OUTSIDE_STORAGE;
+}
+
 /** The Bill link cell of the Expenses download. */
 export function billCell(stored: unknown, origin: string): string | null {
     const url = typeof stored === "string" ? stored.trim() : "";

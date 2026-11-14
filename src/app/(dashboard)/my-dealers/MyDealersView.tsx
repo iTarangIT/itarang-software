@@ -36,13 +36,28 @@ const inr = (n: number) => `₹${n.toLocaleString("en-IN", { maximumFractionDigi
 /** Most urgent first: Orange, Red, Dormant, then the rest. */
 const URGENCY: AccountBucket[] = ["orange", "red", "dormant", "cooling", "never_ordered", "not_ordered_yet", "active", "closed"];
 
-type MyDealerRow = DealerHealthRow & { scope: "own" | "team" | "other"; can_log_visit: boolean };
+type MyDealerRow = DealerHealthRow & {
+    scope: "own" | "team" | "other";
+    can_log_visit: boolean;
+    /** ID 241-3: the latest done visit (IST date) and the 30-day flag, from /api/dealer-accounts/mine. */
+    last_visit_date?: string | null;
+    not_visited_30?: boolean;
+};
 type Whose = "" | "own" | "team" | "other";
+
+const DAY_MONTH = new Intl.DateTimeFormat("en-IN", { timeZone: "UTC", day: "numeric", month: "short" });
+/** "12 Aug" (a calendar date, shown as stored). */
+function lastVisitLabel(d: string): string {
+    const t = new Date(`${d.slice(0, 10)}T00:00:00Z`);
+    return Number.isNaN(t.getTime()) ? d : DAY_MONTH.format(t);
+}
 const WHOSE_LABEL: Record<Exclude<Whose, "">, string> = { own: "Mine", team: "My team", other: "Others" };
 
 export function MyDealersView() {
     const [bucket, setBucket] = useState<AccountBucket | "">("");
     const [whose, setWhose] = useState<Whose>("");
+    // ID 241-3: the "Not visited in 30 days" chip as a filter.
+    const [notVisitedOnly, setNotVisitedOnly] = useState(false);
     const { data, isLoading, error } = useQuery<{
         rows: MyDealerRow[];
         scope: "own" | "team" | "all";
@@ -76,7 +91,8 @@ export function MyDealersView() {
         AccountBucket,
         number
     >;
-    const visible = bucket ? rows.filter((r) => r.bucket === bucket) : rows;
+    const notVisitedCount = rows.filter((r) => r.not_visited_30).length;
+    const visible = (bucket ? rows.filter((r) => r.bucket === bucket) : rows).filter((r) => !notVisitedOnly || r.not_visited_30);
 
     if (allRows.length === 0) {
         return (
@@ -121,6 +137,15 @@ export function MyDealersView() {
                         {ACCOUNT_BUCKET_LABELS[b]} · {counts[b]}
                     </button>
                 ))}
+                {/* ID 241-3: managers see it for their team through the same scope. */}
+                <button
+                    type="button"
+                    onClick={() => setNotVisitedOnly((v) => !v)}
+                    aria-pressed={notVisitedOnly}
+                    className={`rounded-full border border-dashed px-3 py-1 text-xs font-medium text-ink ${notVisitedOnly ? "ring-2 ring-offset-1 ring-ink/40 bg-bg" : "border-border"}`}
+                >
+                    Not visited in 30 days · {notVisitedCount}
+                </button>
             </div>
 
             <div className="rounded-xl border border-border bg-surface shadow-card overflow-x-auto">
@@ -134,6 +159,7 @@ export function MyDealersView() {
                             <th className="px-3 py-2 text-right font-semibold">Usual gap (days)</th>
                             <th className="px-3 py-2 text-right font-semibold">Revenue, last 90 days</th>
                             <th className="px-3 py-2 text-right font-semibold">Lifetime</th>
+                            <th className="px-3 py-2 text-left font-semibold">Last visit</th>
                             <th className="px-3 py-2" />
                             {data?.can_record_orders && <th className="px-3 py-2" />}
                         </tr>
@@ -168,6 +194,11 @@ export function MyDealersView() {
                                     </span>
                                     {r.closed_reason && <div className="mt-1 text-[11px] text-ink-muted">{r.closed_reason}</div>}
                                     {r.order_claim && <OrderClaimBadge claim={r.order_claim} />}
+                                    {r.not_visited_30 && (
+                                        <span className="ml-1 inline-block rounded-full border border-dashed border-rose-300 px-2 py-0.5 text-[11px] text-rose-700">
+                                            Not visited in 30 days
+                                        </span>
+                                    )}
                                 </td>
                                 <td className="px-3 py-2 text-ink-muted">{r.last_order ?? "—"}</td>
                                 <td className="px-3 py-2 text-right tabular-nums">
@@ -176,6 +207,9 @@ export function MyDealersView() {
                                 <td className="px-3 py-2 text-right tabular-nums">{r.avg_reorder_days ?? "—"}</td>
                                 <td className="px-3 py-2 text-right tabular-nums">{inr(r.revenue_90d)}</td>
                                 <td className="px-3 py-2 text-right tabular-nums">{inr(r.revenue_lifetime)}</td>
+                                <td className={`px-3 py-2 whitespace-nowrap ${r.not_visited_30 ? "text-rose-700" : "text-ink-muted"}`}>
+                                    {r.last_visit_date ? lastVisitLabel(r.last_visit_date) : "None yet"}
+                                </td>
                                 <td className="px-3 py-2 text-right">
                                     {/* ID 210: straight to the camera + location page for this counter. */}
                                     {r.account_id && r.can_log_visit && (

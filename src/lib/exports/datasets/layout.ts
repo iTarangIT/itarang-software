@@ -86,6 +86,16 @@ export const DATASET_LAYOUT: Record<string, DatasetLayout> = {
             { name: "Handover", keys: ["transferred_on", "transferred_by", "owner_at_transfer", "days_transfer_to_visit", "transfer_visit_within_limit"] },
         ],
     },
+    // ID 241-4.
+    dealer_visits: {
+        section: "SALES",
+        grain: "One row per visit to a dealer account",
+        who: "CEO, Admin, Sales Head (all); ASM (own visits only)",
+        columnGroups: [
+            { name: "Visit", keys: ["visited_at", "account_id", "dealer", "city", "owner", "visitor", "visit_outcome", "visit_remarks"] },
+            { name: "Proof", keys: ["verified", "location_pin", "photo"] },
+        ],
+    },
     quotes: {
         section: "SALES",
         grain: "One row per quote version",
