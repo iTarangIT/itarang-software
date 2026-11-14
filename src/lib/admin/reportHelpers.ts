@@ -28,7 +28,7 @@ export function isUndefinedColumn(e: unknown): boolean {
     return false;
 }
 
-const ROLE_LABELS: Record<string, string> = {
+export const ROLE_LABELS: Record<string, string> = {
     inside_sales_rep: "Inside Sales",
     sales_head: "Sales Head",
     sales_manager: "Sales Manager",
@@ -36,12 +36,19 @@ const ROLE_LABELS: Record<string, string> = {
     asm: "ASM",
     ceo: "CEO",
     admin: "Admin",
+    // ID 215 (14 Nov): every role a CEO page can show, in words.
+    business_head: "Business Head",
+    finance_controller: "Finance",
+    inventory_manager: "Inventory Manager",
+    service_engineer: "Service Engineer",
+    sales_order_manager: "Sales Order Manager",
+    dealer: "Dealer",
 };
 
 /**
- * "inside_sales_rep" → "Inside Sales". An unmapped role shows its raw value
- * rather than blank, so a role nobody has labelled yet looks unfamiliar instead
- * of looking like missing data.
+ * "inside_sales_rep" → "Inside Sales" (roleLabel, below). An unmapped role reads as words
+ * ("field_lead" → "Field lead") rather than blank or a code (ID 215), so it never looks
+ * like missing data.
  */
 /**
  * Funnel by Owner's "Conversion %": conversions credited to the person ÷ leads
@@ -57,7 +64,8 @@ export function ownerConversionRate(converted: number, touched: number): number 
     return Math.min(100, Math.round((converted / touched) * 100));
 }
 
-export function roleLabel(role: string | null): string {
+export function roleLabel(role: string | null | undefined): string {
     if (!role) return "—";
-    return ROLE_LABELS[role] ?? role;
+    // ID 215: an unlabelled role still reads as words, never as a code ("field_lead" → "Field lead").
+    return ROLE_LABELS[role] ?? role.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
 }

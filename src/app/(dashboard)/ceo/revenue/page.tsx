@@ -16,6 +16,7 @@ import { matchedUnion, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
 
 // ID 166: invoice PDFs open through a fresh 15-minute link on each click.
 import FreshFileLink from "@/components/shared/FreshFileLink";
+import { invoiceStatusLabel } from "@/lib/sales/invoiceStatusLabel";
 export const dynamic = "force-dynamic";
 
 type Row = {
@@ -224,7 +225,7 @@ export default async function CeoRevenuePage({
                                         </span>
                                     </td>
                                     <td className="px-4 py-3 text-gray-700">{r.owner_name ?? "—"}</td>
-                                    <td className="px-4 py-3 capitalize text-gray-700">{(r.status ?? "—").replace(/_/g, " ")}</td>
+                                    <td className="px-4 py-3 text-gray-700">{r.status ? invoiceStatusLabel(r.status) : "—"}</td>
                                     <td className="whitespace-nowrap px-4 py-3 text-right font-semibold text-gray-900">{rupees(r.total)}</td>
                                 </tr>
                             ))}

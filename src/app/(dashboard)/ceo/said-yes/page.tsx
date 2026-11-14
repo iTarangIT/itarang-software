@@ -15,6 +15,7 @@ import {
     summarizeSaidYes,
     type SaidYesRow,
 } from "@/lib/leads/saidYesNotWon";
+import { roleLabel } from "@/lib/admin/reportHelpers";
 
 export const dynamic = "force-dynamic";
 
@@ -51,7 +52,7 @@ function Chip({ label, value }: { label: string; value: string }) {
 
 function LeadCard({ r, limit }: { r: SaidYesRow; limit: number }) {
     const over = r.working_days_waiting > limit;
-    const owner = r.owner_name ? `${r.owner_name}${r.owner_role ? ` (${r.owner_role.replace(/_/g, " ")})` : ""}` : "No owner";
+    const owner = r.owner_name ? `${r.owner_name}${r.owner_role ? ` (${roleLabel(r.owner_role)})` : ""}` : "No owner";
     return (
         <div className="space-y-3 rounded-xl border border-gray-200 bg-white p-4 sm:p-5">
             <div className="flex flex-wrap items-start justify-between gap-3">
