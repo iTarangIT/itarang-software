@@ -155,7 +155,7 @@ export function UploadWizard() {
                 <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
                     <Stat label="Total rows" value={result.total_rows} />
                     <Stat label="Imported" value={result.valid_rows} />
-                    <Stat label="Duplicates" value={result.duplicate_rows} />
+                    <Stat label="Already in CRM" value={result.duplicate_rows} />
                     <Stat label="Errors" value={result.errored_rows} />
                 </div>
                 <p className="mt-3 text-xs text-ink-muted">
@@ -237,7 +237,7 @@ export function UploadWizard() {
                         <Stat label="New" value={validation.valid_rows} />
                         <Stat label="Reactivate" value={validation.reactivate_rows} />
                         <Stat
-                            label="Duplicates"
+                            label="Already in CRM"
                             value={
                                 validation.duplicate_rows +
                                 validation.address_mismatch_rows

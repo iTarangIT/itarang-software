@@ -666,7 +666,7 @@ export function ListsTab({
           <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
           <span>
             <b>{summary.name}</b> ready — <b>{summary.queued}</b> to dial
-            {summary.reused > 0 ? ` · ${summary.reused} reused` : ""}
+            {summary.reused > 0 ? ` · already in CRM: ${summary.reused}` : ""}
             {summary.updated > 0 ? ` · ${summary.updated} updated` : ""}
             {summary.invalid > 0 ? ` · ${summary.invalid} skipped` : ""}.
             Press Start below.

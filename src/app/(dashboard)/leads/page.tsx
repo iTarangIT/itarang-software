@@ -474,7 +474,7 @@ function UploadModal({
                 )}
                 {!!result.duplicate_skipped && (
                   <p className="text-gray-400">
-                    {result.duplicate_skipped} already in the system — skipped
+                    already in CRM: {result.duplicate_skipped} — skipped
                   </p>
                 )}
                 {!!result.address_mismatch && (

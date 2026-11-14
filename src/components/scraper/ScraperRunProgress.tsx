@@ -359,7 +359,8 @@ function PromotedStat({
   const allDropped = promoted === 0 && saved > 0;
   const breakdown = [
     `${saved} scraped`,
-    skippedDuplicate > 0 ? `${skippedDuplicate} duplicates` : null,
+    // ID 249: dealers we already hold (plus a phone repeated in the scrape).
+    skippedDuplicate > 0 ? `already in CRM: ${skippedDuplicate}` : null,
     skippedInvalidPhone > 0 ? `${skippedInvalidPhone} invalid phones` : null,
   ]
     .filter(Boolean)

@@ -30,6 +30,7 @@ import {
   type TimelineLimitEvent,
 } from "@/components/leads/touchpoint-timeline";
 import { limitPassedEvents } from "@/lib/leads/clocks";
+import { showsInActivity } from "@/lib/lifecycle/touchpointTypes";
 import { failedSendTimelineEntries, mergeNewestFirst } from "@/lib/leads/quoteSends";
 import { listLeadQuoteSends } from "@/lib/leads/quoteSendsStore";
 import { IvrTag } from "@/components/leads/ivr-tag";
@@ -180,8 +181,9 @@ export default async function LeadDetailPage({ params }: any) {
   // ID 191: failed quote sends (quotation_dispatches) join the Activity
   // timeline in red with their reason — display only, never touchpoints. A
   // send that reached the dealer already has its "Quote sent to dealer" entry.
+  // ID 249: Re-inquiry lines show in Lead tracking (above) only, not here.
   const timeline = mergeNewestFirst<LeadTouchpoint>(
-    touchpoints,
+    touchpoints.filter((t) => showsInActivity(t.touchpoint_type)),
     failedSendTimelineEntries(await listLeadQuoteSends(id)).map((e) => ({
       ...e,
       call_status: null,
