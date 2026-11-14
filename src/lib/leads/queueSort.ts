@@ -13,7 +13,8 @@
  * `sort: ""` means "the tab's own order" — the default every tab has today.
  */
 
-export const QUEUE_SORT_KEYS = ["status", "interest", "state", "city"] as const;
+// ID 244 / 243: dealer, visit, owner and last action are the header sorts on My visits.
+export const QUEUE_SORT_KEYS = ["status", "interest", "state", "city", "dealer", "visit", "owner", "last_action"] as const;
 export type QueueSortKey = (typeof QUEUE_SORT_KEYS)[number];
 
 export const QUEUE_SORT_DIRS = ["asc", "desc"] as const;
@@ -45,6 +46,10 @@ export const QUEUE_SORT_ASC_LABEL: Record<QueueSortKey, string> = {
     interest: "Coldest first",
     state: "A → Z",
     city: "A → Z",
+    dealer: "A → Z",
+    visit: "Earliest booking first",
+    owner: "A → Z",
+    last_action: "Oldest first (never worked at the top)",
 };
 
 export function hasQueueSort(s: QueueSort): boolean {

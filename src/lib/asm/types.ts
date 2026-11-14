@@ -16,12 +16,13 @@ export const ASM_QUEUE_TABS = [
 ] as const;
 export type AsmQueueTab = (typeof ASM_QUEUE_TABS)[number];
 
+// ID 244 (decided 11 Nov): labels only; the tab keys and their rules do not change.
 export const ASM_TAB_LABELS: Record<AsmQueueTab, string> = {
-    my_visits: "My active visits",
-    today: "Today",
+    my_visits: "Open leads",
+    today: "Today's visits",
     territory: "All in my territory",
     unclaimed: "Unassigned in my territory",
-    my_closed: "My closed",
+    my_closed: "Closed (90 days)",
 };
 
 /** The Today tab as the assistant names it ("your Today tab"); follows the tab label. */
@@ -92,6 +93,12 @@ export type AsmQueueRow = TeamReviewFields & {
     scheduled_date: string | null;
     actual_visit_date: string | null;
     closed_at: string | null;
+    /** ID 247: the lead's one open booking (the newest open visit), also when its date has passed. */
+    next_booking_date?: string | null;
+    /** ID 247: days past that booking's date (IST); null when not overdue. */
+    visit_overdue_days?: number | null;
+    /** ID 244: 0 overdue · 1 today · 2 upcoming · 3 no visit planned (My visits groups). */
+    visit_bucket?: number | null;
     /**
      * Who handed this lead to its current owner — the "sent by …" stamp. Mirrors
      * QueueRow.assigned_by (src/lib/inside-sales/types.ts): decorated onto the
@@ -125,6 +132,21 @@ export type AsmQueueCounts = Record<AsmQueueTab, number> & {
     finalised_not_won?: number;
     /** 18 Oct row 34 — the ASM's own My visits leads past a time limit (chip badge). */
     past_limit?: number;
+    /** ID 244: the numbers strip for the Showing pick (null when it could not be read). */
+    strip?: VisitsStripNumbers | null;
+};
+
+/** ID 244: what lib/asm/visitsStrip.ts returns (kept here so the client can import it). */
+export type VisitsStripNumbers = {
+    open_leads: number;
+    hot: number;
+    warm: number;
+    cold: number;
+    not_rated: number;
+    visits_today: number;
+    next_7_days: number;
+    visits_yesterday: number;
+    calls_yesterday: number;
 };
 
 export type VisitInput = {

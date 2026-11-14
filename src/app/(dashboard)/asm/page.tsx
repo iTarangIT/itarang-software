@@ -1,7 +1,6 @@
 import { requireRole } from "@/lib/auth-utils";
 import { EcofyMyLeadsCard } from "@/components/ecofy/pages";
 import { AsmQueueView } from "./_components/AsmQueueView";
-import { AsmPerformanceStrip } from "@/components/dashboard/sales/AsmPerformanceStrip";
 import { exportsOwnLeadsOnly } from "@/lib/leads/access";
 import { getTeamPeople } from "@/lib/users/team";
 
@@ -29,16 +28,14 @@ export default async function AsmQueuePage() {
                     <h1 className="text-2xl font-semibold tracking-tight text-gray-900">
                         My visits
                     </h1>
-                    <p className="mt-1 text-sm text-gray-600">
-                        Welcome, {user.name}. Plan visits for leads sent to you and close deals at the shop.
-                    </p>
+                    <p className="mt-1 text-sm text-gray-600">Plan visits for your leads and close deals at the shop.</p>
                 </div>
             </header>
-            {/* B7 — the rep's own visits / calls / hot-warm-cold at a glance. */}
-            <AsmPerformanceStrip />
             {/* E-307 — Ecofy leads the Sales Head assigned to this rep. */}
             <EcofyMyLeadsCard href="/asm/ecofy-leads" />
-            <AsmQueueView viewerId={user.id} viewerRole={user.role} teamPeople={teamPeople} />
+            {/* ID 244: the Showing pick and the numbers strip live in the view, so one pick drives
+                the strip, the tab counts and the list together. */}
+            <AsmQueueView viewerId={user.id} viewerRole={user.role} teamPeople={teamPeople} viewerName={user.name ?? null} />
         </div>
     );
 }

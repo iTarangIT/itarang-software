@@ -19,10 +19,24 @@ import { finalisedNotWonSql } from "@/lib/leads/finalisedNotWon";
 import type { QueueSort } from "@/lib/leads/queueSort";
 import { ownerScopeSql } from "@/lib/users/teamSql";
 import { LAST_DONE_VISIT_JOIN, TEAM_REVIEW_SELECT } from "@/lib/leads/teamReviewSql";
+import { nextBookingJoin } from "./nextBooking";
+import type { DateMode } from "./dateMode";
 
 const TERMINAL_LIST = sql.raw(
     TERMINAL_STATUSES.map((s) => `'${s}'`).join(", "),
 );
+
+export { DATE_MODES, type DateMode } from "./dateMode";
+
+/**
+ * ID 244: which part of My visits a lead sits in, by its one open booking (247):
+ * 0 overdue · 1 today · 2 upcoming · 3 no visit planned.
+ */
+const VISIT_BUCKET = sql`CASE
+    WHEN nb.scheduled_date < (now() AT TIME ZONE 'Asia/Kolkata')::date THEN 0
+    WHEN nb.scheduled_date = (now() AT TIME ZONE 'Asia/Kolkata')::date THEN 1
+    WHEN nb.scheduled_date IS NOT NULL THEN 2
+    ELSE 3 END`;
 
 type BuildArgs = {
     tab: AsmQueueTab;
@@ -38,6 +52,13 @@ type BuildArgs = {
     visitOutcome?: string | null;
     /** ID 75.4: only "Finalised, not Won" leads (finalisedNotWonSql). */
     finalisedOnly?: boolean;
+    /**
+     * ID 236: what the date range means. "booked" (the default on My visits) = a visit
+     * scheduled in the range and still open; "visited" = a visit done in the range
+     * (rule 185, status visited). Cancelled and no-show visits never match. Absent =
+     * the old reading (latest visit's done-or-planned date).
+     */
+    dateMode?: DateMode | null;
     /**
      * 18 Oct row 34: only leads with a running clock past its limit. The
      * caller passes the predicate (pastALimitSql over dl.id) only where
@@ -68,7 +89,7 @@ type BuildArgs = {
 };
 
 /** ID 199: the `member` narrowing for one tab (empty on the pool tabs). */
-function memberClause(tab: AsmQueueTab, member: string | null | undefined): SQL {
+export function memberClause(tab: AsmQueueTab, member: string | null | undefined): SQL {
     if (!member || tab === "territory" || tab === "unclaimed") return sql``;
     const col = tab === "today" ? sql`dl.asm_id` : tab === "my_closed" ? sql`dl.closing_owner_id` : sql`dl.current_owner_id`;
     return sql` AND ${col} = ${member}`;
@@ -144,7 +165,9 @@ function tabOrder(tab: AsmQueueTab) {
             return sql`dl.final_intent_score DESC NULLS LAST, dl.created_at DESC`;
         case "my_visits":
         default:
-            return sql`COALESCE(lv.scheduled_date, dl.assigned_at) ASC NULLS LAST`;
+            // ID 244: overdue visits first (most overdue at the top), then today's, then
+            // upcoming by date, then leads with no visit planned (longest idle first).
+            return sql`${VISIT_BUCKET} ASC, nb.scheduled_date ASC NULLS LAST, dl.last_worked_at ASC NULLS FIRST, dl.assigned_at ASC NULLS LAST`;
     }
 }
 
@@ -195,11 +218,17 @@ function extraFilters({
     pastLimit,
     ownedBy,
     teamMemberIds,
-}: Pick<BuildArgs, "q" | "filters" | "visitStatus" | "visitOutcome" | "finalisedOnly" | "pastLimit" | "ownedBy" | "teamMemberIds">): SQL {
+    dateMode,
+}: Pick<BuildArgs, "q" | "filters" | "visitStatus" | "visitOutcome" | "finalisedOnly" | "pastLimit" | "ownedBy" | "teamMemberIds" | "dateMode">): SQL {
     const parts: SQL[] = [];
     if (ownedBy) parts.push(sql` AND ${ownerScopeSql(sql`dl.current_owner_id`, ownedBy, teamMemberIds)}`);
     if (q) parts.push(leadSearchClause(q));
-    if (filters) parts.push(...queueFilterClauses(filters, ASM_DATE_COLUMN));
+    if (filters && dateMode) {
+        // ID 236: the range applies to a visit of the chosen kind, not to the latest row.
+        const { from, to, ...rest } = filters;
+        parts.push(...queueFilterClauses({ ...rest, from: null, to: null }, ASM_DATE_COLUMN));
+        parts.push(visitRangeClause(dateMode, from ?? null, to ?? null));
+    } else if (filters) parts.push(...queueFilterClauses(filters, ASM_DATE_COLUMN));
     // The LATEST visit's state, which is what the row's Visit column shows. A
     // lead whose most recent visit was cancelled is a cancelled row here even if
     // an earlier one was productive — filtering on "any visit ever" would answer
@@ -209,6 +238,25 @@ function extraFilters({
     if (finalisedOnly) parts.push(sql` AND ${finalisedNotWonSql()}`);
     if (pastLimit) parts.push(sql` AND ${pastLimit}`);
     return parts.length ? sql.join(parts, sql``) : sql``;
+}
+
+const ISO = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * ID 236: "Visited" = a visit done in the range (status visited, actual date); "Booked" =
+ * a visit scheduled in the range and still open. Cancelled and no-show never count. No
+ * dates → no narrowing.
+ */
+export function visitRangeClause(mode: DateMode, from: string | null, to: string | null): SQL {
+    const f = from && ISO.test(from) ? from : null;
+    const t = to && ISO.test(to) ? to : null;
+    if (!f && !t) return sql``;
+    const col = mode === "visited" ? sql`rv.actual_visit_date` : sql`rv.scheduled_date`;
+    const status = mode === "visited" ? sql`rv.visit_status = 'visited'` : sql`rv.visit_status IN ('scheduled', 'pending_scheduling')`;
+    return sql` AND EXISTS (SELECT 1 FROM lead_visits rv
+                 WHERE rv.dealer_lead_id = dl.id AND ${status}
+                   ${f ? sql`AND ${col} >= ${f}::date` : sql``}
+                   ${t ? sql`AND ${col} <= ${t}::date` : sql``})`;
 }
 
 export async function fetchAsmQueueRows({
@@ -226,11 +274,12 @@ export async function fetchAsmQueueRows({
     ownedBy,
     teamMemberIds,
     member,
+    dateMode,
 }: BuildArgs): Promise<AsmQueueRow[]> {
     const offset = (page - 1) * limit;
     const where = tabFilter(tab, asmId, teamMemberIds);
     const order = queueSortOrder(sort, tabOrder(tab));
-    const search = sql`${extraFilters({ q, filters, visitStatus, visitOutcome, finalisedOnly, pastLimit, ownedBy, teamMemberIds })}${memberClause(tab, member)}`;
+    const search = sql`${extraFilters({ q, filters, visitStatus, visitOutcome, finalisedOnly, pastLimit, ownedBy, teamMemberIds, dateMode })}${memberClause(tab, member)}`;
 
     const rows = await db.execute<AsmQueueRow>(sql`
         SELECT
@@ -254,10 +303,14 @@ export async function fetchAsmQueueRows({
             lv.scheduled_date::text AS scheduled_date,
             lv.actual_visit_date::text AS actual_visit_date,
             dl.closed_at,
-            dl.next_follow_up_at
+            dl.next_follow_up_at,
+            nb.scheduled_date::text AS next_booking_date,
+            nb.overdue_days AS visit_overdue_days,
+            ${VISIT_BUCKET} AS visit_bucket
             ${TEAM_REVIEW_SELECT}
         FROM dealer_leads dl
         ${LATEST_VISIT_JOIN}
+        ${nextBookingJoin("nb")}
         ${LAST_DONE_VISIT_JOIN}
         LEFT JOIN users owner ON owner.id::text = dl.current_owner_id
         LEFT JOIN users asm ON asm.id::text = dl.asm_id
@@ -280,12 +333,13 @@ export async function countAsmQueueRows({
     ownedBy,
     teamMemberIds,
     member,
+    dateMode,
 }: Pick<
     BuildArgs,
-    "tab" | "asmId" | "q" | "filters" | "visitStatus" | "visitOutcome" | "finalisedOnly" | "pastLimit" | "ownedBy" | "teamMemberIds" | "member"
+    "tab" | "asmId" | "q" | "filters" | "visitStatus" | "visitOutcome" | "finalisedOnly" | "pastLimit" | "ownedBy" | "teamMemberIds" | "member" | "dateMode"
 >): Promise<number> {
     const where = tabFilter(tab, asmId, teamMemberIds);
-    const search = sql`${extraFilters({ q, filters, visitStatus, visitOutcome, finalisedOnly, pastLimit, ownedBy, teamMemberIds })}${memberClause(tab, member)}`;
+    const search = sql`${extraFilters({ q, filters, visitStatus, visitOutcome, finalisedOnly, pastLimit, ownedBy, teamMemberIds, dateMode })}${memberClause(tab, member)}`;
     const rows = await db.execute<{ c: string }>(sql`
         SELECT COUNT(*)::text AS c FROM dealer_leads dl ${LATEST_VISIT_JOIN} WHERE ${where} ${search}
     `);
@@ -312,14 +366,16 @@ export async function fetchAsmQueueIds({
     visitOutcome,
     finalisedOnly,
     sort,
+    dateMode,
 }: Omit<BuildArgs, "page">): Promise<string[]> {
     const where = tabFilter(tab, asmId);
     const order = queueSortOrder(sort, tabOrder(tab));
-    const search = extraFilters({ q, filters, visitStatus, visitOutcome, finalisedOnly });
+    const search = extraFilters({ q, filters, visitStatus, visitOutcome, finalisedOnly, dateMode });
     const rows = await db.execute<{ id: string }>(sql`
         SELECT dl.id
         FROM dealer_leads dl
         ${LATEST_VISIT_JOIN}
+        ${nextBookingJoin("nb")}
         WHERE ${where} ${search} AND dl.current_owner_id IS NULL
         ${order}
         LIMIT ${limit}
@@ -350,7 +406,7 @@ export async function countAsmFinalisedNotWon(asmId: string): Promise<number> {
  */
 export async function fetchAllAsmTabCounts(
     asmId: string,
-    opts?: Pick<BuildArgs, "filters" | "visitStatus" | "visitOutcome" | "finalisedOnly" | "pastLimit" | "teamMemberIds" | "member">,
+    opts?: Pick<BuildArgs, "filters" | "visitStatus" | "visitOutcome" | "finalisedOnly" | "pastLimit" | "teamMemberIds" | "member" | "dateMode">,
 ): Promise<Record<AsmQueueTab, number>> {
     // ID 155: a manager's own-tab badges count the team too, like the tables.
     const team = opts?.teamMemberIds;
@@ -362,6 +418,7 @@ export async function fetchAllAsmTabCounts(
         visitOutcome: opts?.visitOutcome,
         finalisedOnly: opts?.finalisedOnly,
         pastLimit: opts?.pastLimit,
+        dateMode: opts?.dateMode,
     });
     const rows = await db.execute<{
         my_visits: string;

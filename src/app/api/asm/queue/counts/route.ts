@@ -11,6 +11,7 @@ import { hasLeadClocks, pastALimitSql } from "@/lib/leads/clocks";
 import { sql } from "drizzle-orm";
 import { readAsmQueueFilters } from "@/lib/asm/queueFilterParams";
 import { teamScopeFromParams } from "@/lib/users/team";
+import { fetchVisitsStrip } from "@/lib/asm/visitsStrip";
 
 export const dynamic = "force-dynamic";
 
@@ -33,7 +34,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
     const past = (await hasLeadClocks()) ? pastALimitSql(sql`dl.id`) : null;
     // ID 199: the Team member pick narrows the badges like the table.
     const { teamMemberIds, member } = await teamScopeFromParams(user, sp);
-    const [counts, finalisedNotWon, pastLimitCount] = await Promise.all([
+    const [counts, finalisedNotWon, pastLimitCount, strip] = await Promise.all([
         // ID 155: a manager's own-tab badges include the team, like the table.
         fetchAllAsmTabCounts(user.id, {
             ...filters,
@@ -43,10 +44,15 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
         }),
         countAsmFinalisedNotWon(user.id),
         past ? countAsmQueueRows({ tab: "my_visits", asmId: user.id, pastLimit: past }).catch(() => 0) : Promise.resolve(0),
+        // ID 244: the numbers strip, for the same Showing pick as the list.
+        fetchVisitsStrip(user.id, teamMemberIds, member).catch((err: unknown) => {
+            console.error("[asm/queue/counts] strip failed", err);
+            return null;
+        }),
     ]);
     // ID 45: no pool counts for reps — they claim by number search only.
     if (claimsByNumberOnly(user.role)) {
         for (const t of ASM_POOL_TABS) (counts as Record<string, number>)[t] = 0;
     }
-    return successResponse({ ...counts, finalised_not_won: finalisedNotWon, past_limit: pastLimitCount });
+    return successResponse({ ...counts, finalised_not_won: finalisedNotWon, past_limit: pastLimitCount, strip });
 });

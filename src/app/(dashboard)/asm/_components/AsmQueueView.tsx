@@ -14,7 +14,11 @@ import {
     QUEUE_SELECT_CLASS,
 } from "@/components/leads/QueueFilterBar";
 import { QueueCsvButton } from "@/components/leads/QueueCsvButton";
-import { TeamMemberFilter, type TeamPerson } from "@/components/leads/TeamMemberFilter";
+import { type TeamPerson } from "@/components/leads/TeamMemberFilter";
+import { MEMBER_ME, MEMBER_TEAM } from "@/lib/users/teamRules";
+import { DATE_MODES, type DateMode } from "@/lib/asm/dateMode";
+import type { QueueSortKey } from "@/lib/leads/queueSort";
+import { VisitsStrip } from "./VisitsStrip";
 import { BulkClaimBar } from "@/components/leads/BulkClaimBar";
 import { ClaimLeadConfirm } from "@/components/leads/ClaimLeadConfirm";
 import { ClaimByNumberPanel } from "@/components/leads/ClaimByNumberPanel";
@@ -30,7 +34,6 @@ import {
 } from "@/lib/leads/queueFilters";
 import {
     EMPTY_QUEUE_SORT,
-    hasQueueSort,
     readQueueSort,
     writeQueueSort,
     type QueueSort,
@@ -54,6 +57,8 @@ type Props = {
     viewerRole: string;
     /** ID 199: the viewer's direct reports — non-empty shows the Team member pick. */
     teamPeople?: TeamPerson[];
+    /** ID 244: the viewer's name, for "Every number on this page is for Me (Sonu)". */
+    viewerName?: string | null;
 };
 
 const PAGE_SIZE = 25;
@@ -68,7 +73,7 @@ function pretty(v: string): string {
     return v.replaceAll("_", " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-export function AsmQueueView({ viewerId, viewerRole, teamPeople = [] }: Props) {
+export function AsmQueueView({ viewerId, viewerRole, teamPeople = [], viewerName = null }: Props) {
     const router = useRouter();
     const params = useSearchParams();
     const queryClient = useQueryClient();
@@ -111,7 +116,16 @@ export function AsmQueueView({ viewerId, viewerRole, teamPeople = [] }: Props) {
     const [pastLimitOnly, setPastLimitOnly] = useState(params.get("past_limit") === "1");
     // ID 199: a manager's Team member pick ("" = whole team, "me", or an id).
     // Seeded from the URL so the My team email's links open it filtered.
-    const [member, setMember] = useState(params.get("member") ?? "");
+    // ID 244 (Kartik, 11 Nov): a manager opens on Me. The whole team is written into the
+    // link as "team", so a reload or a pasted link keeps it.
+    const [member, setMember] = useState(params.get("member") ?? (teamPeople.length > 0 ? MEMBER_ME : ""));
+    // ID 236: what the date range means — Booked (default) or Visited.
+    const [dateMode, setDateMode] = useState<DateMode>(() => {
+        const v = params.get("date_mode") ?? "";
+        return (DATE_MODES as readonly string[]).includes(v) ? (v as DateMode) : "booked";
+    });
+    // ID 244: "Claim by number" is a button, the number search opens below it.
+    const [claimOpen, setClaimOpen] = useState(false);
     // Open on load when ANY filter arrived in the URL, so a filter inherited
     // from a pasted link is never doing invisible work. Derived from the parsed
     // values rather than from param names, so it cannot fall out of step with
@@ -119,7 +133,6 @@ export function AsmQueueView({ viewerId, viewerRole, teamPeople = [] }: Props) {
     const [filtersOpen, setFiltersOpen] = useState(
         () =>
             hasAnyQueueFilter(readQueueFilters(new URLSearchParams(params.toString()))) ||
-            hasQueueSort(readQueueSort(new URLSearchParams(params.toString()))) ||
             params.get("visit_status") !== null ||
             params.get("visit_outcome") !== null,
     );
@@ -141,11 +154,12 @@ export function AsmQueueView({ viewerId, viewerRole, teamPeople = [] }: Props) {
         if (finalisedOnly) p.set("finalised", "1");
         if (pastLimitOnly) p.set("past_limit", "1");
         if (member) p.set("member", member);
+        if (filters.from || filters.to) p.set("date_mode", dateMode);
         // The sort rides along: the rows and the CSV honour it, the counts and
         // facets simply never read it.
         writeQueueSort(p, sort);
         return writeQueueFilters(p, filters);
-    }, [searchDebounced, visitStatus, visitOutcome, finalisedOnly, pastLimitOnly, member, filters, sort]);
+    }, [searchDebounced, visitStatus, visitOutcome, finalisedOnly, pastLimitOnly, member, filters, sort, dateMode]);
 
     const filterKey = filterParams.toString();
 
@@ -170,8 +184,9 @@ export function AsmQueueView({ viewerId, viewerRole, teamPeople = [] }: Props) {
         setPage(1);
     }, []);
 
-    const patchSort = useCallback((next: QueueSort) => {
-        setSort(next);
+    // ID 243 / 244: a header click — ascending, then descending, then the default order.
+    const toggleSort = useCallback((key: QueueSortKey) => {
+        setSort((cur) => (cur.sort !== key ? { sort: key, dir: "asc" } : cur.dir === "asc" ? { sort: key, dir: "desc" } : { sort: "", dir: "asc" }));
         setPage(1);
     }, []);
 
@@ -303,6 +318,15 @@ export function AsmQueueView({ viewerId, viewerRole, teamPeople = [] }: Props) {
         refreshAfterClaim();
     }, [refreshAfterClaim]);
 
+    const showingWho = useMemo(() => {
+        const me = viewerName ? `Me (${viewerName})` : "Me";
+        if (teamPeople.length === 0 || member === MEMBER_ME) return me;
+        if (!member || member === MEMBER_TEAM) {
+            return `my whole team (${[viewerName ?? "me", ...teamPeople.map((t) => t.name)].join(", ")})`;
+        }
+        return teamPeople.find((t) => t.id === member)?.name ?? "this team member";
+    }, [teamPeople, member, viewerName]);
+
     const exportHref = useMemo(() => {
         const p = new URLSearchParams(filterKey);
         p.set("tab", tab);
@@ -310,12 +334,33 @@ export function AsmQueueView({ viewerId, viewerRole, teamPeople = [] }: Props) {
     }, [filterKey, tab]);
 
     return (
+        <div className="space-y-4">
+        {teamPeople.length > 0 && (
+            <div className="flex justify-end">
+                <label className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm shadow-sm">
+                    <span className="font-medium text-gray-700">Showing</span>
+                    <select
+                        value={member || MEMBER_TEAM}
+                        onChange={(e) => {
+                            setMember(e.target.value);
+                            setPage(1);
+                        }}
+                        className="h-9 min-w-[12rem] rounded-md border border-emerald-200 bg-emerald-50 px-2 text-sm font-medium text-emerald-800"
+                        aria-label="Whose leads and numbers to show"
+                    >
+                        <option value={MEMBER_ME}>{viewerName ? `Me (${viewerName})` : "Me"}</option>
+                        <option value={MEMBER_TEAM}>My whole team</option>
+                        {teamPeople.map((p) => (
+                            <option key={p.id} value={p.id}>
+                                {p.name}
+                            </option>
+                        ))}
+                    </select>
+                </label>
+            </div>
+        )}
+        <VisitsStrip strip={counts?.strip} who={showingWho} loading={countsQuery.isLoading} />
         <div className="rounded-xl border border-gray-100 bg-white shadow-sm">
-            {numberOnly && (
-                <div className="border-b border-gray-100 p-4">
-                    <ClaimByNumberPanel onClaimed={() => void queryClient.invalidateQueries()} />
-                </div>
-            )}
             <AsmQueueTabs
                 active={tab}
                 counts={counts ?? null}
@@ -331,7 +376,7 @@ export function AsmQueueView({ viewerId, viewerRole, teamPeople = [] }: Props) {
                     <Input
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}
-                        placeholder="Search by dealer, shop, or phone…"
+                        placeholder="Search dealer, shop or phone…"
                         className="pl-9"
                     />
                 </div>
@@ -400,14 +445,6 @@ export function AsmQueueView({ viewerId, viewerRole, teamPeople = [] }: Props) {
                         </span>
                     ) : null}
                 </button>
-                <TeamMemberFilter
-                    people={teamPeople}
-                    value={member}
-                    onChange={(m) => {
-                        setMember(m);
-                        setPage(1);
-                    }}
-                />
                 <QueueFilterBar
                     values={filters}
                     onChange={patchFilter}
@@ -419,9 +456,24 @@ export function AsmQueueView({ viewerId, viewerRole, teamPeople = [] }: Props) {
                     // in the window, and the queue filters on the visit date.
                     dateLabel="Visit"
                     extraActiveCount={extraActive}
-                    sort={sort}
-                    onSortChange={patchSort}
                 >
+                    <QueueFilterField label="Dates mean">
+                        <select
+                            value={dateMode}
+                            onChange={(e) => {
+                                setDateMode(e.target.value as DateMode);
+                                setPage(1);
+                            }}
+                            className={QUEUE_SELECT_CLASS}
+                            aria-describedby="date-mode-hint"
+                        >
+                            <option value="booked">Booked (visits planned in the range)</option>
+                            <option value="visited">Visited (visits done in the range)</option>
+                        </select>
+                        <p id="date-mode-hint" className="mt-1 text-[11px] text-gray-500">
+                            Cancelled and no-show visits never count.
+                        </p>
+                    </QueueFilterField>
                     <QueueFilterField label="Visit status">
                         <select
                             value={visitStatus}
@@ -461,6 +513,11 @@ export function AsmQueueView({ viewerId, viewerRole, teamPeople = [] }: Props) {
                     <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
                 )}
                 <div className="ml-auto flex items-center gap-2">
+                    {numberOnly && (
+                        <Button type="button" variant="outline" onClick={() => setClaimOpen((v) => !v)} aria-expanded={claimOpen}>
+                            Claim by number
+                        </Button>
+                    )}
                     <QueueCsvButton
                         href={exportHref}
                         filename={`asm-${tab}`}
@@ -472,10 +529,17 @@ export function AsmQueueView({ viewerId, viewerRole, teamPeople = [] }: Props) {
                     </Button>
                 </div>
             </div>
+            {numberOnly && claimOpen && (
+                <div className="border-b border-gray-100 p-4">
+                    <ClaimByNumberPanel onClaimed={() => void queryClient.invalidateQueries()} />
+                </div>
+            )}
             <AsmQueueTable
                 tab={tab}
+                sort={sort}
+                onSort={toggleSort}
                 // ID 199: the review columns on a manager's team view.
-                showReview={teamPeople.length > 0 && member !== "me"}
+                showReview={teamPeople.length > 0 && member !== MEMBER_ME}
                 rows={data?.rows ?? []}
                 total={data?.total ?? 0}
                 page={page}
@@ -526,6 +590,7 @@ export function AsmQueueView({ viewerId, viewerRole, teamPeople = [] }: Props) {
                     queryClient.invalidateQueries({ queryKey: ["asm-counts"] });
                 }}
             />
+        </div>
         </div>
     );
 }
