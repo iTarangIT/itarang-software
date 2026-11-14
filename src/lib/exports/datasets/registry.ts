@@ -51,7 +51,7 @@ import { BUSINESS_TYPE_OPTIONS, BUSINESS_TYPE_UNSET, BUSINESS_TYPE_UNSET_LABEL }
 import { houseDealerCode } from "@/lib/leads/dealerByMobile";
 import { LEAD_PUSHED_TO_DEALER } from "@/lib/leads/pushGuards";
 import { assistedByLabel, assistedBySql } from "@/lib/exports/assistedBy";
-import { billCell, exportOrigin, recordingCell } from "@/lib/exports/fileLinks";
+import { billCell, exportOrigin, photoCell, recordingCell } from "@/lib/exports/fileLinks";
 import { claimDaysFor, type ClaimDay } from "@/lib/expenses/travelProofStore";
 import { VERDICT_LABEL, isExpenseCeo } from "@/lib/expenses/travelProof";
 
@@ -1349,6 +1349,93 @@ const visits: Dataset = {
     },
 };
 
+// ──────────────────────────────── Dealer visits ─────────────────────────────
+
+/**
+ * ID 241-4 — every done visit to a dealer ACCOUNT (My dealers' "Log visit", E-363
+ * lead_visits.account_id, read through to_jsonb so a database without it just has none):
+ * the dealer, its owner, who visited, when (the photo time, else the date), the outcome,
+ * the remarks and a link to the shop photo (a CRM link that checks the person, ID 166).
+ */
+function dealerVisitsWhere(ctx: RunContext): SQL {
+    const conds: SQL[] = [
+        sql`v.visit_status = 'visited'`,
+        sql`(to_jsonb(v) ->> 'account_id') IS NOT NULL`,
+        dayRange(ctx.params, sql`v.actual_visit_date`),
+    ];
+    if (ctx.ownOnly) conds.push(ownRows(ctx, sql`v.asm_id`));
+    conds.push(...commonConds(ctx, { person: sql`v.asm_id` }));
+    return sql.join(conds, sql` AND `);
+}
+
+const dealerVisits: Dataset = {
+    id: "dealer_visits",
+    label: "Dealer visits",
+    description: "One row per visit made to a dealer account (My dealers › Log visit), with the outcome and the shop photo.",
+    roles: MANAGERS,
+    ownRowsRoles: ["asm"],
+    dateFields: [{ value: "visit", label: "Visit date" }],
+    commonFilters: ["person"],
+    background: true,
+    filters: [],
+    sheets: [
+        {
+            name: "Dealer visits",
+            columns: [
+                { key: "visited_at", header: "Visited at (IST)", meaning: "The shop photo's time (IST); a visit with no photo time shows its date only.", width: 20 },
+                { key: "account_id", header: "Dealer account", meaning: "The dealer account's id (My dealers).", width: 18 },
+                { key: "dealer", header: "Dealer", meaning: "The dealer's business name.", width: 30 },
+                { key: "city", header: "City", meaning: "The dealer's city." },
+                { key: "owner", header: "Dealer owner", meaning: "Who owns the dealer account today.", width: 22 },
+                { key: "visitor", header: "Visited by", meaning: "Who logged the visit.", width: 22 },
+                { key: "visit_outcome", header: "Outcome", meaning: "The outcome logged on the visit.", width: 22 },
+                { key: "visit_remarks", header: "Remarks", meaning: "What was written on the visit.", width: 50 },
+                { key: "verified", header: "Verified (GPS + photo)", meaning: "Yes = live location and a server-stamped camera photo (ID 196); No = not verified.", width: 22 },
+                { key: "location_pin", header: "Location pin", meaning: "Latitude, longitude at check-in.", width: 24 },
+                { key: "photo", header: "Photo", meaning: "Opens the shop photo after checking who you are (a fresh 15-minute link each time).", width: 40 },
+            ],
+        },
+    ],
+    async count(ctx) {
+        const [r] = await rows<{ n: number }>(sql`SELECT COUNT(*)::int AS n FROM lead_visits v WHERE ${dealerVisitsWhere(ctx)}`);
+        return Number(r?.n ?? 0);
+    },
+    async build(ctx) {
+        const origin = exportOrigin();
+        const data = await rows(sql`
+            SELECT COALESCE(
+                       to_char((to_jsonb(v) ->> 'captured_at')::timestamptz AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD HH24:MI'),
+                       v.actual_visit_date::text) AS visited_at,
+                   to_jsonb(v) ->> 'account_id' AS account_id,
+                   a.business_entity_name AS dealer, a.city,
+                   ou.name AS owner, u.name AS visitor,
+                   v.visit_outcome, v.visit_remarks,
+                   CASE WHEN (to_jsonb(v) ->> 'verified') = 'true' THEN 'Yes' ELSE 'No' END AS verified,
+                   CASE WHEN v.gps_check_in_lat IS NOT NULL AND v.gps_check_in_lng IS NOT NULL
+                        THEN v.gps_check_in_lat::text || ', ' || v.gps_check_in_lng::text END AS location_pin,
+                   CASE WHEN jsonb_typeof(v.photos) = 'array' THEN v.photos ->> 0 END AS photo_raw
+              FROM lead_visits v
+              LEFT JOIN accounts a ON a.id = (to_jsonb(v) ->> 'account_id')
+              LEFT JOIN account_ownership ao ON ao.account_id = a.id
+              LEFT JOIN users ou ON ou.id = ao.owner_user_id
+              LEFT JOIN users u ON u.id::text = v.asm_id
+             WHERE ${dealerVisitsWhere(ctx)}
+             ORDER BY v.actual_visit_date DESC NULLS LAST, v.created_at DESC
+             LIMIT ${rowLimit(ctx)}
+        `);
+        return [
+            {
+                ...this.sheets[0],
+                rows: data.map(({ photo_raw, visit_outcome, ...r }) => ({
+                    ...r,
+                    visit_outcome: visit_outcome ? String(visit_outcome).replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase()) : null,
+                    photo: photoCell(photo_raw, origin),
+                })),
+            },
+        ];
+    },
+};
+
 // ────────────────────────────────── Quotes ──────────────────────────────────
 
 /**
@@ -2321,7 +2408,7 @@ const ecofyLeadsDataset: Dataset = {
 };
 
 export const DATASETS: readonly Dataset[] = [
-    leads, leadEvents, calls, visits, quotes, targets, dealerAccounts, dealerOnboarding,
+    leads, leadEvents, calls, visits, dealerVisits, quotes, targets, dealerAccounts, dealerOnboarding,
     invoicesDataset, expenses, customerLoanFiles, buyback, inventoryDataset, ecofyLeadsDataset,
 ];
 
