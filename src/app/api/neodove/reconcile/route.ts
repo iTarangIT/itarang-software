@@ -28,7 +28,7 @@ import {
     successResponse,
     withErrorHandler,
 } from "@/lib/api-utils";
-import { normalizePhone } from "@/lib/leads/dedupe";
+import { loadExistingByPhone, normalizePhone } from "@/lib/leads/dedupe";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 import { parseInboundEvent, callStatusFor, remarksFor } from "@/lib/neodove/mapper";
 import { attachCallEvidence, recordLeadDisposition } from "@/lib/neodove/inbound";
@@ -104,10 +104,10 @@ export const POST = withErrorHandler(async (req: Request) => {
         }
 
         try {
-            const leads = await db.execute<{ id: string }>(sql`
-                SELECT id FROM dealer_leads WHERE phone = ${mobile} LIMIT 1
-            `);
-            const dealerLeadId = leads[0]?.id;
+            // ID 248: the shared last-10-digit match (loadExistingByPhone), not
+            // `phone = text` — a lead stored as 10 digits never matched a "+91…"
+            // CSV number and was reported unresolved. Oldest copy wins.
+            const dealerLeadId = (await loadExistingByPhone([mobile])).get(mobile)?.id;
             if (!dealerLeadId) {
                 result.unresolved++;
                 if (unresolvedSamples.length < 10) unresolvedSamples.push(mobile);
