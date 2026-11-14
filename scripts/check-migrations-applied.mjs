@@ -4,6 +4,10 @@
 //   node scripts/check-migrations-applied.mjs database-2          # prod
 //   node scripts/check-migrations-applied.mjs database-2 E-300    # only E-300 and later
 //   ENV_FILE=../.env.local node scripts/check-migrations-applied.mjs database-1   (from a worktree)
+//   node scripts/check-migrations-applied.mjs database-2 --gate   # exit 1 on any gap (release gate, ID 226)
+//
+// A file whose header has a line `-- migration-gate: held` is written but deliberately
+// not applied yet (waiting for a go-ahead): it is listed as held and never fails the gate.
 //
 // Reads every migration file, pulls out the tables (CREATE TABLE IF NOT EXISTS),
 // columns (ADD COLUMN IF NOT EXISTS) and indexes (CREATE INDEX IF NOT EXISTS) it
@@ -15,9 +19,12 @@
 import postgres from "postgres";
 import { readFileSync, readdirSync } from "node:fs";
 
-const target = process.argv[2];
-const from = Number((process.argv[3] ?? "E-0").replace(/^E-/i, "")) || 0;
-if (!["database-1", "database-2"].includes(target)) throw new Error("usage: database-1 | database-2 [E-NNN]");
+const args = process.argv.slice(2);
+const gate = args.includes("--gate");
+const pos = args.filter((a) => !a.startsWith("--"));
+const target = pos[0];
+const from = Number((pos[1] ?? "E-0").replace(/^E-/i, "")) || 0;
+if (!["database-1", "database-2"].includes(target)) throw new Error("usage: database-1 | database-2 [E-NNN] [--gate]");
 const line = readFileSync(process.env.ENV_FILE ?? ".env.local", "utf8")
     .split(/\r?\n/)
     .find((l) => /^\s*#?\s*DATABASE_URL=/.test(l) && l.includes(`${target}.`));
@@ -31,11 +38,15 @@ const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const all = readdirSync("drizzle")
     .filter((f) => /^E-\d+.*\.sql$/i.test(f))
-    .map((f) => ({
-        f,
-        n: Number(f.match(/^E-(\d+)/i)[1]),
-        text: readFileSync(`drizzle/${f}`, "utf8").replace(/--[^\n]*/g, ""),
-    }))
+    .map((f) => {
+        const raw = readFileSync(`drizzle/${f}`, "utf8");
+        return {
+            f,
+            n: Number(f.match(/^E-(\d+)/i)[1]),
+            held: /^--\s*migration-gate:\s*held\b/im.test(raw),
+            text: raw.replace(/--[^\n]*/g, ""),
+        };
+    })
     .sort((a, b) => a.n - b.n || a.f.localeCompare(b.f));
 
 const laterMatches = (n, re) => all.some((x) => x.n > n && re.test(x.text));
@@ -47,8 +58,9 @@ const tableSuperseded = (n, t) =>
 // Either/or branches inside one migration: index created only when the other could not be.
 const ALTERNATIVES = { co_borrowers_lead_idx_nonunique: "co_borrowers_lead_unique" };
 
+const held = all.filter((x) => x.n >= from && x.held).map((x) => x.f);
 const wants = all
-    .filter((x) => x.n >= from)
+    .filter((x) => x.n >= from && !x.held)
     .map(({ f, n, text }) => {
         const tables = [...text.matchAll(/CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+("?[\w.]+"?)/gi)].map((m) => name(m[1]));
         const indexes = [...text.matchAll(/CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?IF\s+NOT\s+EXISTS\s+("?\w+"?)/gi)].map((m) => name(m[1]));
@@ -88,7 +100,9 @@ try {
         gaps++;
         console.log(`${w.f}\n    MISSING ${missing.join(", ")}${absent.length ? `\n    (table absent, skipped: ${absent.join(", ")})` : ""}`);
     }
+    if (held.length) console.log(`\nHeld (written, not applied on purpose): ${held.join(", ")}`);
     console.log(gaps ? `\n${gaps} migration file(s) not fully applied.` : "All checked migrations are present.");
+    if (gate && gaps) process.exitCode = 1;
 } finally {
     await sql.end();
 }

@@ -126,6 +126,12 @@ jobs:
           rm -rf .next/standalone/.next/static .next/standalone/public
           cp -r .next/static .next/standalone/.next/static
           if [ -d public ]; then cp -r public .next/standalone/public; fi
+          # Migration gate (ID 226, step B.6b): the check script and the migration files
+          # ride with the release so the box can compare them against database-2 before
+          # the swap. The script resolves `postgres` from standalone/node_modules.
+          mkdir -p .next/standalone/scripts
+          cp scripts/check-migrations-applied.mjs .next/standalone/scripts/
+          rm -rf .next/standalone/drizzle && cp -r drizzle .next/standalone/drizzle
           echo "standalone tree top-level:"
           ls -la .next/standalone | head -20
 
@@ -480,6 +486,29 @@ jobs:
             # Verify the SHIPPED tree (defends against transfer corruption).
             cd standalone
             node "$APP_DIR/scripts/verify-chunk-manifest.js"
+
+      # ── B.6b — migration gate (ID 226). Every drizzle/E-*.sql table, column and index
+      # this release's code expects must already be on database-2. Any gap fails the
+      # run HERE, before the swap, so the old build keeps serving. A migration that is
+      # written but deliberately not applied carries `-- migration-gate: held`.
+      - name: Migration gate (database-2)
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.PROD_VPS_HOST }}
+          username: ${{ secrets.PROD_VPS_USER }}
+          port: ${{ secrets.PROD_VPS_PORT }}
+          key: ${{ secrets.PROD_VPS_SSH_KEY }}
+          timeout: 60s
+          command_timeout: 3m
+          script_stop: false
+          envs: APP_DIR
+          script: |
+            set -eo pipefail
+            exec 2>&1
+            cd "$APP_DIR/releases/${{ github.sha }}/standalone"
+            [ -f scripts/check-migrations-applied.mjs ] || { echo "❌ migration gate script missing from the release"; exit 1; }
+            ENV_FILE="$APP_DIR/shared/.env" node scripts/check-migrations-applied.mjs database-2 --gate \
+              || { echo "❌ Migration gate: database-2 is missing the items listed above. Apply them (dry run first), then re-run the deploy. current still points at the previous release."; exit 1; }
 
       # ── B.7 — atomic symlink swap. Single rename(2). After this, a failure means
       # Stage C must symlink back to PREV.
