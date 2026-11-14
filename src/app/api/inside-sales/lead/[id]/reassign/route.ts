@@ -26,7 +26,9 @@ import { assertOwner } from "@/lib/leads/ownership";
 import { REASSIGN_REASON_MIN, ReassignError, reassignLead } from "@/lib/leads/reassign";
 import { notifyLeadsReassigned, notifyOwnersManager } from "@/lib/leads/newOwnerNotice";
 
-const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
+// ID 252 (decided 12 Nov): the Sales Head works the leads HE OWNS like an ASM;
+// the owner check below still applies, so anyone else's lead stays view-only.
+const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner", "sales_head"];
 
 const BodySchema = z.object({
     target_user_id: z.string().min(1),

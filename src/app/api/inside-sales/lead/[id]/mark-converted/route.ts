@@ -12,7 +12,9 @@ import { assertOwner } from "@/lib/leads/ownership";
 import { isOwnGstin, isValidGstin, normalizeGstin } from "@/lib/leads/gstin";
 import { ConvertLeadNotFoundError, markLeadConverted } from "@/lib/leads/markConverted";
 
-const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
+// ID 252 (decided 12 Nov): the Sales Head works the leads HE OWNS like an ASM;
+// the owner check below still applies, so anyone else's lead stays view-only.
+const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner", "sales_head"];
 
 // GSTIN is REQUIRED here (review R-11): it is the only reliable key from a
 // dealer's invoices back to this lead, and so to the SPOC who closed it. The

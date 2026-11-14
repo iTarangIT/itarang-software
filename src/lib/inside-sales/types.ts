@@ -470,7 +470,8 @@ export type AsmOption = {
  * routes decide whether it works, and they must agree.
  */
 // B3: ASMs claim from their territory pool too (Unclaimed tab on /asm).
-export const CLAIM_ROLES = ["inside_sales_rep", "admin", "partner", "asm"] as const;
+// ID 252: the Sales Head claims by number too — the lead is then his.
+export const CLAIM_ROLES = ["inside_sales_rep", "admin", "partner", "asm", "sales_head"] as const;
 
 /**
  * Roles that KEEP a lead they create — it is born owned by them, at Assigned
@@ -480,7 +481,8 @@ export const CLAIM_ROLES = ["inside_sales_rep", "admin", "partner", "asm"] as co
  * lead (admin) goes to the unassigned pool. Client-safe: the queue screens read
  * it to open the right tab after "Create lead"; createLead.ts enforces it.
  */
-export const KEEPS_CREATED_LEAD_ROLES = ["asm", "partner", "inside_sales_rep"] as const;
+// ID 252: a lead the Sales Head creates stays his.
+export const KEEPS_CREATED_LEAD_ROLES = ["asm", "partner", "inside_sales_rep", "sales_head"] as const;
 
 export function keepsCreatedLead(role: string | null | undefined): boolean {
     return (KEEPS_CREATED_LEAD_ROLES as readonly string[]).includes(role ?? "");

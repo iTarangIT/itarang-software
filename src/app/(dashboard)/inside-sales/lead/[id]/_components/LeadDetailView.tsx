@@ -42,7 +42,7 @@ export type ActiveModal =
     | "claim";
 
 /** ID 155: the roles POST/GET /api/inside-sales/lead/[id]/reassign accept (its MUTATE_ROLES). */
-const TEAM_REASSIGN_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
+const TEAM_REASSIGN_ROLES = ["inside_sales_rep", "asm", "admin", "partner", "sales_head"];
 
 type Props = {
     leadId: string;
