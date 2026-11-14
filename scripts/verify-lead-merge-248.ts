@@ -48,6 +48,12 @@ async function main() {
         INSERT INTO lead_touchpoints (dealer_lead_id, touchpoint_type, performed_by, performed_at, remarks)
         VALUES (${B}, 'inside_sales_call', ${asm.id}, NOW() - interval '2 days', 'TEST 248: call on the copy')
     `);
+    // A table that allows one row per lead, on BOTH copies: the merge must keep B's row on B
+    // (a unique clash) and still finish (14 Nov: the raw SAVEPOINT version aborted here).
+    await db.execute(sql`
+        INSERT INTO dealer_lead_phone_type (lead_id, phone, phone_type) VALUES (${A}, ${digits}, 'mobile'), (${B}, ${digits}, 'mobile')
+        ON CONFLICT DO NOTHING
+    `);
     console.log(`Created ${A} (…${digits.slice(-4)}) and ${B} (+91…${digits.slice(-4)}), a done visit on ${day} on each, one call on ${B}.\n`);
 
     // Refuses to keep the newer lead.
@@ -81,6 +87,10 @@ async function main() {
     check(a[0]?.lead_status === "Under_Discussion", "A keeps its own status");
     const marks = (await db.execute(sql`SELECT count(*)::int AS n FROM dealer_lead_field_changes WHERE field IN ('merged_from', 'merged_into') AND dealer_lead_id IN (${A}, ${B})`)) as unknown as Array<{ n: number }>;
     check(marks[0]?.n === 2, "merge recorded on both leads");
+    check(
+        r.keptOnCopy.some((k) => k.table === "dealer_lead_phone_type"),
+        "a one-row-per-lead table that clashes stays on the copy, and the merge still finishes",
+    );
 
     let again = false;
     try {

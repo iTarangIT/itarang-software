@@ -152,15 +152,18 @@ export async function mergeDealerLeads(input: { keepId: string; dropId: string; 
         const moved: MergeResult["moved"] = [];
         const keptOnCopy: MergeResult["keptOnCopy"] = [];
         for (const { table, column } of await referencingColumns(tx)) {
-            await tx.execute(sql`SAVEPOINT merge_move`);
+            // A nested transaction = the driver's own SAVEPOINT (postgres.js does not
+            // recover from a raw ROLLBACK TO SAVEPOINT): a unique clash rolls back only this
+            // table's move and the merge carries on.
             try {
-                const r = (await tx.execute(
-                    sql`UPDATE ${sql.raw(quoteIdent(table))} SET ${sql.raw(quoteIdent(column))} = ${keepId} WHERE ${sql.raw(quoteIdent(column))} = ${dropId} RETURNING 1 AS x`,
-                )) as unknown as unknown[];
-                await tx.execute(sql`RELEASE SAVEPOINT merge_move`);
+                const r = await tx.transaction(
+                    async (sp) =>
+                        (await sp.execute(
+                            sql`UPDATE ${sql.raw(quoteIdent(table))} SET ${sql.raw(quoteIdent(column))} = ${keepId} WHERE ${sql.raw(quoteIdent(column))} = ${dropId} RETURNING 1 AS x`,
+                        )) as unknown as unknown[],
+                );
                 if (r.length) moved.push({ table, column, rows: r.length });
             } catch (err) {
-                await tx.execute(sql`ROLLBACK TO SAVEPOINT merge_move`);
                 const reason = err instanceof Error ? err.message.split("\n")[0]! : String(err);
                 keptOnCopy.push({ table, column, reason });
             }
