@@ -79,6 +79,7 @@ import {
   RevenuePaceChart,
   type PacePoint,
 } from "@/components/dashboard/redesign/charts";
+import { expenseDepartmentLabel } from "@/lib/expenses";
 
 // "custom" is the from–to pair beside the presets: picking a date leaves no
 // preset highlighted, because the dates say what the window is.
@@ -1112,8 +1113,8 @@ export default function CEODashboard() {
                   key={d.department}
                   className="flex items-baseline justify-between gap-2 pl-3.5 text-[13px]"
                 >
-                  <span className="capitalize text-ink">
-                    {String(d.department).replace(/_/g, " ")}
+                  <span className="text-ink">
+                    {expenseDepartmentLabel(String(d.department))}
                   </span>
                   <span className="tabular-nums">{inr(Number(d.total))}</span>
                 </div>

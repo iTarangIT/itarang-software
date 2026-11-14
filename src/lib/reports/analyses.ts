@@ -23,6 +23,7 @@ import { doorLabel, originLabel } from "@/lib/leads/leadSourceVocab";
 import { TEAM_ROLES } from "@/lib/exports/datasets/types";
 import { humanCall, notDirectOnboarding } from "@/lib/reports/metricDefinitions";
 import { freshRepeatCtes, freshRepeatJoins, isFreshSql, isNewToItarangSql, visitedRowSql } from "@/lib/visits/freshRepeat";
+import { lostReasonWords } from "@/lib/leads/lostReasons";
 import {
     AI_BANDS,
     AI_NOT_SCORED,
@@ -113,10 +114,9 @@ function teamCond(team: string | null | undefined): SQL {
 const stateCond = (state: string | null | undefined): SQL =>
     state?.trim() ? sql` AND dl.state ILIKE ${`%${state.trim()}%`}` : sql``;
 
+/** ID 215: the shared words ("price_high" → "Price too high"), not the code with spaces. */
 function lostReasonLabel(v: string | null): string | null {
-    if (!v) return null;
-    const s = v.replace(/_/g, " ");
-    return s.charAt(0).toUpperCase() + s.slice(1);
+    return v ? lostReasonWords(v) : null;
 }
 
 // ─────────────────────────────── Lead sources ──────────────────────────────

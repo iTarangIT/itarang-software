@@ -59,8 +59,9 @@ describe("roleLabel", () => {
 
     // An unmapped role shows its raw value rather than blank: a new role should
     // look unfamiliar, not look like missing data.
-    it("falls back to the raw role", () => {
-        expect(roleLabel("service_engineer")).toBe("service_engineer");
+    it("ID 215: every role reads as words, an unlisted one too", () => {
+        expect(roleLabel("service_engineer")).toBe("Service Engineer");
+        expect(roleLabel("field_lead")).toBe("Field lead");
     });
 
     it("renders a null role as a dash", () => {

@@ -11,6 +11,7 @@ import { ChevronDown, ChevronRight, FileText } from "lucide-react";
 import FreshFileLink from "@/components/shared/FreshFileLink";
 import type { ReceivableRow } from "@/lib/dashboard/receivables";
 import { receivableFileNote, receivableSourceLabel } from "@/lib/dashboard/receivablesAgeing";
+import { invoiceStatusLabel } from "@/lib/sales/invoiceStatusLabel";
 
 export type Debtor = {
     key: string;
@@ -155,7 +156,7 @@ export default function DebtorTable({ debtors, owed }: { debtors: Debtor[]; owed
                                                                 )}
                                                                 <span className="block text-gray-500">
                                                                     {receivableSourceLabel(r)} ·{" "}
-                                                                    {(r.status ?? "no status").replace(/_/g, " ")}
+                                                                    {invoiceStatusLabel(r.status)}
                                                                 </span>
                                                             </td>
                                                             <td className="whitespace-nowrap px-3 py-2 text-gray-700">

@@ -24,6 +24,7 @@ import {
 import FreshFileLink from "@/components/shared/FreshFileLink";
 import { InfoTip } from "@/components/ui/info-tip";
 import { paymentsStaleText, receivablesSourceText } from "@/lib/sales/invoiceFreshnessRules";
+import { invoiceStatusLabel } from "@/lib/sales/invoiceStatusLabel";
 import DebtorTable, { type Debtor } from "./_components/DebtorTable";
 import VyaparPaymentUpload from "./_components/VyaparPaymentUpload";
 export const dynamic = "force-dynamic";
@@ -271,7 +272,7 @@ export default async function CeoReceivablesPage({
                                             </span>
                                         )}
                                         <span className="block text-xs text-gray-500">
-                                            {receivableSourceLabel(r)} · {(r.status ?? "no status").replace(/_/g, " ")}
+                                            {receivableSourceLabel(r)} · {invoiceStatusLabel(r.status)}
                                         </span>
                                     </td>
                                     <td className="px-4 py-3 text-gray-800">{r.customer_name ?? "—"}</td>

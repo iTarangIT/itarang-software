@@ -31,6 +31,7 @@ import {
 } from "@/lib/drive/scanClient";
 
 import { onFreshFileClick } from "@/lib/storage/freshFileLink";
+import { invoiceStatusLabel } from "@/lib/sales/invoiceStatusLabel";
 const STATUS_OPTIONS = [
   "draft",
   "sent",
@@ -116,17 +117,8 @@ function formatINR(n: number): string {
   return `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
 }
 
-// C27 (wording audit, 2 Nov): sentence case, plain words — no ALL CAPS.
-const STATUS_LABEL: Record<string, string> = {
-  draft: "Draft",
-  sent: "Sent",
-  overdue: "Overdue",
-  paid: "Paid",
-  partially_paid: "Partly paid",
-  void: "Void",
-  credit_note: "Credit note",
-};
-const statusLabel = (s: string) => STATUS_LABEL[s] ?? (s.charAt(0).toUpperCase() + s.slice(1)).replace(/_/g, " ");
+// C27 (wording audit, 2 Nov) / ID 215: one shared list of invoice status words.
+const statusLabel = (s: string) => invoiceStatusLabel(s);
 
 function StatusBadge({ status }: { status: string | null }) {
   const s = (status || "").toLowerCase();

@@ -69,6 +69,7 @@ import { BUSINESS_TYPE_OPTIONS, BUSINESS_TYPE_UNSET, BUSINESS_TYPE_UNSET_LABEL }
 import { orderByTeam } from "@/lib/users/teamRules";
 import type { TeamScorecardSubtotal } from "@/lib/admin/teamScorecardSubtotals";
 import { InvoicesReadUpTo } from "@/components/sales/InvoicesReadUpTo";
+import { lostReasonWords } from "@/lib/leads/lostReasons";
 
 type Period = "today" | "week" | "month";
 type TeamSeg = "all" | "field" | "inside";
@@ -1447,10 +1448,10 @@ export function SalesHeadOpsView() {
                         <div className="flex flex-col gap-2.5">
                             {salesLost.map((l) => (
                                 <div key={l.reason} className="grid grid-cols-[minmax(0,190px)_minmax(0,1fr)_44px] items-center gap-3">
-                                    <span className="truncate text-[13.5px] font-semibold capitalize">{l.reason.replace(/_/g, " ")}</span>
+                                    <span className="truncate text-[13.5px] font-semibold">{lostReasonWords(l.reason)}</span>
                                     <ProgressBar pct={(l.n / salesLost[0].n) * 100} />
                                     <span className="text-right text-[13.5px] font-bold tabular-nums">
-                                        <DrillNum value={l.n} onClick={() => openDrill(`Lost — ${l.reason.replace(/_/g, " ")}`, l.n, "lost_reason", { key: l.reason })} />
+                                        <DrillNum value={l.n} onClick={() => openDrill(`Lost: ${lostReasonWords(l.reason)}`, l.n, "lost_reason", { key: l.reason })} />
                                     </span>
                                 </div>
                             ))}

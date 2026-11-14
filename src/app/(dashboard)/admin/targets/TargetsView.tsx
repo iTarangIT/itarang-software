@@ -23,6 +23,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { History, Loader2, Plus, Send, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
+import { roleLabel } from "@/lib/admin/reportHelpers";
 import { TargetProgressCells, fmtTarget, fmtTargetPer, fmtTargetSum, progressHeaders } from "@/components/targets/TargetProgressCells";
 import {
     SALES_HEAD_METRIC_FOR_ROLES,
@@ -199,7 +200,7 @@ export function TargetsView() {
                                 .filter((p) => !alreadyIn.has(p.user_id))
                                 .map((p) => (
                                     <option key={p.user_id} value={p.user_id}>
-                                        {p.name ?? p.user_id} · {(p.role ?? "").replace(/_/g, " ")}
+                                        {p.name ?? p.user_id} · {roleLabel(p.role)}
                                     </option>
                                 ))}
                         </select>
@@ -360,7 +361,7 @@ function PersonCard({
             <div className="flex flex-wrap items-center gap-3 px-4 py-3">
                 <h2 className="text-sm font-semibold text-ink">
                     {name}
-                    <span className="ml-2 text-[11px] font-normal text-ink-muted">{(first.user_role ?? "").replace(/_/g, " ")}</span>
+                    <span className="ml-2 text-[11px] font-normal text-ink-muted">{roleLabel(first.user_role)}</span>
                     {noData && (
                         <span className="block text-[11px] font-normal text-ink-muted">Not measured: {NOT_MEASURED.no_data}</span>
                     )}
@@ -574,7 +575,7 @@ function PersonCard({
                     >
                         <option value="">Add a metric…</option>
                         {own.length > 0 && (
-                            <optgroup label={`${(first.user_role ?? "").replace(/_/g, " ")} metrics`}>
+                            <optgroup label={`${roleLabel(first.user_role)} metrics`}>
                                 {own.map((m) => (
                                     <option key={m} value={m}>
                                         {TARGET_METRICS[m].label}
