@@ -17,10 +17,12 @@
  * Usage:
  *   npx tsx scripts/seed-test-data.ts
  *
- * After running, use these credentials to log in:
- *   Dealer:     test-dealer@itarang.com / Test@1234
- *   Admin:      test-admin@itarang.com  / Test@1234
- *   Sales Head: test-sh@itarang.com     / Test@1234
+ * Logins it creates (password = SEED_TEST_PASSWORD, never written in the code — ID 225):
+ *   Dealer:     test-dealer@itarang.com
+ *   Admin:      test-admin@itarang.com
+ *   Sales Head: test-sh@itarang.com
+ * Sandbox only. These logins must not exist (or must be deactivated) on live:
+ * check with scripts/list-seeded-test-logins.ts.
  */
 
 import dotenv from 'dotenv';
@@ -47,7 +49,11 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
     auth: { autoRefreshToken: false, persistSession: false },
 });
 
-const PASSWORD = 'Test@1234';
+const PASSWORD = process.env.SEED_TEST_PASSWORD ?? '';
+if (PASSWORD.length < 10) {
+    console.error('Set SEED_TEST_PASSWORD (10+ characters) in your shell; the seed logins never use a password from the code (ID 225).');
+    process.exit(1);
+}
 const NOW = new Date();
 const NOW_ISO = NOW.toISOString();
 
