@@ -33,6 +33,7 @@ import {
 import {
   countDialsOnIstDay,
   DEFAULT_MAX_RETRIES,
+  lastConversation,
   planRetryDetailed,
   type RetryWindow,
 } from "@/lib/ai-dialer/retryPolicy";
@@ -517,8 +518,17 @@ export async function recordAttemptOutcome(opts: {
   let longHorizon: { at: Date; once: boolean } | null = null;
   // false = our line refused the dial (SIP 403 etc.) — refund the attempt.
   let consumesAttempt = true;
+  // 14 Nov 2026 — the dealer already spoke on an earlier dial of this row and
+  // this redial did not connect: the row stays Connected (status, outcome and
+  // call point at the conversation), and no further redial is booked. The
+  // history entry below still records what this dial really did.
+  const spoke =
+    opts.status !== "completed" && Array.isArray(r?.attempt_history)
+      ? lastConversation(r!.attempt_history as Array<{ status?: string; outcome?: string | null; call_id?: string | null }>)
+      : null;
+
   // max_retries NULL (pre-E-315 campaign) = DEFAULT_MAX_RETRIES; 0 = off.
-  if (r && (r.max_retries == null || r.max_retries > 0)) {
+  if (!spoke && r && (r.max_retries == null || r.max_retries > 0)) {
     const scheduled =
       r.schedule_mode && r.schedule_mode !== "now" && r.window_start && r.window_end;
     const window: RetryWindow = scheduled
@@ -570,11 +580,15 @@ export async function recordAttemptOutcome(opts: {
   const updated = await db
     .update(dialerCampaignLeads)
     .set({
-      status: opts.status,
       completed_at: new Date(),
-      bolna_call_id: opts.bolnaCallId ?? null,
-      call_outcome: opts.outcome ?? null,
-      intent_score: opts.intentScore ?? null,
+      ...(spoke
+        ? { status: "completed", bolna_call_id: spoke.call_id, call_outcome: spoke.outcome }
+        : {
+            status: opts.status,
+            bolna_call_id: opts.bolnaCallId ?? null,
+            call_outcome: opts.outcome ?? null,
+            intent_score: opts.intentScore ?? null,
+          }),
       next_attempt_at: retryAt,
       // The claim already counted this dial; hand it back when it never left
       // our side of the line.

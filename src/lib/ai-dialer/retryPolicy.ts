@@ -223,6 +223,25 @@ export function withinDialerHours(window: RetryWindow): RetryWindow {
     return { ...window, start: minutesToHhmm(start), end: minutesToHhmm(end) };
 }
 
+/**
+ * The latest attempt in which the dealer SPOKE (status 'completed'), or null.
+ *
+ * 14 Nov 2026 — once a dealer has spoken the row stays Connected: a redial
+ * after it that does not connect (the "Dropped mid-call" 15-min redial hitting
+ * SIP 480, say) must not overwrite it with No Response, and ends the AI's work
+ * on the row instead of booking more redials (campaignTracker.recordAttemptOutcome).
+ */
+export function lastConversation(
+    history: ReadonlyArray<{ status?: string | null; outcome?: string | null; call_id?: string | null }> | null | undefined,
+): { outcome: string | null; call_id: string | null } | null {
+    if (!Array.isArray(history)) return null;
+    for (let i = history.length - 1; i >= 0; i--) {
+        const h = history[i];
+        if (h?.status === "completed") return { outcome: h.outcome ?? null, call_id: h.call_id ?? null };
+    }
+    return null;
+}
+
 /** Counted dials in `history` on the IST day of `now` (entries carry ISO `at`). */
 export function countDialsOnIstDay(
     history: ReadonlyArray<{ at?: string | null; counted?: boolean }>,
