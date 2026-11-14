@@ -38,6 +38,8 @@ import { triggerElevenLabsCall } from "@/lib/ai/elevenlabs/triggerCall";
 import {
   AI_CONNECTED_CALL_SQL,
   isAiDialable,
+  isListDialableAssigned,
+  NON_CONTACT_TOUCHPOINT_TYPES,
 } from "@/lib/ai-dialer/exclusionFilter";
 import { classifyCallEnd } from "@/lib/ai-dialer/campaignLeadStatus";
 import {
@@ -417,6 +419,16 @@ export async function advanceCampaign(
           dealer_name: dealerLeads.dealer_name,
           lead_status: dealerLeads.lead_status,
           ai_recall_status: dealerLeads.ai_recall_status,
+          // 14 Nov 2026 — has a PERSON worked this lead (call, visit, note…)?
+          // Decides whether a list campaign may ring an assigned lead.
+          human_contacted: sql<boolean>`EXISTS (
+            SELECT 1 FROM lead_touchpoints t
+             WHERE t.dealer_lead_id = ${dealerLeads.id}
+               AND t.touchpoint_type NOT IN (${sql.join(
+                 NON_CONTACT_TOUCHPOINT_TYPES.map((t) => sql`${t}`),
+                 sql`, `,
+               )})
+          )`,
           // Projected here rather than checked inside isAiDialable(), which is
           // shared with the NeoDove human push. One correlated EXISTS on an
           // indexed column, on a single-row primary-key lookup, once per dial —
@@ -532,7 +544,14 @@ export async function advanceCampaign(
       // sales state after the campaign was queued; skip it the same way as a
       // no-phone lead so the campaign keeps advancing and the dialer never
       // re-contacts a lead Inside Sales / ASM are working.
-      if (!isAiDialable(lead[0])) {
+      // 14 Nov 2026 — an uploaded calling list may ring a lead that is assigned
+      // to a rep but that no person has contacted yet (isListDialableAssigned).
+      const fromUploadedList =
+        (cmp[0].region_filter as { kind?: string } | null)?.kind === "list";
+      const assignedButUncontacted =
+        fromUploadedList &&
+        isListDialableAssigned({ ...lead[0], humanContacted: Boolean(lead[0].human_contacted) });
+      if (!isAiDialable(lead[0]) && !assignedButUncontacted) {
         console.warn("[advanceCampaign] skipping lead now in an active sales state", {
           campaignId,
           leadId: claimed.leadId,
