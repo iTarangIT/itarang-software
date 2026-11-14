@@ -62,13 +62,43 @@ export function missedCallbackRecipients(salesHeads: Person[], manager: Person |
     return [...out];
 }
 
+/** ID 212 fallback: the missed callback as a bell + email to the owner's manager. Never throws. */
+async function bellAndEmailManager(cb: MissedCallback, managerId: string): Promise<void> {
+    try {
+        const { emit } = await import("@/lib/notifications/emit");
+        await emit({
+            // The same type as the loop's overdue alert, so the bell and email settings match.
+            type: "lead.callback_overdue",
+            title: `Callback missed: ${cb.name ?? "a promised callback"}`,
+            message: `${cb.name ?? cb.lead_id}: the callback agreed for ${istDue(cb.due_at)} has no call 30 minutes later (owner: ${cb.owner_name ?? "not set"}).`,
+            leadId: cb.lead_id,
+            stage: "AI callback",
+            to: [
+                {
+                    audience: { kind: "user", userId: managerId },
+                    as: { party: "admin", label: "Manager" },
+                    href: `/leads?lead=${encodeURIComponent(cb.lead_id)}`,
+                },
+            ],
+            email: true,
+        });
+    } catch (err) {
+        console.warn("[callback-missed] manager bell/email failed:", err instanceof Error ? err.message : err);
+    }
+}
+
 const PHONE = sql`COALESCE(
     (SELECT b.wa_phone FROM assistant_wa_bindings b
       WHERE b.user_id = u.id AND b.status = 'active' AND b.wa_phone IS NOT NULL LIMIT 1),
     u.phone)`;
 
-/** WhatsApp the Sales Heads and the owner's manager about a missed callback. Never throws. */
-export async function alertMissedCallbackWhatsApp(cb: MissedCallback): Promise<number> {
+/**
+ * WhatsApp the Sales Heads and the owner's manager about a missed callback. Never throws.
+ * `fallbackBellEmail` (ID 212, settings › AI callbacks): while the template is not approved,
+ * the manager also gets the alert as a bell + email (the Sales Head already has both from
+ * the loop), because plain WhatsApp text rarely reaches them.
+ */
+export async function alertMissedCallbackWhatsApp(cb: MissedCallback, opts: { fallbackBellEmail?: boolean } = {}): Promise<number> {
     try {
         const { db } = await import("@/lib/db");
         const salesHeads = (await db.execute(sql`
@@ -87,6 +117,11 @@ export async function alertMissedCallbackWhatsApp(cb: MissedCallback): Promise<n
                 `)) as unknown as Person[];
                 manager = m ?? null;
             }
+        }
+        // ID 212 fallback first: it must reach the manager even when nobody has a WhatsApp number.
+        if (opts.fallbackBellEmail && manager && manager.user_id !== cb.assigned_user_id) {
+            const { resolveTemplate: tplOf } = await import("@/lib/whatsapp/templates");
+            if (!tplOf("callback_missed")) await bellAndEmailManager(cb, manager.user_id);
         }
         const to = missedCallbackRecipients(salesHeads, manager, cb.assigned_user_id);
         if (to.length === 0) return 0;

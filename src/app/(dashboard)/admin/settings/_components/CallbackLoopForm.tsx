@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 type Settings = {
     ownerIds: string[];
     neodovePush: boolean;
+    alertFallback?: boolean;
     updatedAt: string | null;
 };
 type OnTime = { userId: string; name: string | null; due: number; onTime: number; pct: number | null };
@@ -27,7 +28,7 @@ const QUERY_KEY = ["callback-loop-settings"];
 
 export function CallbackLoopForm() {
     const qc = useQueryClient();
-    const [draft, setDraft] = useState<{ ownerIds: string[]; neodovePush: boolean } | null>(null);
+    const [draft, setDraft] = useState<{ ownerIds: string[]; neodovePush: boolean; alertFallback: boolean } | null>(null);
     const [pick, setPick] = useState("");
     const [saving, setSaving] = useState(false);
 
@@ -63,7 +64,7 @@ export function CallbackLoopForm() {
 
     const saved = settingsQ.data.settings;
     const onTime = settingsQ.data.onTime ?? [];
-    const current = draft ?? { ownerIds: saved.ownerIds, neodovePush: saved.neodovePush };
+    const current = draft ?? { ownerIds: saved.ownerIds, neodovePush: saved.neodovePush, alertFallback: saved.alertFallback === true };
     const users = usersQ.data ?? [];
     const nameOf = (id: string) => users.find((u) => u.user_id === id)?.name ?? id;
     const dirty = draft !== null;
@@ -186,6 +187,23 @@ export function CallbackLoopForm() {
                         with the brief (retried 15 minutes before it is due if that did not go through). Turn on only
                         after the one-off test: an owned test lead reaches her NeoDove list and her call comes back
                         under her name.
+                    </span>
+                </span>
+            </label>
+
+            <label className="flex items-start gap-2 text-sm text-ink">
+                <input
+                    type="checkbox"
+                    className="mt-1"
+                    checked={current.alertFallback}
+                    onChange={(e) => update({ alertFallback: e.target.checked })}
+                />
+                <span>
+                    Missed-callback alert by bell and email too (until WhatsApp is approved)
+                    <span className="block text-xs text-ink-muted">
+                        30 minutes after a missed callback, the ISR&apos;s manager also gets a bell and an email (the Sales
+                        Head already does). Use it until Meta approves the WhatsApp template: plain WhatsApp reaches only
+                        people who messaged the CRM number in the last 24 hours. Waiting for Kartik&apos;s OK.
                     </span>
                 </span>
             </label>
