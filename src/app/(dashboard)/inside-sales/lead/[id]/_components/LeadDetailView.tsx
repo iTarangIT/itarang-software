@@ -261,6 +261,7 @@ export function LeadDetailView({ leadId, viewerId, viewerRole, backHref = "/insi
                 onSuccess={onActionSuccess}
             />
             <MarkLostModal
+                viewerRole={viewerRole}
                 key={lostPrefill ?? "none"}
                 open={activeModal === "mark_lost"}
                 onClose={() => {

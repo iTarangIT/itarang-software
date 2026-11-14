@@ -74,6 +74,12 @@ export async function changeLostReason(input: {
                        WHEN ${plan.to}::text = 'business_closed' THEN 'excluded'
                        WHEN ${plan.from}::text = 'business_closed' AND ai_recall_status = 'excluded' THEN NULL
                        ELSE ai_recall_status END,
+                   -- ID 233: a test lead is out of every count (is_active false); a lead
+                   -- moved off test_lead counts again.
+                   is_active = CASE
+                       WHEN ${plan.to}::text = 'test_lead' THEN false
+                       WHEN ${plan.from}::text = 'test_lead' THEN true
+                       ELSE is_active END,
                    updated_at = NOW()
              WHERE id = ${input.leadId}
         `);

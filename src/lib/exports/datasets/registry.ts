@@ -41,6 +41,7 @@ import { onboardingStall, STALL_LABEL } from "@/lib/onboarding/stall";
 import { connectedCall, engagedCall, engagedState, humanCall } from "@/lib/reports/metricDefinitions";
 import { TARGET_METRIC_KEYS, TARGET_STATUS_LABEL, TARGET_STATUSES } from "@/lib/targets/rules";
 import { CLOSED_LEAD_STATUSES, contactabilityText, leadStatusText } from "./labels";
+import { lostReasonWords } from "@/lib/leads/lostReasons";
 import { listTargets, targetViewerFor, targetVisibleSql } from "@/lib/targets/service";
 
 import { DOWNLOAD_ROW_CAP, initialsOf, TEAM_ROLES, type DatasetInfo, type DatasetSheet } from "./types";
@@ -579,12 +580,17 @@ const leads: Dataset = {
                 ...leadsSheet,
                 rows: leadRows.map((r) => {
                     const b = billing.get(r.lead_id);
+                    const extra = (more.get(r.lead_id) ?? {}) as Record<string, unknown>;
+                    const lostCode = typeof extra.lost_reason === "string" ? extra.lost_reason : null;
                     return {
-                        ...(more.get(r.lead_id) ?? {}),
+                        ...extra,
                         ...r,
                         dealer_name: r.dealer_name ?? r.shop_name,
-                        // ID 224: Status in words, as on screen.
-                        lead_status: leadStatusText(r.lead_status),
+                        // ID 224: Status in words, as on screen. ID 233: a test lead stays in
+                        // the file (it is in no count), marked.
+                        lead_status: lostCode === "test_lead" ? "Lost (test lead)" : leadStatusText(r.lead_status),
+                        // ID 224 item 3: the lost reason in words.
+                        lost_reason: lostReasonWords(lostCode) || null,
                         business_type: businessTypeLabel(r.business_type),
                         invoices: b?.n ?? 0,
                         billed: b?.total ?? null,

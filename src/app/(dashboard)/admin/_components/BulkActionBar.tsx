@@ -22,6 +22,7 @@ import {
     LOST_REASON,
 } from "@/lib/lifecycle/transitions";
 import type { UserOption } from "@/lib/admin/types";
+import { lostReasonWords } from "@/lib/leads/lostReasons";
 
 type Mode = null | "reassign" | "mark_lost";
 
@@ -433,7 +434,7 @@ export function BulkActionBar({
                                     (r) => r !== "onboarding_dropout",
                                 ).map((r) => (
                                     <option key={r} value={r}>
-                                        {r.replace(/_/g, " ")}
+                                        {lostReasonWords(r)}
                                     </option>
                                 ))}
                             </select>

@@ -37,7 +37,10 @@ const EVENT_ONLY_STATUSES: readonly string[] = ["Won", "Converted", "Transferred
 export const StatusChoice = z
     .enum(tuple([...LEAD_STATUS.filter((s) => !EVENT_ONLY_STATUSES.includes(s)), NO_CHANGE]))
     .describe(`A lead status, or "${NO_CHANGE}". Omit when the rep did not say.`);
-export const LostReason = z.enum(LOST_REASON);
+// ID 233: test_lead is Admin / Sales Head / CEO only; the assistant serves ISRs and ASMs.
+export const LostReason = z.enum(
+    LOST_REASON.filter((r) => r !== "test_lead") as unknown as [Exclude<(typeof LOST_REASON)[number], "test_lead">, ...Exclude<(typeof LOST_REASON)[number], "test_lead">[]],
+);
 export const Interest = z.enum(INTEREST_LEVELS);
 export const VisitStatus = z.enum(VISIT_STATUS);
 export const VisitOutcome = z.enum(VISIT_OUTCOME);

@@ -256,7 +256,7 @@ export const ANALYST_RULES: ReadonlyArray<{ topics: readonly AnalystTopic[]; tex
     {
         topics: ["leads"],
         text:
-            "Leads in = every active dealer_leads row created in the period, whatever its source (bulk imports included), except source_door 'direct_onboarding'.",
+            "Leads in = every active dealer_leads row created in the period, whatever its source (bulk imports included), except source_door 'direct_onboarding'. A lead Lost with lost_reason 'test_lead' is a test lead: inactive, in no count.",
     },
     // ID 215 (2 Nov): the screens renamed two statuses; the stored codes did not change
     // (Names tab rule 8). An "activity" on screen is a lead_touchpoints row.

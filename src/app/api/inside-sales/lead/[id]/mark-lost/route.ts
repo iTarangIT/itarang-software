@@ -14,6 +14,7 @@ import {
     LostLeadNotFoundError,
     LostNotesRequiredError,
     markLeadLost,
+    TestLeadRoleError,
 } from "@/lib/leads/markLost";
 
 const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
@@ -52,6 +53,7 @@ export const POST = withErrorHandler(
                 return errorResponse(err.message, 400);
             }
             if (err instanceof LostLeadNotFoundError) return errorResponse("Lead not found", 404);
+            if (err instanceof TestLeadRoleError) return errorResponse(err.message, 403);
             throw err;
         }
 

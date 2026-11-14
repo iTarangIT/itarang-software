@@ -423,10 +423,16 @@ export function aiSignalsJoin(f: LeadListFilters) {
         ) ai ON true`;
 }
 
-function buildWhere(f: LeadListFilters, opts?: { ignoreIntent?: boolean }) {
+function buildWhere(f: LeadListFilters, opts?: { ignoreIntent?: boolean; keepTestLeads?: boolean }) {
     // Soft-delete aware. This is the merged base predicate: it replaces
     // /leads' old `phone IS NOT NULL` (which also let deleted leads through).
-    const conds = [sql`dl.is_active IS NOT FALSE`];
+    // ID 233: a lead closed as a test lead is inactive (out of every count and
+    // list) but the downloads keep it, marked "Test lead".
+    const conds = [
+        opts?.keepTestLeads
+            ? sql`(dl.is_active IS NOT FALSE OR dl.lost_reason = 'test_lead')`
+            : sql`dl.is_active IS NOT FALSE`,
+    ];
 
     if (f.status === UNASSIGNED_FILTER) {
         conds.push(sql`dl.current_owner_id IS NULL`);
@@ -639,7 +645,7 @@ function buildWhere(f: LeadListFilters, opts?: { ignoreIntent?: boolean }) {
  * Assumes the caller aliases dealer_leads as `dl`.
  */
 export function buildExportWhere(f: LeadListFilters) {
-    return buildWhere(f);
+    return buildWhere(f, { keepTestLeads: true });
 }
 
 export async function fetchLeadListRows(

@@ -19,6 +19,7 @@ export const LOST_REASON_WORDS: Readonly<Record<LostReason, string>> = Object.fr
     onboarding_rejected: "Onboarding rejected",
     lost_to_competition: "Lost to competition",
     moved_to_other_business: "Moved to other business",
+    test_lead: "Test lead",
 });
 
 /** "price_high" → "Price too high"; an unknown code still reads as words; blank stays blank. */

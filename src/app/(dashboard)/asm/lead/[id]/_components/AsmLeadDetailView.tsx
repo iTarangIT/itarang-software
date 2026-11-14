@@ -265,6 +265,7 @@ export function AsmLeadDetailView({ leadId, viewerId, viewerRole }: Props) {
                 }}
             />
             <MarkLostModal
+                viewerRole={viewerRole}
                 key={lostPrefill ?? "none"}
                 open={activeModal === "mark_lost"}
                 onClose={() => {

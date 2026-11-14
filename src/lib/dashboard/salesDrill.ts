@@ -36,7 +36,7 @@ import { asmTransferRecipientFromVisitSql } from "@/lib/leads/closingOwner";
 import { accountOwnerOn, dealerLeadByGstin, GSTIN_KEY } from "@/lib/leads/gstinMatch";
 import { hasAccountOwnershipTables } from "@/lib/accounts/tables";
 import { ENGAGED_OUTCOMES } from "@/lib/asm/types";
-import { LOST_REASON } from "@/lib/lifecycle/transitions";
+import { SALES_LOST_REASONS } from "@/lib/lifecycle/transitions";
 import { FV_COLUMN, fieldVisitSegmentsSql, type FvMeasure } from "@/lib/dashboard/fieldVisitTrend";
 
 export const DRILL_KINDS = [
@@ -372,7 +372,7 @@ async function leadEvents(kind: DrillKind, f: DrillFilters, persons: string[] | 
                               WHERE x.dealer_lead_id = dl.id AND x.to_status = 'Lost' AND x.from_status IS DISTINCT FROM 'Lost'
                               ORDER BY x.changed_at DESC LIMIT 1) h ON TRUE
                         WHERE dl.lead_status = 'Lost'
-                          AND dl.lost_reason IN (${list(LOST_REASON.filter((r) => r !== "onboarding_dropout"))})
+                          AND dl.lost_reason IN (${list(SALES_LOST_REASONS)})
                           AND dl.closed_at IS NOT NULL AND ${onIstDays(sql`dl.closed_at`, f)}
                           AND COALESCE(h.from_status, 'Unknown') = ${key ?? ""} ${scope}`;
         default: {
