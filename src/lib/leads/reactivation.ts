@@ -93,6 +93,7 @@ export async function reactivateLead(opts: {
                 assigned_at = ${newOwnerId ? sql`NOW()` : sql`assigned_at`},
                 updated_at = NOW()
                 ${liftRecallExclusion}
+                ${lead.lost_reason === "test_lead" ? sql`, is_active = true` : sql``}
             WHERE id = ${leadId}
         `);
 

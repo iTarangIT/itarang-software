@@ -11,7 +11,7 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
-import { isHighImpactLostReason, type LeadStatus, type LostReason } from "@/lib/lifecycle/transitions";
+import { canGiveLostReason, isHighImpactLostReason, type LeadStatus, type LostReason } from "@/lib/lifecycle/transitions";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -70,9 +70,19 @@ export type MarkLostInput = {
 };
 
 /** The same refusals the route has always made, before anything is written. */
+/** ID 233: "Test lead" is for Admin, Sales Head and CEO only. */
+export class TestLeadRoleError extends Error {
+    constructor() {
+        super("Only Admin, Sales Head or CEO can close a lead as a test lead.");
+    }
+}
+
 export function checkMarkLost(
-    input: Pick<MarkLostInput, "reason" | "notes" | "confirmedHighImpact" | "competitorName">,
+    input: Pick<MarkLostInput, "reason" | "notes" | "confirmedHighImpact" | "competitorName"> & {
+        actor?: MarkLostInput["actor"];
+    },
 ): void {
+    if (!canGiveLostReason(input.reason, input.actor?.role)) throw new TestLeadRoleError();
     if (input.reason === "other" && !input.notes?.trim()) throw new LostNotesRequiredError();
     if (input.reason === "lost_to_competition" && !input.competitorName?.trim()) throw new CompetitorRequiredError();
     if (isHighImpactLostReason(input.reason) && !input.confirmedHighImpact) throw new HighImpactUnconfirmedError();
@@ -125,6 +135,13 @@ export async function markLeadLost(input: MarkLostInput, opts?: { tx?: Tx }): Pr
             },
             { tx },
         );
+
+        // ID 233: a test lead leaves every count and list the way a soft-deleted lead
+        // does (is_active false, which the counts already read); the downloads keep it,
+        // marked (leadListQuery buildExportWhere). Changing the reason back restores it.
+        if (input.reason === "test_lead") {
+            await tx.execute(sql`UPDATE dealer_leads SET is_active = false, updated_at = NOW() WHERE id = ${input.leadId}`);
+        }
     };
     return opts?.tx ? run(opts.tx) : db.transaction(run);
 }

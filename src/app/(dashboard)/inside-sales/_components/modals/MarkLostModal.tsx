@@ -6,7 +6,7 @@ import { Modal } from "../Modal";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { HighImpactConfirmDialog } from "../HighImpactConfirmDialog";
-import { LOST_REASON, isHighImpactLostReason, type LostReason } from "@/lib/lifecycle/transitions";
+import { LOST_REASON, canGiveLostReason, isHighImpactLostReason, type LostReason } from "@/lib/lifecycle/transitions";
 
 type Props = {
     open: boolean;
@@ -15,6 +15,8 @@ type Props = {
     onSuccess: () => void;
     /** ID 76: pre-filled from a Lost-type call or visit outcome. */
     defaultReason?: LostReason | null;
+    /** ID 233: "Test lead" is offered only to Admin, Sales Head and CEO. */
+    viewerRole?: string | null;
 };
 
 // Exported for "Change Lost reason" (ChangeLostReasonButton, ID 136), which
@@ -35,9 +37,10 @@ export const LOST_REASON_LABELS: Record<LostReason, string> = {
     onboarding_rejected: "Onboarding rejected",
     lost_to_competition: "Lost to competition (name the competitor)",
     moved_to_other_business: "Moved to other business",
+    test_lead: "Test lead (left out of every count)",
 };
 
-export function MarkLostModal({ open, onClose, leadId, onSuccess, defaultReason }: Props) {
+export function MarkLostModal({ open, onClose, leadId, onSuccess, defaultReason, viewerRole }: Props) {
     const [reason, setReason] = useState<LostReason | "">(defaultReason ?? "");
     const [competitor, setCompetitor] = useState("");
     const [notes, setNotes] = useState("");
@@ -129,7 +132,7 @@ export function MarkLostModal({ open, onClose, leadId, onSuccess, defaultReason 
                             onChange={(e) => setReason(e.target.value as LostReason | "")}
                         >
                             <option value="">— select —</option>
-                            {LOST_REASON.filter((r) => r !== "onboarding_dropout" && r !== "onboarding_rejected").map((r) => (
+                            {LOST_REASON.filter((r) => r !== "onboarding_dropout" && r !== "onboarding_rejected" && canGiveLostReason(r, viewerRole)).map((r) => (
                                 <option key={r} value={r}>{LOST_REASON_LABELS[r]}</option>
                             ))}
                         </select>

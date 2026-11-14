@@ -43,7 +43,7 @@ import { sql, type SQL } from "drizzle-orm";
 import { businessTypeFilterParam } from "@/lib/leads/businessType";
 
 import { db } from "@/lib/db";
-import { OPEN_STATUSES, LOST_REASON } from "@/lib/lifecycle/transitions";
+import { OPEN_STATUSES, SALES_LOST_REASONS } from "@/lib/lifecycle/transitions";
 import { engagedCall, humanCall } from "@/lib/reports/metricDefinitions";
 import { leadScopeSql, type LeadScopeFilters } from "@/lib/leads/leadScopeSql";
 import { clockStats, hasLeadClocks, type ClockStats } from "@/lib/leads/clocks";
@@ -262,7 +262,7 @@ async function quotes(f: MeasureFilters): Promise<QuoteBoxes> {
 async function lostStage(f: MeasureFilters): Promise<LostStageRow[]> {
     // The Lost report's "Sales lost" population (admin/reports.ts lostAnalysis):
     // lead_status Lost, closed in the period, a sales lost reason.
-    const reasons = LOST_REASON.filter((r) => r !== "onboarding_dropout");
+    const reasons = SALES_LOST_REASONS;
     const rows = await run(sql`
         SELECT COALESCE(h.from_status, 'Unknown') AS stage, COUNT(*)::int AS n
           FROM dealer_leads dl

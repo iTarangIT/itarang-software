@@ -19,10 +19,13 @@ import { defineApplier } from "../../applierSpec";
 import { highImpactConsequence, highImpactWarning } from "./logCall";
 import { Remarks } from "./vocabSchemas";
 
-/** The reasons a rep may pick on the screen — every LOST_REASON but the admin-only one. */
-export const REP_LOST_REASONS = LOST_REASON.filter((r) => r !== "onboarding_dropout") as Exclude<
+/**
+ * The reasons a rep may pick on the screen — every LOST_REASON but the admin-only ones
+ * (onboarding_dropout; ID 233 test_lead, Admin / Sales Head / CEO only).
+ */
+export const REP_LOST_REASONS = LOST_REASON.filter((r) => r !== "onboarding_dropout" && r !== "test_lead") as Exclude<
     LostReason,
-    "onboarding_dropout"
+    "onboarding_dropout" | "test_lead"
 >[];
 
 export const MarkLostPlan = z.object({

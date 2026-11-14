@@ -264,6 +264,8 @@ async function lostAnalysis(f: DashboardFilters): Promise<ReportResult> {
         SELECT dl.lost_reason, COUNT(*)::text AS c
         FROM dealer_leads dl
         WHERE dl.lead_status = 'Lost' ${dateRange("dl.closed_at", f, "tz")} ${leadScopeSql(f)}
+          -- ID 233: a test lead is in no count.
+          AND dl.lost_reason IS DISTINCT FROM 'test_lead'
         GROUP BY dl.lost_reason
     `);
     const dropoutRows = await db.execute<{
@@ -289,6 +291,8 @@ async function lostAnalysis(f: DashboardFilters): Promise<ReportResult> {
         // ID 170: a lead Lost with reason onboarding_dropout is already counted
         // under "Onboarding dropout" below (it carries onboarding_dropout_reason).
         if (reason === "onboarding_dropout") continue;
+        // ID 233: a test lead is in no count, so it has no row.
+        if (reason === "test_lead") continue;
         out.push({ category: "Sales lost", reason, count: lostMap.get(reason) ?? 0 });
     }
     for (const reason of ONBOARDING_DROPOUT_REASONS) {

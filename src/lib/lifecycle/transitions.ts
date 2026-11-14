@@ -66,8 +66,27 @@ export const LOST_REASON = [
   // (dealer_leads.competitor_name, E-314).
   "lost_to_competition",
   "moved_to_other_business",
+  // ID 233 (14 Nov): a test lead made on live. Kept in downloads (marked), left
+  // out of every count. Only Admin, Sales Head and CEO can give it.
+  "test_lead",
 ] as const;
 export type LostReason = (typeof LOST_REASON)[number];
+
+/**
+ * "Sales lost" in reports: every reason but the onboarding drop-out (a separate review)
+ * and, ID 233, a test lead (out of every count).
+ */
+export const SALES_LOST_REASONS: readonly LostReason[] = LOST_REASON.filter(
+  (r) => r !== "onboarding_dropout" && r !== "test_lead",
+);
+
+/** ID 233: who may close a lead as a test lead (Mark Lost, Change Lost reason, bulk). */
+export const TEST_LEAD_ROLES: readonly string[] = ["admin", "sales_head", "ceo"];
+
+/** May this role give this Lost reason? Every reason but test_lead is open to whoever may Mark Lost. */
+export function canGiveLostReason(reason: string, role: string | null | undefined): boolean {
+  return reason !== "test_lead" || TEST_LEAD_ROLES.includes(role ?? "");
+}
 
 // Trigger a confirmation modal explaining the consequence before close.
 export const HIGH_IMPACT_LOST_REASONS = [

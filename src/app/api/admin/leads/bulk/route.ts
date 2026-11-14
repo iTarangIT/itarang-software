@@ -20,6 +20,7 @@ import { auditLogs } from "@/lib/db/schema";
 import { StatusGuardError, writeTouchpoint } from "@/lib/touchpoints/write";
 import {
     CompetitorRequiredError,
+    TestLeadRoleError,
     HighImpactUnconfirmedError,
     LostNotesRequiredError,
     checkMarkLost,
@@ -342,7 +343,8 @@ export const POST = withErrorHandler(async (req: Request) => {
             competitorName: body.competitor_name ?? null,
         };
         try {
-            checkMarkLost(lost);
+            // ID 233: the role check (test_lead) is part of the same rules.
+            checkMarkLost({ ...lost, actor: { id: user.id, role: user.role } });
         } catch (err) {
             if (
                 err instanceof LostNotesRequiredError ||
@@ -351,6 +353,7 @@ export const POST = withErrorHandler(async (req: Request) => {
             ) {
                 return errorResponse(err.message, 400);
             }
+            if (err instanceof TestLeadRoleError) return errorResponse(err.message, 403);
             throw err;
         }
         for (const lead of leads) {
