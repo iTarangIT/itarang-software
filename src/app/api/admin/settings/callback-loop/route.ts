@@ -28,6 +28,8 @@ const ROLES = ["admin", "ceo", "sales_head"];
 const BodySchema = z.object({
     ownerIds: z.array(z.string().trim().min(1)).max(50),
     neodovePush: z.boolean(),
+    /** ID 212: bell + email to the ISR's manager until the WhatsApp template is approved. */
+    alertFallback: z.boolean().optional(),
 });
 
 export const GET = withErrorHandler(async () => {

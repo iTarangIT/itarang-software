@@ -82,6 +82,12 @@ export type CallbackLoopSettings = {
     cursor: number;
     /** Push the lead into the ISR's NeoDove campaign before the due time. Off until tested. */
     neodovePush: boolean;
+    /**
+     * ID 212 (proposed, waiting for Kartik): until Meta approves the WhatsApp template, the
+     * 30-minute missed-callback alert also goes to the ISR's manager as a bell + email (plain
+     * WhatsApp reaches only people who messaged the CRM number in the last 24 hours). Off by default.
+     */
+    alertFallback: boolean;
     updatedBy: string | null;
     updatedAt: string | null;
 };
@@ -99,17 +105,20 @@ export async function getCallbackLoopSettings(): Promise<CallbackLoopSettings> {
             ownerIds: Array.isArray(v.owner_ids) ? (v.owner_ids as unknown[]).map(String) : [],
             cursor: Number.isFinite(Number(v.cursor)) ? Number(v.cursor) : 0,
             neodovePush: v.neodove_push === true,
+            alertFallback: v.alert_fallback === true,
             updatedBy: typeof v.updated_by === "string" ? v.updated_by : null,
             updatedAt: r?.updated_at ?? null,
         };
     } catch {
-        return { ownerIds: [], cursor: 0, neodovePush: false, updatedBy: null, updatedAt: null };
+        return { ownerIds: [], cursor: 0, neodovePush: false, alertFallback: false, updatedBy: null, updatedAt: null };
     }
 }
 
 export async function setCallbackLoopSettings(input: {
     ownerIds: string[];
     neodovePush: boolean;
+    /** Omitted = keep what is saved. */
+    alertFallback?: boolean;
     updatedBy: string;
 }): Promise<CallbackLoopSettings> {
     const prev = await getCallbackLoopSettings();
@@ -117,6 +126,7 @@ export async function setCallbackLoopSettings(input: {
         owner_ids: [...new Set(input.ownerIds)],
         cursor: prev.cursor,
         neodove_push: input.neodovePush,
+        alert_fallback: input.alertFallback ?? prev.alertFallback,
         updated_by: input.updatedBy,
     };
     const now = new Date();
@@ -521,9 +531,11 @@ export async function runCallbackLoopTick(now: Date = new Date()): Promise<{
                    SET escalated_at = now(), updated_at = now()
                  WHERE lc.owner_type = 'sales' AND lc.status = 'open'
                    AND lc.escalated_at IS NULL
-                   -- Only callbacks the loop handed to an ISR: callbacks opened
-                   -- before D8 (no ISR) must not all escalate on the first tick.
-                   AND lc.assigned_user_id IS NOT NULL
+                   -- Callbacks the loop handed to an ISR, and (ID 212) a recent callback
+                   -- with NO owner, which must not sit unseen: it escalates to the Sales
+                   -- Head. Older owner-less ones (from before D8) must not all escalate
+                   -- on the first tick, hence the 3-day window (= the expiry).
+                   AND (lc.assigned_user_id IS NOT NULL OR lc.created_at >= now() - interval '3 days')
                    AND lc.due_at <= ${escalateBy}::timestamptz
                    AND NOT EXISTS (
                        SELECT 1 FROM lead_touchpoints t
@@ -566,7 +578,7 @@ export async function runCallbackLoopTick(now: Date = new Date()): Promise<{
         // ID 212 (decided 4 Nov): also WhatsApp the Sales Head and the ISR's
         // manager. Best effort; never holds up the loop.
         const { alertMissedCallbackWhatsApp } = await import("@/lib/ai-dialer/callbackMissedAlert");
-        await alertMissedCallbackWhatsApp(cb);
+        await alertMissedCallbackWhatsApp(cb, { fallbackBellEmail: settings.alertFallback });
     }
 
     out.expired = await expireStaleCallbacks(now);

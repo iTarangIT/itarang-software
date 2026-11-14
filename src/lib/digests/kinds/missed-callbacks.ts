@@ -103,7 +103,7 @@ async function collect(istDay: string): Promise<{ ok: boolean; figures: DigestFi
                   FROM lead_callbacks lc
                   LEFT JOIN users u ON u.id::text = lc.assigned_user_id::text
                  WHERE lc.owner_type = 'sales'
-                   AND lc.assigned_user_id IS NOT NULL
+                   -- ID 212: a callback with no owner is listed too, as "No owner".
                    AND (lc.due_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN ${from}::date AND ${to}::date
                    AND lc.due_at < now() - interval '30 minutes'
                    AND NOT EXISTS (
@@ -135,7 +135,7 @@ async function collect(istDay: string): Promise<{ ok: boolean; figures: DigestFi
             rows: rows.map((r) => [
                 r.dealer ?? r.lead_id,
                 istFmt(r.due_at),
-                r.owner_name ?? "—",
+                r.owner_id ? (r.owner_name ?? "—") : "No owner",
                 (r.owner_id && managers.get(team.get(r.owner_id) ?? "")) || "—",
                 KIND_WORDS[r.kind ?? "sales"] ?? (r.kind ?? "Callback"),
                 sinceText(r, istFmt),
