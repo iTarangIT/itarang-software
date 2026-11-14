@@ -52,6 +52,13 @@ export function canReviewFeedback(role: string): boolean {
   return FEEDBACK_REVIEWER_ROLES.has(role);
 }
 
+/** Who may mark a query verified (E-382): the CEO, the Sales Head, and admin for support. */
+export const VERIFIER_ROLES = new Set(["ceo", "sales_head", "admin"]);
+
+export function canVerifyQueries(role: string): boolean {
+  return VERIFIER_ROLES.has(role);
+}
+
 export function threadPrefix(userId: string): string {
   return `crm.${userId}.`;
 }

@@ -5,9 +5,12 @@ import { z } from "zod";
 import { ownsThread, requireAnalystUser } from "@/lib/analyst/access";
 import { agentFetch, agentJson } from "@/lib/analyst/client";
 import { errorResponse, normalizeAgentError } from "@/lib/analyst/errors";
-import { ANALYST_QUESTION_MAX, cleanRun, metricInstructions } from "@/lib/analyst/metricRules";
+import { AGENT_INSTRUCTIONS_MAX, ANALYST_QUESTION_MAX, cleanRun, metricInstructions } from "@/lib/analyst/metricRules";
 import { canAskSource, CRM_SOURCE_NAME, crmDsnIsMasked } from "@/lib/analyst/sources-routes";
+import { hasThreadTable, recordAsk } from "@/lib/analyst/threadStore";
 import type { Connection, RunPage } from "@/lib/analyst/types";
+import { joinInstructions, type VerifiedMatch } from "@/lib/analyst/verified";
+import { hasVerifiedTable, matchVerified } from "@/lib/analyst/verifiedStore";
 
 export const dynamic = "force-dynamic";
 // A run takes up to ~40s on the agent and it allows 180s (RUN_TIMEOUT_S). The handler must
@@ -111,13 +114,38 @@ export async function POST(request: Request) {
     return errorResponse(error, "could not check that data source");
   }
 
+  // E-381 — the CRM's own record of the conversation (title, search, starters). Best effort:
+  // a failure here never stops the question.
+  try {
+    if (await hasThreadTable()) {
+      await recordAsk({
+        userId: user.id,
+        threadId: parsed.data.thread_id,
+        question: parsed.data.question,
+        connectionId: parsed.data.connection_id,
+      });
+    }
+  } catch (error) {
+    console.error("[analyst] could not record the question:", error);
+  }
+
+  // E-382 — verified queries for a similar question go to the agent after the metric rules.
+  let verified: VerifiedMatch[] = [];
+  try {
+    if (await hasVerifiedTable()) verified = await matchVerified(parsed.data.connection_id, parsed.data.question);
+  } catch (error) {
+    console.error("[analyst] could not match verified queries:", error);
+  }
+  const instructions = joinInstructions(metricInstructions(parsed.data.question), verified, AGENT_INSTRUCTIONS_MAX);
+
   let upstream: Response;
   try {
     upstream = await agentFetch("/runs", {
       method: "POST",
       // ID 32 — the agreed metric rules travel beside the question, in the agent's `instructions`
-      // field (13 Nov), so the question, title and history stay the user's own words.
-      body: { ...parsed.data, instructions: metricInstructions(parsed.data.question) || undefined },
+      // field (13 Nov), so the question, title and history stay the user's own words. E-382 adds
+      // the verified queries for a similar question after them.
+      body: { ...parsed.data, instructions: instructions || undefined },
       accept: "text/event-stream",
       // Covers the wait before headers arrive; the stream's own cancel covers the rest.
       signal: request.signal,

@@ -24,6 +24,7 @@
     "verify:scraper-queue": "node --env-file=.env.local scripts/verify-e241-queue-sql.mjs",
     "apply:e245": "node --env-file=.env.local scripts/apply-e245.mjs",
     "test:watch": "vitest",
+    "analyst:golden": "node --import tsx --env-file=.env.local scripts/verify-analyst-golden.ts",
     "db:push": "drizzle-kit push",
     "db:update-passwords": "node scripts/update-passwords.js",
     "db:seed-test": "tsx scripts/seed-test-data.ts",
