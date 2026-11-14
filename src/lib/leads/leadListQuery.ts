@@ -26,6 +26,7 @@ import { BUSINESS_TYPE_UNSET } from "@/lib/leads/businessType";
 import { IDLE_WORKING_DAYS_SQL, idlePastLimitSql } from "@/lib/leads/idleLimit";
 import { awaitingAssignment, readySplitSql, type ReadySplit } from "@/lib/leads/salesReady";
 import { SOURCE_DOOR_NONE } from "@/lib/leads/leadSourceVocab";
+import { compactName } from "@/lib/leads/queueFilterSql";
 import { effectiveDoorSql } from "@/lib/leads/leadSourceDoorSql";
 import { NEEDS_DEALER_MOBILE_SQL } from "@/lib/ai-dialer/phoneTypeStore";
 import { AI_REDIAL_DUE_SQL } from "@/lib/ai/storage/dialDisposition";
@@ -611,8 +612,16 @@ function buildWhere(f: LeadListFilters, opts?: { ignoreIntent?: boolean }) {
         // `location` is included because the old /leads search covered it and
         // the old Leads Info search did not — dropping it would silently break
         // a search people use. It is the legacy free-form region field.
+        // ID 253: the same space-blind name match as the queues and the WhatsApp assistant
+        // (leadSearchClause), so "Zamzam" finds "Zam Zam E Rikshaw" here too.
+        const compact = compactName(f.search);
+        const squeezed = compact.length >= 3 && !/^\d+$/.test(compact) ? `%${compact}%` : null;
         conds.push(
-            sql`(dl.dealer_name ILIKE ${like} OR dl.phone ILIKE ${like} OR dl.shop_name ILIKE ${like} OR dl.location ILIKE ${like})`,
+            squeezed
+                ? sql`(dl.dealer_name ILIKE ${like} OR dl.phone ILIKE ${like} OR dl.shop_name ILIKE ${like} OR dl.location ILIKE ${like}
+                    OR regexp_replace(lower(COALESCE(dl.dealer_name, '')), '[[:space:].-]+', '', 'g') LIKE ${squeezed}
+                    OR regexp_replace(lower(COALESCE(dl.shop_name, '')), '[[:space:].-]+', '', 'g') LIKE ${squeezed})`
+                : sql`(dl.dealer_name ILIKE ${like} OR dl.phone ILIKE ${like} OR dl.shop_name ILIKE ${like} OR dl.location ILIKE ${like})`,
         );
     }
     return sql.join(conds, sql` AND `);

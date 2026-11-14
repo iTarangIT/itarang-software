@@ -81,12 +81,36 @@ export function toAccountSummary(
     };
 }
 
-/** Every word of the query in the dealer's name or city. Pure. */
+/**
+ * Every word of the query in the dealer's name or city, or (ID 253) the whole query in the
+ * name with spaces, dots and hyphens removed on both sides ("Zamzam" ↔ "Zam Zam"). Pure.
+ */
 export function matchesAccountQuery(r: { dealer: string; city: string | null }, q: string | undefined): boolean {
     const words = (q ?? "").toLowerCase().split(/\s+/).filter(Boolean);
     if (!words.length) return true;
     const hay = `${r.dealer} ${r.city ?? ""}`.toLowerCase();
-    return words.every((w) => hay.includes(w));
+    if (words.every((w) => hay.includes(w))) return true;
+    const squeezed = squeeze(q ?? "");
+    return squeezed.length >= 3 && squeeze(r.dealer).includes(squeezed);
+}
+
+function squeeze(s: string): string {
+    return s.toLowerCase().replace(/[\s.-]+/g, "");
+}
+
+/** The user's dealer accounts matching a query, as my_dealers returns them (first page). */
+export async function accountsMatching(ctx: ToolContext, query: string): Promise<Extract<ToolResult, { kind: "accounts" }> | null> {
+    const { myDealerRows } = await import("@/lib/accounts/myDealers");
+    const { rows } = await myDealerRows(ctx.user);
+    const label = await bucketLabeler();
+    const found = rows.filter((r) => matchesAccountQuery(r, query));
+    return {
+        kind: "accounts",
+        title: `Dealers matching "${query}"`,
+        rows: found.slice(0, MAX_TOOL_ROWS).map((r) => toAccountSummary(r, ctx.user.id, label)),
+        total: found.length,
+        crm_url: `${crmBaseUrl()}/my-dealers`,
+    };
 }
 
 async function bucketLabeler(): Promise<(b: string) => string> {
@@ -112,6 +136,20 @@ export const myDealers: ToolFactory = () =>
             const label = await bucketLabeler();
             const found = rows.filter((r) => matchesAccountQuery(r, input.query));
             const offset = pageOffset(input.page);
+            // ID 253: a name that is not in My dealers may still be a lead. Search the
+            // user's leads before replying "not found" (search_lead does the reverse).
+            if (found.length === 0 && input.query && input.query.trim().length >= 2 && (input.page ?? 1) === 1) {
+                const { searchOwnLeads } = await import("./read/searchLead");
+                const leads = await searchOwnLeads(ctx, { query: input.query.trim() }).catch((err: unknown) => {
+                    console.warn("[assistant:my_dealers] lead fallback failed", err instanceof Error ? err.message : err);
+                    return null;
+                });
+                if (leads?.rows.length) {
+                    return leads.kind === "candidates"
+                        ? { ...leads, question: `"${input.query}" is not in My dealers, but ${leads.total ?? leads.rows.length} leads match. Which one do you mean?` }
+                        : { ...leads, title: `"${input.query}" is not in My dealers. Found as a lead:` };
+                }
+            }
             return {
                 kind: "accounts",
                 title: input.query ? `Dealers matching "${input.query}"` : "My dealers",

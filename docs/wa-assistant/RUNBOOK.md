@@ -258,10 +258,28 @@ node --import tsx --env-file=.env.local scripts/wa-assistant-mapping-check.ts [-
 | # | Item | Status |
 |---|---|---|
 | 1 | **Gemini key is on the free tier** (20 req/min + a daily cap): roughly 7–10 turns a minute for *everyone*, and the 40-question smoke run and the model half of the mapping check could not finish | Enable billing before §4 step 6 |
-| 2 | **§9.3 map covers 62.7% of real calls.** 358/959 real dispositions are outside it (No requirement in current 190, Short Hang up 81, REJECTED BY US 67, …), so those calls can't be logged over WhatsApp | Product decision on rows for the 8 missing dispositions (PROGRESS, Gate 6) |
-| 3 | Hinglish aliases matched 0 of 30 real notes; reps write English shorthand ("cb", "not rq") | Decide on shorthand hints |
-| 4 | `mark_lost` offers 10 reasons, not 11 (`onboarding_dropout` is admin-only on the screen) | Confirm |
+| 2 | **§9.3 map covers 62.7% of real calls.** 358/959 real dispositions are outside it (No requirement in current 190, Short Hang up 81, REJECTED BY US 67, …), so those calls can't be logged over WhatsApp | **Fixed** (checked 14 Nov, ID 253): `vocab.ts` now maps No requirement in current, the four that replaced Short Hang up, and REJECTED BY US |
+| 3 | Hinglish aliases matched 0 of 30 real notes; reps write English shorthand ("cb", "not rq") | **Fixed** 14 Nov (ID 253): shorthand hints added to `HINGLISH_CALL_ALIASES` (cb, not rq / no req, dnp, sw off, not int, wrong no, qtn sent) |
+| 4 | `mark_lost` offers 10 reasons, not 11 (`onboarding_dropout` is admin-only on the screen) | **Kept on purpose** (`markLost.ts`): matches the screen; 233 adds `test_lead`, which is admin / Sales Head / CEO only and so not offered here either |
 | 5 | Forged / foreign-number webhooks are visible in the structured log only, not in the tables | Keep, or add a counter table |
 | 6 | `after()` work is lost if the process restarts mid-turn | `unhandled_inbound` finds them; move to a queue only if they're seen |
 | 7 | Pre-existing, not fixed: the mark-lost API accepts `onboarding_dropout` from any role; queue pagination ties on Unassigned/Territory/Unclaimed; the visit form defaults to the UTC date | Separate tickets |
 | 8 | Manual run on the Meta test number not done | §4 step 3 |
+
+## 13. ISR saving switched on (ID 253, decided 13 Nov by Kartik)
+
+The code already lets ISRs save (`lib/assistant/types.ts`); only `ASSISTANT_WRITES_ENABLED_USER_IDS` kept them out.
+
+1. **Who is linked** (read-only, post the output):
+   `node --import tsx --env-file=.env.production scripts/list-isr-wa-bindings.ts`.
+   Not linked: CRM › Link WhatsApp, then send `LINK <code>` from the rep's own phone.
+2. **Before switching on:** billing on for `WA_ASSIST_GEMINI_API_KEY` (the free plan is about 20 requests a minute for everyone) and `OPENROUTER_API_KEY` set as the backup. Post a confirmation.
+3. **Switch on:** put the id list the script prints into `ASSISTANT_WRITES_ENABLED_USER_IDS`, in the `PROD_ENV_FILE_B64` GitHub secret **and** in `shared/.env` on the live box, then `pm2 reload itarang-crm-web --update-env`. Changing only the box is undone by the next release.
+4. **Brief the ISRs** (§4 step 9), plus: WhatsApp is for remarks, follow-ups and calls made outside NeoDove.
+5. **Tests** (tracker 253):
+   - "Zam Zam E Rikshaw: Hot, payment on 15th" → preview with Hot, the remark and a follow-up on the 15th; Confirm → all three on L-b8ZKDM7f.
+   - "Zamzam" and "Zam-Zam" find Zam Zam E Rikshaw Spare Parts, on WhatsApp and in the CRM lead search (spaces, dots and hyphens are ignored on both sides).
+   - "dealer Zamzam" when it is a lead, not an account → still found (my_dealers falls back to the leads, search_lead to My dealers).
+   - Log a call on a lead with a NeoDove call 10 minutes ago → the assistant asks; "add to that call" puts the note on the NeoDove call (no second call, calls per day count it once).
+   - One test save from each linked ISR works with Confirm.
+   - A Sales Head message → still "this number is for iTarang staff" (ASM and ISR only).

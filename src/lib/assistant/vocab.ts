@@ -299,6 +299,21 @@ export const HINGLISH_CALL_ALIASES: Readonly<Record<string, string>> = deepFreez
     "competitor se le liya": "Lost to Competition",
     "dukaan band": "Business Closed",
     "dhandha band": "Business Closed",
+    // RUNBOOK §12 item 3 (ID 253, 13 Nov): reps write English shorthand, not Hinglish.
+    cb: "Ask to Call Back",
+    "call back": "Ask to Call Back",
+    callback: "Ask to Call Back",
+    "not rq": "No requirement in current",
+    "not req": "No requirement in current",
+    "no req": "No requirement in current",
+    "no requirement": "No requirement in current",
+    dnp: "Did not pick",
+    "not picked": "Did not pick",
+    "sw off": "Switch off",
+    "not int": "Not Interested",
+    "not interested": "Not Interested",
+    "wrong no": "Incorrect / Invalid number",
+    "qtn sent": "Quotation Sent",
 });
 
 export const HINGLISH_VISIT_ALIASES: Readonly<Record<string, VisitOutcome>> = deepFreeze({

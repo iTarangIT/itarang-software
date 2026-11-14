@@ -8,7 +8,7 @@ import { z } from "zod";
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { leadSearchClause } from "@/lib/leads/queueFilterSql";
-import { MAX_TOOL_ROWS, PAGE_MAX, pageOffset, pagingArgs, type ToolResult } from "../../types";
+import { MAX_TOOL_ROWS, PAGE_MAX, pageOffset, pagingArgs, type ToolContext, type ToolResult } from "../../types";
 import { ownScopePredicate, scopeJoin, scopeTeam } from "../../scope";
 import { defineTool, type ToolFactory } from "../spec";
 import { queueUrl, toLeadSummary } from "../leads";
@@ -59,62 +59,83 @@ export const searchLead: ToolFactory = () =>
             page: z.number().int().min(1).max(PAGE_MAX).optional().describe("Page of 10, default 1"),
         }),
         run: async (ctx, input): Promise<ToolResult> => {
-            const q = normalizeSearch(input.query);
-            // ID 155: a manager searches the team's leads too, as on the screen.
-            const team = await scopeTeam(ctx.user);
-            // What the rep acts on next — toLeadSummary keeps an ASM's latest
-            // visit date only while that visit is still open (visit_status).
-            const nextCols =
-                ctx.user.role === "asm"
-                    ? sql`lv.scheduled_date::text AS next_date, lv.visit_status`
-                    : sql`dl.next_follow_up_at AS next_date, NULL::text AS visit_status`;
-            const rows = await db.execute<{
-                id: string;
-                shop_name: string | null;
-                dealer_name: string | null;
-                city: string | null;
-                phone: string | null;
-                last_touchpoint_at: unknown;
-                lead_status: string | null;
-                interest_level: string | null;
-                current_owner_id: string | null;
-                current_owner_name: string | null;
-                next_date: unknown;
-                visit_status: string | null;
-                total: number;
-            }>(sql`
-                SELECT dl.id, dl.shop_name, dl.dealer_name, dl.city, dl.phone, dl.last_touchpoint_at,
-                       dl.lead_status, dl.interest_level,
-                       dl.current_owner_id, owner.name AS current_owner_name,
-                       ${nextCols},
-                       count(*) OVER ()::int AS total
-                  FROM dealer_leads dl
-                  ${scopeJoin(ctx.user)}
-                  LEFT JOIN users owner ON owner.id::text = dl.current_owner_id
-                 WHERE ${ownScopePredicate(ctx.user, team)} ${assistantSearchClause(q)}
-                 ORDER BY COALESCE(dl.last_touchpoint_at, dl.assigned_at, dl.created_at) DESC NULLS LAST
-                 LIMIT ${MAX_TOOL_ROWS} OFFSET ${pageOffset(input.page)}
-            `);
-            const summaries = rows.map((r) =>
-                toLeadSummary(
-                    ctx.user.role === "asm"
-                        ? { ...r, scheduled_date: r.next_date }
-                        : { ...r, next_follow_up_at: r.next_date },
-                    ctx.user,
-                ),
-            );
-            const total = rows[0]?.total ?? 0;
-            const paging = { page: input.page ?? 1, page_size: MAX_TOOL_ROWS, args: pagingArgs(input) };
-            if (summaries.length > 1) {
-                return {
-                    kind: "candidates",
-                    question: `${total} leads match "${input.query}". Which one do you mean?`,
-                    rows: summaries,
-                    total,
-                    crm_url: queueUrl(ctx.user),
-                    paging,
-                };
+            const found = await searchOwnLeads(ctx, input);
+            // ID 253: a name that is not a lead may be a dealer who already buys from us.
+            // Check My dealers before replying "not found" (my_dealers does the reverse).
+            if (found.kind === "leads" && found.rows.length === 0 && (input.page ?? 1) === 1) {
+                const { accountsMatching } = await import("../accounts");
+                const accounts = await accountsMatching(ctx, input.query).catch((err: unknown) => {
+                    console.warn("[assistant:search_lead] My dealers fallback failed", err instanceof Error ? err.message : err);
+                    return null;
+                });
+                if (accounts && accounts.rows.length) {
+                    return { ...accounts, title: `No lead matches "${input.query}". Found in My dealers:` };
+                }
             }
-            return { kind: "leads", title: `Search: "${input.query}"`, rows: summaries, total, crm_url: queueUrl(ctx.user), paging };
+            return found;
         },
     });
+
+/** The user's own leads matching a name, shop or phone (search_lead's query). */
+export async function searchOwnLeads(
+    ctx: ToolContext,
+    input: { query: string; page?: number },
+): Promise<Extract<ToolResult, { kind: "leads" | "candidates" }>> {
+    const q = normalizeSearch(input.query);
+    // ID 155: a manager searches the team's leads too, as on the screen.
+    const team = await scopeTeam(ctx.user);
+    // What the rep acts on next — toLeadSummary keeps an ASM's latest
+    // visit date only while that visit is still open (visit_status).
+    const nextCols =
+        ctx.user.role === "asm"
+            ? sql`lv.scheduled_date::text AS next_date, lv.visit_status`
+            : sql`dl.next_follow_up_at AS next_date, NULL::text AS visit_status`;
+    const rows = await db.execute<{
+        id: string;
+        shop_name: string | null;
+        dealer_name: string | null;
+        city: string | null;
+        phone: string | null;
+        last_touchpoint_at: unknown;
+        lead_status: string | null;
+        interest_level: string | null;
+        current_owner_id: string | null;
+        current_owner_name: string | null;
+        next_date: unknown;
+        visit_status: string | null;
+        total: number;
+    }>(sql`
+        SELECT dl.id, dl.shop_name, dl.dealer_name, dl.city, dl.phone, dl.last_touchpoint_at,
+               dl.lead_status, dl.interest_level,
+               dl.current_owner_id, owner.name AS current_owner_name,
+               ${nextCols},
+               count(*) OVER ()::int AS total
+          FROM dealer_leads dl
+          ${scopeJoin(ctx.user)}
+          LEFT JOIN users owner ON owner.id::text = dl.current_owner_id
+         WHERE ${ownScopePredicate(ctx.user, team)} ${assistantSearchClause(q)}
+         ORDER BY COALESCE(dl.last_touchpoint_at, dl.assigned_at, dl.created_at) DESC NULLS LAST
+         LIMIT ${MAX_TOOL_ROWS} OFFSET ${pageOffset(input.page)}
+    `);
+    const summaries = rows.map((r) =>
+        toLeadSummary(
+            ctx.user.role === "asm"
+                ? { ...r, scheduled_date: r.next_date }
+                : { ...r, next_follow_up_at: r.next_date },
+            ctx.user,
+        ),
+    );
+    const total = rows[0]?.total ?? 0;
+    const paging = { page: input.page ?? 1, page_size: MAX_TOOL_ROWS, args: pagingArgs(input) };
+    if (summaries.length > 1) {
+        return {
+            kind: "candidates",
+            question: `${total} leads match "${input.query}". Which one do you mean?`,
+            rows: summaries,
+            total,
+            crm_url: queueUrl(ctx.user),
+            paging,
+        };
+    }
+    return { kind: "leads", title: `Search: "${input.query}"`, rows: summaries, total, crm_url: queueUrl(ctx.user), paging };
+}

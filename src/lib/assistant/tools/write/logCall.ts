@@ -43,7 +43,7 @@ import { AttachmentId, PlannedFile, plannedFile, resolveAttachments } from "../a
 import { checkCallProposal, NO_CHANGE, type StatusChoice } from "../../vocab";
 import { createPending } from "../../actions";
 import { fmtDate, reasonLabel, statusLabel } from "../../format";
-import type { Preview, ToolResult } from "../../types";
+import type { Preview, ToolContext, ToolResult } from "../../types";
 import { defineTool, LeadId, ownedLeadOr, type ToolFactory } from "../spec";
 import { leadUrl } from "../leads";
 import { defineApplier } from "../../applierSpec";
@@ -100,8 +100,60 @@ export const LogCallPlan = z.object({
         })
         .nullable()
         .optional(),
+    /**
+     * ID 253: the rep chose to add this note to the NeoDove call the lead just had,
+     * instead of logging a second call. Only remarks, follow-up and temperature apply.
+     */
+    attach_to_touchpoint_id: z.string().uuid().nullable().optional(),
 });
 export type LogCallPlan = z.infer<typeof LogCallPlan>;
+
+/** ID 253: a NeoDove call on the lead this recently makes log_call ask before adding a second call. */
+export const NEODOVE_GUARD_MINUTES = 30;
+
+export type RecentNeodoveCall = { touchpoint_id: string; performed_at: Date; disposition: string | null; connect_status: string | null };
+
+/** The lead's latest NeoDove call within NEODOVE_GUARD_MINUTES of `now`, or null. */
+export async function recentNeodoveCall(leadId: string, now: Date): Promise<RecentNeodoveCall | null> {
+    try {
+        return await readRecentNeodoveCall(leadId, now);
+    } catch (err) {
+        // Advisory: a failed lookup must never stop a rep logging a call.
+        console.warn("[assistant:log_call] NeoDove guard lookup failed", err instanceof Error ? err.message : err);
+        return null;
+    }
+}
+
+async function readRecentNeodoveCall(leadId: string, now: Date): Promise<RecentNeodoveCall | null> {
+    const since = new Date(now.getTime() - NEODOVE_GUARD_MINUTES * 60_000).toISOString();
+    const rows = (await db.execute(sql`
+        SELECT touchpoint_id::text AS touchpoint_id, performed_at, disposition, connect_status
+          FROM lead_touchpoints
+         WHERE dealer_lead_id = ${leadId}
+           AND external_system = 'neodove'
+           AND performed_at >= ${since}::timestamptz
+         ORDER BY performed_at DESC
+         LIMIT 1
+    `)) as unknown as Array<{ touchpoint_id: string; performed_at: string | Date; disposition: string | null; connect_status: string | null }>;
+    const r = rows[0];
+    return r ? { ...r, performed_at: new Date(r.performed_at) } : null;
+}
+
+/** "4:12 pm" in IST. */
+function istTime(d: Date): string {
+    return d.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "numeric", minute: "2-digit" });
+}
+
+/** The question asked when a NeoDove call is that recent (exported for the test). */
+export function neodoveGuardQuestion(call: RecentNeodoveCall): string {
+    const what = [call.connect_status === "connected" ? "connected" : call.connect_status ? "not connected" : null, call.disposition]
+        .filter(Boolean)
+        .join(" · ");
+    return (
+        `This lead had a NeoDove call at ${istTime(call.performed_at)}${what ? ` (${what})` : ""}. ` +
+        "Should I add your note to that call, or log a separate call? (Calls per day count a call once.)"
+    );
+}
 
 const ask = (question: string): ToolResult => ({ kind: "question", question });
 
@@ -146,6 +198,70 @@ async function hasLiveQuote(leadId: string): Promise<boolean> {
     }
 }
 
+type GuardLead = import("../../scope").ScopedLead;
+
+/**
+ * ID 253: the preview for "add my note to the NeoDove call". One touchpoint stays one
+ * call: the note is appended to that call's remarks; a follow-up and temperature apply
+ * to the lead as usual. Its outcome and status stay what NeoDove recorded.
+ */
+async function proposeNoteOnNeodoveCall(
+    ctx: ToolContext,
+    lead: GuardLead,
+    call: RecentNeodoveCall,
+    input: { remarks: string | null; followUpAt: string | null; interest: (typeof INTEREST_LEVELS)[number] | null },
+): Promise<ToolResult> {
+    let followUpAt: string | null = null;
+    if (input.followUpAt) {
+        const when = futureInstant(input.followUpAt, ctx.now);
+        if (!when.ok) return ask(when.question);
+        followUpAt = when.value;
+    }
+    const interest = input.interest && input.interest !== lead.interest_level ? input.interest : null;
+    const plan: LogCallPlan = {
+        lead_id: lead.id,
+        channel: "call",
+        touchpoint_type: "inside_sales_call",
+        disposition: null,
+        call_duration_sec: null,
+        remarks: input.remarks,
+        status_to: null,
+        lost: null,
+        follow_up_at: followUpAt,
+        interest,
+        auto: { status: false, interest: false },
+        whatsapp: null,
+        attach_to_touchpoint_id: call.touchpoint_id,
+    };
+    const lines: Preview["lines"] = [{ label: "Adds to", value: `NeoDove call at ${istTime(call.performed_at)} (no second call)` }];
+    if (input.remarks) lines.push({ label: "Note", value: input.remarks });
+    if (followUpAt) lines.push({ label: "Follow-up", value: fmtDate(followUpAt)! });
+    if (interest) lines.push({ label: "Temperature", value: `${lead.interest_level ?? "none"} → ${interest}` });
+    const preview: Preview = {
+        title: `Add note to NeoDove call — ${lead.shop_name || lead.dealer_name || lead.id}`,
+        lines,
+        resets_idle_clock: false,
+        warning: null,
+        needs_second_confirm: false,
+        crm_url: leadUrl(ctx.user, lead.id),
+    };
+    const { id } = await createPending({
+        userId: ctx.user.id,
+        tool: "log_call",
+        leadId: lead.id,
+        leadVersion: lead.updated_at,
+        plan,
+        preview,
+        before: {
+            lead_status: lead.lead_status,
+            interest_level: lead.interest_level,
+            next_follow_up_at: lead.next_follow_up_at?.toISOString() ?? null,
+        },
+        sourceMessageId: ctx.messageId,
+    });
+    return { kind: "preview", action_id: id, preview };
+}
+
 /** The second (final) confirmation's warning. */
 export function highImpactWarning(reason: LostReason): string {
     return `${highImpactConsequence(reason)} Tap Confirm again to save it.`;
@@ -181,8 +297,14 @@ export const logCall: ToolFactory = () =>
                     .boolean()
                     .optional()
                     .describe("channel whatsapp only: true when the dealer replied in the chat"),
+                neodove_call: z
+                    .enum(["add_note", "separate"])
+                    .optional()
+                    .describe(
+                        "channel call only, and only after I asked about a recent NeoDove call: add_note = put the remarks on that call; separate = log a new call.",
+                    ),
             })
-            .refine((v) => v.channel !== "call" || (!!v.connect_status && !!v.disposition), {
+            .refine((v) => v.channel !== "call" || v.neodove_call === "add_note" || (!!v.connect_status && !!v.disposition), {
                 message: "a call needs connect_status and disposition",
                 path: ["disposition"],
             }),
@@ -191,6 +313,32 @@ export const logCall: ToolFactory = () =>
             if (owned.result) return owned.result;
             const lead = owned.lead;
             const remarks = input.remarks?.trim() || null;
+
+            // ID 253: a NeoDove call on this lead in the last 30 minutes is very likely the
+            // call the rep is describing. Ask before logging a second one.
+            if (input.channel === "call" && input.neodove_call !== "separate") {
+                const recent = await recentNeodoveCall(lead.id, ctx.now);
+                if (recent && input.neodove_call !== "add_note") return ask(neodoveGuardQuestion(recent));
+                if (recent) {
+                    if (input.status || input.lost_reason) {
+                        return ask(
+                            "Adding a note to the NeoDove call keeps its outcome. To change the status or mark it Lost, log a separate call. Which do you want?",
+                        );
+                    }
+                    if (!remarks && !input.follow_up_at && !input.interest) return ask("What should I add to that call?");
+                    return proposeNoteOnNeodoveCall(ctx, lead, recent, {
+                        remarks,
+                        followUpAt: input.follow_up_at ?? null,
+                        interest: input.interest ?? null,
+                    });
+                }
+                if (input.neodove_call === "add_note") {
+                    return ask("I can't find a NeoDove call on this lead in the last 30 minutes. Should I log it as a new call? Tell me how it went.");
+                }
+            }
+            if (input.channel === "call" && (!input.connect_status || !input.disposition)) {
+                return ask("How did the call go: connected or not, and what was the outcome?");
+            }
 
             let touchpointType: LogCallPlan["touchpoint_type"];
             let disposition: LogCallPlan["disposition"] = null;
@@ -416,6 +564,34 @@ export const logCallApplier = defineApplier<LogCallPlan>({
     needsSecondConfirm: (p) => !!p.lost && isHighImpactLostReason(p.lost.reason),
     secondConfirmWarning: (p) => highImpactWarning(p.lost!.reason),
     apply: async ({ tx, user, step, actionId }, p) => {
+        // ID 253: the note goes on the NeoDove call the lead just had; no second call.
+        if (p.attach_to_touchpoint_id) {
+            const note = p.remarks ? `Note from the rep (WhatsApp): ${p.remarks}` : null;
+            const updated = (await tx.execute(sql`
+                UPDATE lead_touchpoints
+                   SET remarks = CASE WHEN ${note}::text IS NULL THEN remarks
+                                      WHEN COALESCE(remarks, '') = '' THEN ${note}::text
+                                      ELSE remarks || chr(10) || ${note}::text END
+                 WHERE touchpoint_id = ${p.attach_to_touchpoint_id}::uuid
+                   AND dealer_lead_id = ${p.lead_id}
+                   AND external_system = 'neodove'
+                RETURNING touchpoint_id::text AS id
+            `)) as unknown as Array<{ id: string }>;
+            if (!updated.length) throw new Error("That NeoDove call is no longer on this lead. Nothing was saved.");
+            if (p.follow_up_at) {
+                await tx.execute(sql`
+                    UPDATE dealer_leads SET next_follow_up_at = ${p.follow_up_at}, updated_at = NOW()
+                     WHERE id = ${p.lead_id}
+                `);
+            }
+            if (p.interest) {
+                await setInterestLevel(
+                    { leadId: p.lead_id, actorId: user.id, level: p.interest, reason: "Logged from the WhatsApp Assistant" },
+                    { tx },
+                );
+            }
+            return { touchpoint_id: updated[0]!.id, status_history_id: null, added_to_neodove_call: true };
+        }
         let tp: { touchpointId: string; historyId: string | null };
         let whatsappOutcome: { counted_as_contact: boolean; screenshot_reused: boolean } | null = null;
         if (p.channel === "whatsapp") {
