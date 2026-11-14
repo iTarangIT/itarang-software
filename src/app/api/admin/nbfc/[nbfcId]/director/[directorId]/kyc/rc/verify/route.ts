@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { requireAdminOrTestBypass } from "@/lib/auth/adminTestBypass";
 import { runDirectorVerification } from "@/lib/nbfc/admin/director-kyc";
+import { maskDealerIdsDeep, seesFullDealerIds } from "@/lib/kyc/dealerIdMask";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -52,6 +53,8 @@ export async function POST(
     verificationId: result.verificationId,
     status: result.status,
     providerReferenceId: result.providerReferenceId,
-    raw: result.raw,
+    // ID 119-B: the provider reply carries the full ID number; the Business
+    // Head gets it masked (full only for Admin, CEO, Sales Head).
+    raw: seesFullDealerIds(auth.user.role) ? result.raw : maskDealerIdsDeep(result.raw, false),
   });
 }
