@@ -122,7 +122,8 @@ export async function getScheduledJobsReport(now: Date = new Date()): Promise<Sc
       schedule: scheduleText(r),
       jobName: r.kind === "ticker" ? r.job : null,
       offSwitch: r.kind === "ticker" ? (r.offSwitch ?? null) : null,
-      note: r.kind === "off" ? `${r.reason} Needs: ${r.decision}.` : r.kind === "covered" ? r.note : null,
+      // ID 227: a held job says who it waits for, first.
+      note: r.kind === "off" ? `Held: waiting for ${r.decision}. ${r.reason}` : r.kind === "covered" ? r.note : null,
       lastStartedAt: iso(s?.last_started_at),
       lastFinishedAt: iso(s?.last_finished_at),
       lastStatus: s?.last_status ?? null,

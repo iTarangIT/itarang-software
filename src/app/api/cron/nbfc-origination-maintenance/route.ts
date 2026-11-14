@@ -9,6 +9,11 @@
  *
  * Schedule: daily (configure in vercel.json). Auth: Vercel cron header OR
  * Bearer CRON_SECRET; closed when the secret is unset (ID 130).
+ *
+ * ID 227 (proposed split, waiting for Kartik): `?steps=flags` runs sweeps 1-3 only (the
+ * hand-off emails and the two flags: no money moves); `?steps=wallet` runs sweep 4 only
+ * (auto-NACH wallet debits). No `steps` = all four, as before. Both are held in
+ * Ops Console › Jobs until Kartik says which to switch on.
  */
 import { NextRequest, NextResponse } from "next/server";
 import { and, eq, inArray, isNull, lt, or } from "drizzle-orm";
@@ -27,13 +32,22 @@ const WALLET_AUTORECHARGE_LOCKOUT_HOURS = Number(process.env.WALLET_AUTORECHARGE
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-async function run() {
+export type MaintenanceSteps = "all" | "flags" | "wallet";
+
+/** `?steps=` → which sweeps run. Unknown → all (the old behaviour). Pure. */
+export function parseSteps(v: string | null): MaintenanceSteps {
+  return v === "flags" || v === "wallet" ? v : "all";
+}
+
+async function run(steps: MaintenanceSteps = "all") {
   const now = Date.now();
+  const flags = steps !== "wallet";
+  const wallet = steps !== "flags";
   const nudgeCutoff = new Date(now - 24 * 60 * 60 * 1000);
   const staleCutoff = new Date(now - ENACH_STALE_RISK_DAYS * 24 * 60 * 60 * 1000);
 
   // 1. Manual Handoff nudges.
-  const dueHandoffs = await db
+  const dueHandoffs = !flags ? [] : await db
     .select()
     .from(manualHandoffs)
     .where(
@@ -78,7 +92,7 @@ async function run() {
   }
 
   // 2. E-NACH stale_risk flag.
-  const staleResult = await db
+  const staleResult = !flags ? [] : await db
     .update(enachMandates)
     .set({ stale_risk: true, updated_at: new Date() })
     .where(
@@ -92,7 +106,7 @@ async function run() {
 
   // 3. FI SLA breach flag (§10.1) — only the current attempt of each lead×NBFC
   //    that is still awaiting the agent's submission past its 48h window.
-  const fiResult = await db
+  const fiResult = !flags ? [] : await db
     .update(fieldInvestigations)
     .set({ sla_breached: true, updated_at: new Date() })
     .where(
@@ -113,7 +127,7 @@ async function run() {
   //    a registered-mandate health check, and a lockout window so a fired
   //    recharge cannot re-fire for N hours regardless of balance.
   const lockoutCutoff = new Date(now - WALLET_AUTORECHARGE_LOCKOUT_HOURS * 60 * 60 * 1000);
-  const autoWallets = await db
+  const autoWallets = !wallet ? [] : await db
     .select({
       id: nbfcWallets.id,
       tenant_id: nbfcWallets.tenant_id,
@@ -130,7 +144,7 @@ async function run() {
 
   let recharged = 0;
   let recharge_failed = 0;
-  const provider = await getWalletFundsProvider();
+  const provider = autoWallets.length ? await getWalletFundsProvider() : null;
   for (const w of autoWallets) {
     const balance = Number(w.balance ?? 0);
     const threshold = w.threshold == null ? null : Number(w.threshold);
@@ -146,7 +160,7 @@ async function run() {
     const day = new Date(now).toISOString().slice(0, 10);
     const idempotencyKey = `${w.tenant_id}|${day}|${threshold}`;
     try {
-      const res = await provider.executeAutoRechargeDebit({
+      const res = await provider!.executeAutoRechargeDebit({
         tenantId: w.tenant_id,
         providerMandateRef: `${w.customer_id}|${w.token_id}`,
         amount: Math.round(amount * 100), // rupees → paise
@@ -179,6 +193,7 @@ async function run() {
   }
 
   return {
+    steps,
     nudged,
     stale_flagged: staleResult.length,
     fi_sla_breached: fiResult.length,
@@ -189,12 +204,14 @@ async function run() {
 
 export async function GET(req: NextRequest) {
   if (!isCronAuthorised(req)) return NextResponse.json({ ok: false, error: "UNAUTHORIZED" }, { status: 401 });
-  const summary = await runAsJob("cron:nbfc-origination-maintenance", run);
+  const steps = parseSteps(new URL(req.url).searchParams.get("steps"));
+  const summary = await runAsJob(`cron:nbfc-origination-maintenance${steps === "all" ? "" : `:${steps}`}`, () => run(steps));
   return NextResponse.json({ ok: true, ...summary });
 }
 
 export async function POST(req: NextRequest) {
   if (!isCronAuthorised(req)) return NextResponse.json({ ok: false, error: "UNAUTHORIZED" }, { status: 401 });
-  const summary = await runAsJob("cron:nbfc-origination-maintenance", run);
+  const steps = parseSteps(new URL(req.url).searchParams.get("steps"));
+  const summary = await runAsJob(`cron:nbfc-origination-maintenance${steps === "all" ? "" : `:${steps}`}`, () => run(steps));
   return NextResponse.json({ ok: true, ...summary });
 }

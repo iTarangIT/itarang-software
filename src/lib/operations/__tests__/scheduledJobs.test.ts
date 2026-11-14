@@ -66,6 +66,8 @@ describe("ID 227 scheduled job list", () => {
       "bolna-call-scheduler",
       "elevenlabs-call-scheduler",
       "emi-autodebit",
+      // ID 227: the harmless half (emails + flags) is listed separately, also held.
+      "nbfc-origination-flags",
       "nbfc-origination-maintenance",
     ]);
   });

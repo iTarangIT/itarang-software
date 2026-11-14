@@ -110,7 +110,7 @@ export const SCHEDULED_JOBS: ScheduledJob[] = [
     runner: {
       kind: "off",
       reason: "Places paid AI calls. Today every such lead is already handed to Inside Sales (AI follow-up loop retired), so it would dial almost nobody.",
-      decision: "Kartik's OK before switching on",
+      decision: "Kartik (AI dialer task list)",
     },
   },
   {
@@ -121,7 +121,7 @@ export const SCHEDULED_JOBS: ScheduledJob[] = [
     runner: {
       kind: "off",
       reason: "Places paid AI calls; dials almost nobody today (AI follow-up loop retired).",
-      decision: "Kartik's OK before switching on",
+      decision: "Kartik (AI dialer task list)",
     },
   },
 
@@ -415,18 +415,31 @@ export const SCHEDULED_JOBS: ScheduledJob[] = [
     runner: {
       kind: "off",
       reason: "In its default mode (simulate) it marks an EMI paid without collecting any money; in live mode it starts real debits.",
-      decision: "Kartik's OK, with EMI_AUTODEBIT_MODE decided",
+      decision: "Kartik, with EMI_AUTODEBIT_MODE decided",
     },
   },
   {
     id: "nbfc-origination-maintenance",
-    title: "NBFC origination upkeep",
-    what: "Manual hand-off emails, e-NACH stale-risk and field-check time-limit flags, and wallet auto-NACH top-ups.",
+    title: "NBFC origination upkeep: wallet top-ups",
+    what: "Wallet auto-NACH top-ups (?steps=wallet). Without a step it runs everything below too.",
     cronPaths: ["/api/cron/nbfc-origination-maintenance"],
     runner: {
       kind: "off",
-      reason: "Its wallet step starts real auto-NACH debits on lender wallets.",
-      decision: "Kartik's OK before switching on",
+      reason: "It starts real auto-NACH debits on lender wallets. Proposed (ID 227): keep off until the pilot lender is named.",
+      decision: "Kartik",
+    },
+  },
+  {
+    // ID 227 proposed split: the harmless half of NBFC upkeep, so it can run on live
+    // without the wallet debits. Same route, ?steps=flags.
+    id: "nbfc-origination-flags",
+    title: "NBFC origination upkeep: hand-off emails and flags",
+    what: "Manual hand-off reminder emails, the e-NACH stale-risk flag and the field-check 48-hour flag (?steps=flags). No money moves.",
+    cronPaths: [],
+    runner: {
+      kind: "off",
+      reason: "Proposed (ID 227) to switch on: it moves no money.",
+      decision: "Kartik",
     },
   },
 ];

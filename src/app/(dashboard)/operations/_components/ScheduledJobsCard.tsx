@@ -16,7 +16,7 @@ const HEALTH: Record<JobHealth, { label: string; variant: "success" | "warning" 
   failed: { label: "Failed", variant: "danger" },
   never: { label: "No run yet", variant: "warning" },
   pending: { label: "Not recorded yet", variant: "muted" },
-  off: { label: "Off", variant: "muted" },
+  off: { label: "Held", variant: "muted" },
   covered: { label: "Covered", variant: "info" },
 };
 
@@ -86,7 +86,7 @@ export function ScheduledJobsCard({ report }: { report: ScheduledJobsReport }) {
           <Badge variant={count("late") + count("never") > 0 ? "warning" : "muted"}>
             {count("late") + count("never")} late or not run
           </Badge>
-          <Badge variant="muted">{count("off")} off</Badge>
+          <Badge variant="muted">{count("off")} held</Badge>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[56rem] text-sm">
