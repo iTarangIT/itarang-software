@@ -24,9 +24,7 @@ export default async function InsideSalesPerformancePage() {
                     leads. Yesterday, today, this week, and the trend over the range you pick.
                 </p>
             </header>
-            {/* R-17 — accept pushed targets; actual vs target this month. */}
-            <MyTargetsCard />
-            <SalesDashboardView mode="isr" people={team.length ? [{ id: user.id, name: user.name }, ...team] : undefined} />
+            <SalesDashboardView mode="isr" people={team.length ? [{ id: user.id, name: user.name }, ...team] : undefined} myTargets={<MyTargetsCard />} />
         </div>
     );
 }
