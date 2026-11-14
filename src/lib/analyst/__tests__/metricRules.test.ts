@@ -42,6 +42,10 @@ describe("metricInstructions", () => {
         const sent = metricInstructions(Q);
         expect(sent).toMatch(/No date or period in the question means today \(IST\)/);
         expect(sent).toMatch(/Open every answer with the period counted/);
+        // 251 item 5 and 250 item 2 (10 Nov change list).
+        expect(sent).toMatch(/full names of anyone matched/);
+        expect(sent).toMatch(/name ILIKE '%name%'/);
+        expect(sent).toMatch(/never answer 0 for a name that matched nobody/);
         expect(sent).toMatch(/never as rows, records or entries/);
     });
 

@@ -19,6 +19,8 @@ export type ThreadMeta = {
     archived_at: string | null;
     deleted_at: string | null;
     shared: boolean;
+    /** When the conversation started (dates the short title); absent on older readers. */
+    created_at?: string | null;
 };
 
 /** A conversation in the column: the agent's thread plus what the CRM keeps about it. */
@@ -29,6 +31,8 @@ export type ListThread = Thread & {
     title_custom: boolean;
     /** Every question asked in it, newline-joined; for search only. */
     questions?: string;
+    /** The first question as typed, shown on hover when the title is the short one. */
+    full_title?: string;
 };
 
 export type ThreadView = "active" | "archived";
@@ -53,7 +57,10 @@ export function mergeThreads(agent: Thread[], meta: ThreadMeta[]): ListThread[] 
         if (m?.deleted_at) continue;
         out.push({
             ...t,
-            title: m?.title_custom ? m.title : t.title,
+            // 251 item 15: a conversation the person has not renamed gets a short title made
+            // from its first question ("Biplab visits, 10 Nov"); the question shows on hover.
+            title: m?.title_custom ? m.title : shortTitle(t.title, m?.created_at ?? t.last_run_at),
+            full_title: t.title,
             // The CRM learns of a question as it is asked; the agent once it is recorded.
             last_run_at: time(m?.last_asked_at) > time(t.last_run_at) ? m!.last_asked_at : t.last_run_at,
             pinned: Boolean(m?.pinned_at),
@@ -68,7 +75,8 @@ export function mergeThreads(agent: Thread[], meta: ThreadMeta[]): ListThread[] 
         seen.add(m.thread_id);
         out.push({
             thread_id: m.thread_id,
-            title: m.title,
+            title: m.title_custom ? m.title : shortTitle(m.title, m.created_at ?? m.last_asked_at),
+            full_title: m.title,
             run_count: m.run_count,
             last_run_at: m.last_asked_at,
             last_status: "done",
@@ -102,6 +110,69 @@ export function viewThreads(threads: ListThread[], view: ThreadView, q = "", lim
             return words.every((w) => hay.includes(w));
         }),
     ).slice(0, limit);
+}
+
+const DAY_KEY = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }); // YYYY-MM-DD
+const DAY_MONTH = new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short" });
+
+/** Question words that say nothing about the subject. */
+const FILLER = new Set(
+    (
+        "how many much what whats which who whom whose when where why is are was were be been do does did done " +
+        "can could would should will please pls show me give list tell find get the a an of for to in on at by " +
+        "and or my our we i you there their his her it its this that these those made make making number count " +
+        "total all any some with from about vs versus as"
+    ).split(" "),
+);
+/** Words for the period: replaced by the conversation's date. */
+const PERIOD = new Set(["today", "todays", "now", "yesterday", "yesterdays", "tomorrow"]);
+
+/**
+ * 251 item 15: a short title from a question: the subject words (at most four, about 32
+ * characters), then the date the conversation started, e.g. "visits did Biplab made today?"
+ * on 10 Nov → "Visits Biplab, 10 Nov". Falls back to the cleaned question when nothing is left.
+ */
+export function shortTitle(question: string, at?: string | null): string {
+    const words = question
+        .replace(/[?!.,;:"'()[\]{}]/g, " ")
+        .split(/\s+/)
+        .filter(Boolean);
+    const kept: string[] = [];
+    for (const w of words) {
+        const lower = w.toLowerCase();
+        if (FILLER.has(lower) || PERIOD.has(lower)) continue;
+        if ([...kept, w].join(" ").length > 32) break;
+        kept.push(w);
+        if (kept.length === 4) break;
+    }
+    const d = at ? new Date(at) : null;
+    const date = d && !Number.isNaN(d.getTime()) ? DAY_MONTH.format(d) : "";
+    if (!kept.length) return cleanTitle(question);
+    const head = kept.join(" ");
+    const subject = head.charAt(0).toUpperCase() + head.slice(1);
+    return date ? `${subject}, ${date}` : subject;
+}
+
+export type DateGroup = "Today" | "Yesterday" | "Last 7 days" | "Older";
+
+/** 251 item 19: which date group a conversation's last question falls in (IST days). */
+export function dateGroup(at: string | null | undefined, now: Date = new Date()): DateGroup {
+    const d = at ? new Date(at) : null;
+    if (!d || Number.isNaN(d.getTime())) return "Older";
+    const day = (x: Date) => Date.parse(`${DAY_KEY.format(x)}T00:00:00Z`);
+    const diff = Math.round((day(now) - day(d)) / 86_400_000);
+    if (diff <= 0) return "Today";
+    if (diff === 1) return "Yesterday";
+    if (diff <= 7) return "Last 7 days";
+    return "Older";
+}
+
+/** The list cut into date groups, in order, empty groups left out. Input order is kept within a group. */
+export function groupByDate(threads: ListThread[], now: Date = new Date()): { label: DateGroup; threads: ListThread[] }[] {
+    const order: DateGroup[] = ["Today", "Yesterday", "Last 7 days", "Older"];
+    const by = new Map<DateGroup, ListThread[]>(order.map((g) => [g, []]));
+    for (const t of threads) by.get(dateGroup(t.last_run_at, now))!.push(t);
+    return order.filter((g) => by.get(g)!.length).map((label) => ({ label, threads: by.get(label)! }));
 }
 
 /** A conversation's title as stored: one line, at most 120 characters. */

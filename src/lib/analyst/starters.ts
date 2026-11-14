@@ -5,21 +5,28 @@ import { normalizeQuestion } from "./verified";
 
 export type Starter = { question: string; personal: boolean };
 
-/** The business questions the CEO and Sales Head actually ask (13 Nov). */
+/** The four starter questions decided on 10 Nov (AI Analyst change list, item 8; ID 251). */
 export const DEFAULT_STARTERS = [
-    "How many visits did each ASM make this week?",
-    "Revenue this month vs last month, by salesperson",
-    "How many leads came in today, by source?",
-    "Which dealers have not placed an order in the last 30 days?",
+    "Visits by each salesperson yesterday",
+    "Revenue this month against target",
+    "Leads converted this month by salesperson",
+    "Sales-ready leads with no owner, by age",
 ];
 
+/** Item 22: a person's own questions replace the defaults only once they have asked about this many. */
+export const PERSONAL_STARTERS_AFTER = 10;
+
 /**
- * `asked` is the caller's own questions, newest first (repeats included). A question asked
- * twice or more comes first (most asked, then most recent); then the latest distinct ones;
+ * `asked` is the caller's own questions, newest first (repeats included). Until the caller
+ * has asked PERSONAL_STARTERS_AFTER questions the four defaults show unchanged (item 22).
+ * After that, a question asked twice or more comes first (most asked, then most recent); then the latest distinct ones;
  * the rest of the `n` slots are the defaults. At most `n - 1` are personal, so one default
  * always shows a new user what else can be asked.
  */
 export function personalStarters(asked: string[], defaults: string[] = DEFAULT_STARTERS, n = 4): Starter[] {
+    if (asked.length < PERSONAL_STARTERS_AFTER) {
+        return defaults.slice(0, n).map((question) => ({ question, personal: false }));
+    }
     const groups = new Map<string, { question: string; count: number; first: number }>();
     asked.forEach((raw, i) => {
         const question = raw.replace(/\s+/g, " ").trim();

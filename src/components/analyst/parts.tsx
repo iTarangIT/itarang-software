@@ -12,6 +12,7 @@ import remarkGfm from "remark-gfm";
 
 import { columnIsNumeric, renderCell } from "@/lib/analyst/cells";
 import { followUps } from "@/lib/analyst/followUps";
+import { cellLink, cellText, downloadName, isLongQuestion, tableToTsv } from "@/lib/analyst/tableExport";
 import {
   answeringAttempt,
   buildProcessSteps,
@@ -64,6 +65,9 @@ export function UserMessage({
 }) {
   const when = formatWhen(at);
   const [editing, setEditing] = useState(false);
+  // 251 item 21: a long or pasted question folds to three lines so the answer stays in view.
+  const long = isLongQuestion(text ?? (typeof children === "string" ? children : ""));
+  const [expanded, setExpanded] = useState(false);
   const [draft, setDraft] = useState(text ?? "");
   const box = useRef<HTMLTextAreaElement>(null);
 
@@ -137,7 +141,17 @@ export function UserMessage({
   return (
     <div className="group/question flex flex-col items-end gap-1">
       <div className="max-w-[85%] rounded-3xl bg-bg px-4 py-2.5 text-[0.9375rem] leading-relaxed break-words whitespace-pre-wrap text-ink sm:max-w-[75%]">
-        {children}
+        <div className={long && !expanded ? "line-clamp-3" : undefined}>{children}</div>
+        {long ? (
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            aria-expanded={expanded}
+            className="mt-1 text-[0.8125rem] font-medium text-brand-600 hover:underline"
+          >
+            {expanded ? "Show less" : "Show more"}
+          </button>
+        ) : null}
       </div>
       <div className="flex items-center gap-1">
         {onEdit && text ? (
@@ -518,15 +532,92 @@ export function RunErrorPanel({ error }: { error: RunError }) {
  * ("266300.00"); nothing here ever calls Number() on a cell, so a figure is printed exactly as
  * the database expressed it.
  */
-export function ResultTable({ result }: { result: Result }) {
+export function ResultTable({
+  result,
+  download,
+}: {
+  result: Result;
+  /** 251 item 20: Copy table / Download (Excel). Logged as a data download when given. */
+  download?: { threadId: string; runId: string | null; question: string } | null;
+}) {
   const { columns, rows, truncated } = result;
   const numeric = columns.map((_, i) => columnIsNumeric(rows, i));
+  const [copied, setCopied] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  async function copyTable() {
+    try {
+      await navigator.clipboard.writeText(tableToTsv(columns, rows));
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard refused (insecure origin or denied): nothing to undo.
+    }
+  }
+
+  async function downloadExcel() {
+    if (!download || saving) return;
+    setSaving(true);
+    try {
+      const ExcelJS = (await import("exceljs")).default;
+      const book = new ExcelJS.Workbook();
+      const sheet = book.addWorksheet("Answer");
+      sheet.addRow(columns).font = { bold: true };
+      for (const row of rows) {
+        sheet.addRow(
+          row.map((value, c) => {
+            const href = cellLink(columns, row, c);
+            const text = cellText(value);
+            return href ? { text, hyperlink: `${window.location.origin}${href}` } : text;
+          }),
+        );
+      }
+      const blob = new Blob([await book.xlsx.writeBuffer()], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = downloadName(download.question);
+      a.click();
+      URL.revokeObjectURL(a.href);
+      // Recorded like every other download (ID 13); a failed log does not take the file back.
+      void fetch("/api/analyst/downloads", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          thread_id: download.threadId,
+          run_id: download.runId ?? "unknown",
+          rows: rows.length,
+          columns: columns.length,
+        }),
+      }).catch(() => undefined);
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <div className="flex min-w-0 flex-col overflow-hidden rounded-xl border border-border bg-surface shadow-card">
-      <div className="flex items-baseline justify-between gap-3 border-b border-border px-4 py-2.5">
+      <div className="flex flex-wrap items-baseline justify-between gap-3 border-b border-border px-4 py-2.5">
         <p className="text-xs font-medium text-ink-muted">{rowCount(rows.length)}</p>
-        {truncated ? <p className="text-xs text-warning">Capped. Ask for a narrower range to see the rest.</p> : null}
+        <div className="flex items-baseline gap-3">
+          {truncated ? <p className="text-xs text-warning">Capped. Ask for a narrower range to see the rest.</p> : null}
+          {rows.length > 0 ? (
+            <button type="button" onClick={copyTable} className="text-xs font-medium text-brand-600 hover:underline">
+              {copied ? "Copied" : "Copy table"}
+            </button>
+          ) : null}
+          {rows.length > 0 && download ? (
+            <button
+              type="button"
+              onClick={downloadExcel}
+              disabled={saving}
+              className="text-xs font-medium text-brand-600 hover:underline disabled:opacity-50"
+            >
+              {saving ? "Preparing…" : "Download (Excel)"}
+            </button>
+          ) : null}
+        </div>
       </div>
       {rows.length === 0 ? (
         <p className="px-4 py-8 text-center text-[0.875rem] text-ink-muted">The query ran and matched nothing.</p>
@@ -552,14 +643,23 @@ export function ResultTable({ result }: { result: Result }) {
             <tbody>
               {rows.map((row, r) => (
                 <tr key={r} className="border-b border-border last:border-b-0">
-                  {row.map((value, c) => (
-                    <td
-                      key={c}
-                      className={cn("px-4 py-1.5 whitespace-nowrap text-ink", numeric[c] ? "text-right tabular-nums" : "text-left")}
-                    >
-                      <RenderedCell value={value} />
-                    </td>
-                  ))}
+                  {row.map((value, c) => {
+                    const href = cellLink(columns, row, c);
+                    return (
+                      <td
+                        key={c}
+                        className={cn("px-4 py-1.5 whitespace-nowrap text-ink", numeric[c] ? "text-right tabular-nums" : "text-left")}
+                      >
+                        {href ? (
+                          <a href={href} target="_blank" rel="noreferrer" className="text-brand-600 hover:underline">
+                            <RenderedCell value={value} />
+                          </a>
+                        ) : (
+                          <RenderedCell value={value} />
+                        )}
+                      </td>
+                    );
+                  })}
                 </tr>
               ))}
             </tbody>

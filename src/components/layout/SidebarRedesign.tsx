@@ -259,6 +259,7 @@ const ADMIN_SALES_HEAD_GROUPS: LayoutGroup[] = [
                     ...both("scrap-buyback-digest"),
                     ...both("idle-weekly-digest"),
                     ...both("missed-callbacks-digest"),
+                    ...both("analyst-feedback-digest"),
                     ...both("targets-pending-digest"),
                 ],
             },

@@ -486,6 +486,16 @@ function missedCallbacksDigestItem(idPrefix: string) {
   };
 }
 
+// 251 item 9 — Monday's AI Analyst thumbs-down review mail.
+function analystFeedbackDigestItem(idPrefix: string) {
+  return {
+    id: `${idPrefix}-analyst-feedback-digest`,
+    label: "AI Analyst review report",
+    icon: MailCheck,
+    href: "/admin/settings/analyst-feedback",
+  };
+}
+
 // R-15 — Monday's count of leads idle over 7 working days, per holder.
 function idleWeeklyDigestItem(idPrefix: string) {
   return {
@@ -588,6 +598,7 @@ const ROLE_TRAILING_SECTIONS: Record<string, any[]> = {
         salesDailyDigestItem("sh"),
         idleWeeklyDigestItem("sh"),
         missedCallbacksDigestItem("sh"),
+        analystFeedbackDigestItem("sh"),
         targetsPendingDigestItem("sh"),
         emiMessagesDigestItem("sh"),
         myDayDigestItem("sh"),
@@ -1735,6 +1746,7 @@ const roleNavigation: Record<string, any[]> = {
         salesDailyDigestItem("admin"),
         idleWeeklyDigestItem("admin"),
         missedCallbacksDigestItem("admin"),
+        analystFeedbackDigestItem("admin"),
         targetsPendingDigestItem("admin"),
         emiMessagesDigestItem("admin"),
         myDayDigestItem("admin"),

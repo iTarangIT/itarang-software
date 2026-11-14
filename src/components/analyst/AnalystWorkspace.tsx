@@ -362,6 +362,7 @@ export function AnalystWorkspace({
                   <Turn
                     key={(turn.runId ?? "turn") + "-" + i}
                     turn={turn}
+                    threadId={threadId}
                     latest={!started && i === turns.length - 1}
                     onAskAgain={turn.question ? askAgain?.(turn.question) : undefined}
                     onAsk={askNow}
@@ -370,6 +371,7 @@ export function AnalystWorkspace({
                 {started ? (
                   <Turn
                     turn={state}
+                    threadId={threadId}
                     live
                     latest
                     onAskAgain={state.question ? askAgain?.(state.question) : undefined}
@@ -449,12 +451,14 @@ export function AnalystWorkspace({
 /** One question and everything the agent handed back for it. */
 function Turn({
   turn,
+  threadId,
   live,
   latest,
   onAskAgain,
   onAsk,
 }: {
   turn: RunState;
+  threadId: string;
   live?: boolean;
   latest: boolean;
   onAskAgain?: () => void;
@@ -479,7 +483,9 @@ function Turn({
         {turn.answer ? <LiveAnswer text={turn.answer} live={Boolean(live)} /> : null}
         {plottable && turn.chart && turn.result ? <ResultChart spec={turn.chart} result={turn.result} /> : null}
         {forecast ? <ResultTable result={forecast} /> : null}
-        {turn.result ? <ResultTable result={turn.result} /> : null}
+        {turn.result ? (
+          <ResultTable result={turn.result} download={{ threadId, runId: turn.runId, question: turn.question ?? "" }} />
+        ) : null}
         {turn.error ? <RunErrorPanel error={turn.error} /> : null}
         {turn.phase === "cancelled" ? <p className="text-[0.875rem] text-ink-muted">You stopped this run.</p> : null}
         {running ? null : (

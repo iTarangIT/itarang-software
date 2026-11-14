@@ -4,7 +4,7 @@ import { exportFileName, threadToMarkdown } from "../exportThread";
 import { followUps } from "../followUps";
 import { checkGolden, numbersInText } from "../golden";
 import { GOLDEN_CASES } from "../goldenQuestions";
-import { DEFAULT_STARTERS, personalStarters } from "../starters";
+import { DEFAULT_STARTERS, PERSONAL_STARTERS_AFTER, personalStarters } from "../starters";
 import { cleanTitle, mergeThreads, viewThreads, type ThreadMeta } from "../threadList";
 import { withAskedThread } from "../threads";
 import type { Thread } from "../types";
@@ -102,13 +102,13 @@ const meta = (id: string, patch: Partial<ThreadMeta> = {}): ThreadMeta => ({
 });
 
 describe("mergeThreads / viewThreads", () => {
-    it("a rename wins; the agent's title stays otherwise", () => {
+    it("a rename wins; otherwise the short title (251 item 15), the question kept for hover", () => {
         const got = mergeThreads(
             [agentThread("t1", "agent one", "2026-11-10T00:00:00Z"), agentThread("t2", "agent two", "2026-11-09T00:00:00Z")],
             [meta("t1", { title: "My name", title_custom: true }), meta("t2")],
         );
         expect(got.find((t) => t.thread_id === "t1")!.title).toBe("My name");
-        expect(got.find((t) => t.thread_id === "t2")!.title).toBe("agent two");
+        expect(got.find((t) => t.thread_id === "t2")).toMatchObject({ title: "Agent two, 9 Nov", full_title: "agent two" });
     });
 
     it("deleted ones go; CRM rows the agent's top 200 lost come back", () => {
@@ -182,9 +182,19 @@ describe("followUps", () => {
 // ── Starter questions (item 12) ───────────────────────────────────────────────
 
 describe("personalStarters", () => {
-    it("a new user gets the defaults", () => {
-        expect(personalStarters([]).map((s) => s.question)).toEqual(DEFAULT_STARTERS);
+    it("a new user gets the four decided defaults (change list item 8)", () => {
+        expect(personalStarters([]).map((s) => s.question)).toEqual([
+            "Visits by each salesperson yesterday",
+            "Revenue this month against target",
+            "Leads converted this month by salesperson",
+            "Sales-ready leads with no owner, by age",
+        ]);
         expect(personalStarters([]).every((s) => !s.personal)).toBe(true);
+    });
+
+    it("fewer than 10 questions asked: still the defaults (item 22)", () => {
+        const nine = Array.from({ length: PERSONAL_STARTERS_AFTER - 1 }, () => "Revenue today by salesperson?");
+        expect(personalStarters(nine).map((s) => s.question)).toEqual(DEFAULT_STARTERS);
     });
 
     it("the most-asked come first, repeats folded, one default always left", () => {
@@ -194,6 +204,12 @@ describe("personalStarters", () => {
             "revenue today by salesperson",
             "Show overdue receivables",
             "Leads from Delhi this month",
+            // Older questions: enough to pass the 10-question threshold; each asked once.
+            "Calls by Priya yesterday",
+            "Hot leads in Lucknow",
+            "Quotes waiting for approval",
+            "Batteries sold last week",
+            "Dealers onboarded this month",
         ];
         const got = personalStarters(asked);
         expect(got).toHaveLength(4);
@@ -203,7 +219,7 @@ describe("personalStarters", () => {
     });
 
     it("a personal question that is also a default is not shown twice", () => {
-        const got = personalStarters([DEFAULT_STARTERS[0]]);
+        const got = personalStarters([DEFAULT_STARTERS[0], ...Array.from({ length: 10 }, (_, i) => `Other question number ${i}`)]);
         expect(got.map((s) => s.question).filter((q) => q === DEFAULT_STARTERS[0])).toHaveLength(1);
     });
 });
