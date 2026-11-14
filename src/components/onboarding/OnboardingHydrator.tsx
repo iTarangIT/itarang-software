@@ -4,9 +4,13 @@ import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useOnboardingStore } from "@/store/onboardingStore";
 
-// When the wizard is opened as /dealer-onboarding?applicationId=<id> (internal
-// staff continuing a converted lead — BRD §0.13), fetch that application and
-// pre-fill the store. No-op for normal dealer self-service (no applicationId).
+// When the wizard is opened as /dealer-onboarding?applicationId=<id> — internal
+// staff continuing a converted lead (BRD §0.13), or a signed-in dealer's
+// "Continue" from My Drafts (the GET route allows the draft's owner) — fetch
+// that application and its saved documents and pre-fill the store. With no
+// applicationId (a dealer with no login) the form's own saved draft is used;
+// its upload slots keep name + storage path across reloads (ID 166-B), and the
+// server copy arrives after the resume code (StepReview).
 export default function OnboardingHydrator() {
   const searchParams = useSearchParams();
   const applicationId = searchParams.get("applicationId");

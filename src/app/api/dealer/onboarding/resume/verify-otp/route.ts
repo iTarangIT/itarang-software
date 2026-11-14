@@ -6,7 +6,7 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { clientIp, takeIpToken } from "@/lib/auth/reset-throttle";
 import { findResumableApplication, isMissingTable } from "@/lib/onboarding/resumeLookup";
-import { onboardingDocumentLinks } from "@/lib/onboarding/onboardingFileLinks";
+import { onboardingDocumentLinks, onboardingStoredDocuments } from "@/lib/onboarding/onboardingFileLinks";
 import {
   hashResumeOtp,
   RESUME_OTP_FORMAT_RE,
@@ -98,12 +98,19 @@ export async function POST(req: NextRequest) {
       console.error("[onboarding/resume/verify-otp] document links failed:", err);
       return {} as Record<string, string>;
     });
+    // ID 166-B: the same documents by type + storage path, so the form can show
+    // them in their slots even when this browser kept nothing (another phone).
+    const documents = await onboardingStoredDocuments(application.id).catch((err) => {
+      console.error("[onboarding/resume/verify-otp] stored documents failed:", err);
+      return [];
+    });
 
     return NextResponse.json({
       success: true,
       applicationId: application.id,
       resumeToken,
       documentLinks,
+      documents,
       expiresInSeconds: Math.round(RESUME_TOKEN_TTL_MS / 1000),
     });
   } catch (err) {

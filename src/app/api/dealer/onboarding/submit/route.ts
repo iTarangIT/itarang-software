@@ -27,6 +27,7 @@ import {
 } from "@/lib/onboarding/submitAccess";
 import { markDocsSubmitted } from "@/lib/onboarding/leadMilestones";
 import { checkCustomerGstin, GSTIN_CHECK_MESSAGE } from "@/lib/leads/gstin";
+import { checkStoredPaths } from "@/lib/onboarding/storedDocuments";
 import { resolveSalesperson, salespersonMobile } from "@/lib/onboarding/salesperson";
 
 type UploadLike = {
@@ -104,8 +105,11 @@ function isUuid(value: string | null) {
   );
 }
 
+// ID 166-B: a slot the dealer filled on an earlier visit comes back with its
+// stored path but no URL (the form never keeps one) — the path is enough. The
+// URL to store is derived on the server after checkStoredPaths().
 function isUploadedFile(file: UploadLike | null | undefined) {
-  return Boolean(file?.uploadedUrl && file?.storagePath && file?.bucketName);
+  return Boolean(cleanString(file?.storagePath) && cleanString(file?.bucketName));
 }
 
 // Best-effort GST OCR for the web path: fetch the uploaded GST certificate and
@@ -612,10 +616,46 @@ export async function POST(req: NextRequest) {
         ? [byId, byUser, byIdentity].find((a) => a?.id === decision.applicationId) ?? null
         : null;
 
+    // ID 166-B: a slot may carry only a stored path (the dealer uploaded it on
+    // an earlier visit). Every path must be this application's own document or
+    // a fresh upload from the form — never another application's file — and
+    // the URL stored with it is derived here, not taken from the browser.
+    const plannedDocuments = collectDocuments(
+      existingApplication?.id ?? "",
+      body,
+      dealerUserId
+    );
+    const pathCheck = await checkStoredPaths(
+      existingApplication?.id ?? null,
+      plannedDocuments.map((d) => ({
+        bucketName: d.bucket_name,
+        storagePath: d.storage_path,
+      })),
+    );
+    if (!pathCheck.ok) {
+      return NextResponse.json(
+        {
+          success: false,
+          message:
+            "One of the documents could not be attached to this application. Please upload it again.",
+        },
+        { status: 400 }
+      );
+    }
+    for (const d of plannedDocuments) {
+      d.file_url = pathCheck.urlFor(d.bucket_name, d.storage_path);
+    }
+
     // Web path GST OCR — reuse the WhatsApp Gemini extractor. Best-effort: a
     // failure leaves gstAddresses unset and the admin adds them manually.
+    // Reads the checked GST file only (ID 166-B), never a URL the browser sent.
+    const checkedGst = plannedDocuments.find(
+      (d) => d.document_type === "gst_certificate"
+    );
     const gstAddresses = await extractGstAddressesBestEffort(
-      company?.gstCertificate,
+      checkedGst
+        ? { ...company?.gstCertificate, uploadedUrl: checkedGst.file_url }
+        : null,
     );
 
     // ID 66 (E-321): the salesperson is mandatory and is a CRM user, picked
@@ -796,11 +836,10 @@ export async function POST(req: NextRequest) {
       // Now a file that is unchanged is left alone (its verification state
       // with it), and one the submission replaces is written to the audit log
       // before its row goes — the file itself stays in storage.
-      const documentRows = collectDocuments(
-        finalApplicationId,
-        body,
-        dealerUserId
-      );
+      const documentRows = plannedDocuments.map((d) => ({
+        ...d,
+        application_id: finalApplicationId!,
+      }));
       const storedDocuments = await tx
         .select()
         .from(dealerOnboardingDocuments)

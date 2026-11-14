@@ -56,13 +56,16 @@ type PreviewDoc = {
   isPdf: boolean;
 };
 
-// ID 166: fresh signed links handed back by the resume code, keyed by the
-// stored URL, for a dealer whose 7-day upload links ran out.
+// ID 166: fresh signed links handed back by the resume code. ID 166-B: keyed
+// by storage path (a slot restored from an earlier visit has no URL), with the
+// stored URL kept as a second key for slots that do carry one.
 const FreshLinksContext = createContext<Record<string, string>>({});
 
 function resolveDocUrl(item: UploadItemLike, fresh: Record<string, string> = {}) {
   if (!item) return null;
-  const stored = item.uploadedUrl ? fresh[item.uploadedUrl] : undefined;
+  const stored =
+    (item.storagePath ? fresh[item.storagePath] : undefined) ||
+    (item.uploadedUrl ? fresh[item.uploadedUrl] : undefined);
   // 17 Oct: no stored file opens without a login. The browser's own copy
   // (previewUrl) first; viewUrl / uploadedUrl open only for a signed-in user.
   return stored || (item as any).previewUrl || (item as any).viewUrl || item.uploadedUrl || null;
@@ -87,8 +90,11 @@ function DocumentTile({
   onOpen: (doc: PreviewDoc) => void;
 }) {
   const url = resolveDocUrl(item, useContext(FreshLinksContext));
-  const fileName = item?.file?.name || "";
-  const uploaded = Boolean(url);
+  const fileName =
+    item?.file?.name || item?.fileName || item?.storagePath?.split("/").pop() || "";
+  // ID 166-B: a file uploaded on an earlier visit is "Uploaded" by its stored
+  // path even when this browser has no link to open it (no login, no code yet).
+  const uploaded = Boolean(url || item?.storagePath);
 
   if (!uploaded) {
     return (
@@ -101,7 +107,32 @@ function DocumentTile({
     );
   }
 
-  const { isPdf, isImage } = inferKindFromUrl(url!, fileName);
+  if (!url) {
+    return (
+      <div className="relative overflow-hidden rounded-2xl border border-[#E3E8EF] bg-white p-4 shadow-sm">
+        <span className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#1F5C8F] via-sky-400 to-emerald-400 opacity-80" />
+        <div className="flex items-start gap-3">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#F4F8FC] text-[#1F5C8F]">
+            <FileText className="h-5 w-5" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+              {label}
+            </p>
+            <p className="mt-1 truncate text-sm font-semibold text-slate-800">
+              {fileName || "Uploaded file"}
+            </p>
+            <p className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700">
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              Uploaded
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const { isPdf, isImage } = inferKindFromUrl(url, fileName);
 
   return (
     <button
@@ -110,7 +141,7 @@ function DocumentTile({
         onOpen({
           label,
           fileName: fileName || label,
-          url: url!,
+          url,
           isImage,
           isPdf,
         })
@@ -291,7 +322,33 @@ type UploadItemLike = {
   uploadedUrl?: string | null;
   storagePath?: string | null;
   bucketName?: string | null;
+  fileName?: string | null;
 } | null | undefined;
+
+// ID 166-B: verify-otp returns the application's stored documents by type.
+// Which wizard slot each type fills (the names the save + submit routes use).
+const SLOT_FOR_DOCUMENT_TYPE: Record<string, string> = {
+  gst_certificate: "company.gstCertificate",
+  pan_card: "company.companyPanFile",
+  company_pan: "company.companyPanFile",
+  itr_3_years: "compliance.itr3Years",
+  bank_statement_3_months: "compliance.bankStatement3Months",
+  undated_cheques: "compliance.undatedCheques",
+  passport_photo: "compliance.passportPhoto",
+  udyam_certificate: "compliance.udyamCertificate",
+  owner_photo: "ownership.ownerPhoto",
+  partnership_deed: "ownership.partnershipDeed",
+  mou_document: "ownership.mouDocument",
+  aoa_document: "ownership.aoaDocument",
+};
+
+type ServerStoredDocument = {
+  documentType: string;
+  fileName: string;
+  bucketName: string;
+  storagePath: string;
+  viewUrl: string | null;
+};
 
 type DealerDocumentPayload = {
   documentType: string;
@@ -319,7 +376,10 @@ function buildDocument(
     bucketName: item.bucketName || "dealer-documents",
     storagePath: item.storagePath,
     fileName:
-      item.file?.name || item.storagePath.split("/").pop() || documentType,
+      item.file?.name ||
+      item.fileName ||
+      item.storagePath.split("/").pop() ||
+      documentType,
     fileUrl: item.uploadedUrl || null,
     mimeType: item.file?.type || null,
     fileSize: typeof item.file?.size === "number" ? item.file.size : null,
@@ -414,6 +474,9 @@ export default function StepReview() {
   const errors = useOnboardingStore((s) => s.errors);
   const setErrors = useOnboardingStore((s) => s.setErrors);
   const completeOnboarding = useOnboardingStore((s) => s.completeOnboarding);
+  const setUpload = useOnboardingStore((s) => s.setUpload);
+  // ID 166-B: the code was accepted; the dealer checks the files, then submits.
+  const [resumeVerified, setResumeVerified] = useState(false);
 
   const primaryContact = getPrimaryContact(state);
 
@@ -488,11 +551,43 @@ export default function StepReview() {
         return;
       }
       resumeTokenRef.current = json.resumeToken;
-      if (json.documentLinks) setFreshLinks(json.documentLinks);
+      // ID 166-B: the application's stored files, by document type. A slot
+      // this browser left empty (reload, another phone) takes the stored file;
+      // a slot holding a newer upload keeps it. Links match on storage path.
+      const links: Record<string, string> = { ...(json.documentLinks ?? {}) };
+      const current = useOnboardingStore.getState() as unknown as Record<
+        string,
+        Record<string, UploadItemLike>
+      >;
+      for (const doc of (Array.isArray(json.documents)
+        ? json.documents
+        : []) as ServerStoredDocument[]) {
+        if (doc.viewUrl) links[doc.storagePath] = doc.viewUrl;
+        const slot = SLOT_FOR_DOCUMENT_TYPE[doc.documentType];
+        if (!slot) continue;
+        const [section, field] = slot.split(".");
+        const existing = current[section]?.[field] as
+          | (UploadItemLike & { id?: string; label?: string })
+          | undefined;
+        if (existing?.storagePath) continue;
+        setUpload(slot, {
+          id: existing?.id || crypto.randomUUID(),
+          label: existing?.label || doc.documentType,
+          file: null,
+          previewUrl: null,
+          storagePath: doc.storagePath,
+          bucketName: doc.bucketName,
+          fileName: doc.fileName,
+          verificationState: "verified",
+          progress: 100,
+        });
+      }
+      setFreshLinks(links);
       setResume(null);
       setErrors({});
-      // Submit again, now carrying the proof.
-      await handleSubmitApplication();
+      // ID 166-B: no automatic submit — the dealer now sees its stored files
+      // (with View) and presses Submit, which carries the token.
+      setResumeVerified(true);
     } catch {
       setResume({ ...resume, busy: false, error: "Could not check the code. Please try again." });
     }
@@ -1264,6 +1359,13 @@ export default function StepReview() {
           <p className="text-sm text-red-600">{errors.api}</p>
         )}
 
+        {resumeVerified && !resume && (
+          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
+            Verified. Your saved documents are shown above — check them, then
+            press Submit for Admin Review.
+          </div>
+        )}
+
         {/* ID 129 — prove this application is yours before it is changed. */}
         {resume && (
           <div className="rounded-2xl border border-[#E3E8EF] bg-white p-4 shadow-sm">
@@ -1293,7 +1395,7 @@ export default function StepReview() {
                 onClick={verifyResumeCode}
                 className="rounded-xl bg-[#1F5C8F] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
               >
-                {resume.busy ? "Checking…" : "Verify and submit"}
+                {resume.busy ? "Checking…" : "Verify"}
               </button>
               <button
                 type="button"
