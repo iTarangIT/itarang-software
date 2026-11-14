@@ -13,6 +13,7 @@ import {
     MAX_LINE_BLOCKED_RETRIES,
     planRetryDetailed,
     isWindowOpen,
+    lastConversation,
     nextWindowOpen,
     planRetry,
     type RetryInput,
@@ -211,5 +212,24 @@ describe("window helpers", () => {
     it("a Monday-only window resolves next Monday", () => {
         const mon: RetryWindow = { ...WORK, days: ["mon"] };
         expect(nextWindowOpen(ist("2026-09-28T10:00:00"), mon)).toEqual(ist("2026-10-05T09:00:00"));
+    });
+});
+
+// 14 Nov 2026 — B.N. Enterprises: the dealer spoke on dial 2, the 15-min
+// redial failed (SIP 480) and the row read "No Response".
+describe("lastConversation — Connected sticks once the dealer spoke", () => {
+    it("is null with no history or no conversation", () => {
+        expect(lastConversation(null)).toBeNull();
+        expect(lastConversation([])).toBeNull();
+        expect(lastConversation([{ status: "no_response", outcome: "x", call_id: null }])).toBeNull();
+    });
+    it("returns the latest conversation, ignoring later unreached dials", () => {
+        expect(
+            lastConversation([
+                { status: "completed", outcome: "done", call_id: "c1" },
+                { status: "completed", outcome: "unknown", call_id: "c2" },
+                { status: "no_response", outcome: "trigger_failed: SIP 480", call_id: null },
+            ]),
+        ).toEqual({ outcome: "unknown", call_id: "c2" });
     });
 });
