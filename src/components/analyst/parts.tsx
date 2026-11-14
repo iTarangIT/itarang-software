@@ -5,12 +5,13 @@
 // shimmer text and Streamdown/shiki/katex renderer were left behind: react-markdown + GFM
 // covers what an analytics answer uses (paragraphs, lists, tables, bold, inline code).
 
-import { AlertTriangle, ArrowUp, Check, ChevronDown, ChevronRight, Copy, RotateCcw } from "lucide-react";
+import { AlertTriangle, ArrowUp, Check, ChevronDown, ChevronRight, Copy, CornerDownRight, Pencil, RotateCcw } from "lucide-react";
 import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { columnIsNumeric, renderCell } from "@/lib/analyst/cells";
+import { followUps } from "@/lib/analyst/followUps";
 import {
   answeringAttempt,
   buildProcessSteps,
@@ -38,22 +39,158 @@ import { cn } from "@/lib/utils";
 
 import { FeedbackButtons } from "./feedback";
 import { useTypedAnswer } from "./hooks";
+import { useVerifiedMark, VerifiedBadge, VerifyButton, type VerifiedMark } from "./verified";
 
 // ── Messages ──────────────────────────────────────────────────────────────────
 
-/** A question. `at` is when it was asked; shown under the bubble in IST. */
-export function UserMessage({ children, at }: { children: React.ReactNode; at?: string | number | null }) {
+/**
+ * A question. `at` is when it was asked; shown under the bubble in IST. With `onEdit` (item 7)
+ * a pencil opens the question for editing; "Save & ask" asks the edited question as a new turn
+ * in the same conversation (the agent keeps every run, so the original stays above).
+ */
+export function UserMessage({
+  children,
+  at,
+  text,
+  onEdit,
+  limit,
+}: {
+  children: React.ReactNode;
+  at?: string | number | null;
+  /** The question as plain text, for editing. */
+  text?: string | null;
+  onEdit?: ((question: string) => void) | null;
+  limit?: number;
+}) {
   const when = formatWhen(at);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(text ?? "");
+  const box = useRef<HTMLTextAreaElement>(null);
+
+  useLayoutEffect(() => {
+    const element = box.current;
+    if (!element) return;
+    element.style.height = "auto";
+    element.style.height = `${Math.min(element.scrollHeight, COMPOSER_MAX_HEIGHT)}px`;
+  }, [draft, editing]);
+
+  const trimmed = draft.trim();
+  const canSave =
+    Boolean(onEdit) && trimmed.length >= 3 && (limit == null || trimmed.length <= limit) && trimmed !== (text ?? "").trim();
+
+  function close() {
+    setEditing(false);
+    setDraft(text ?? "");
+  }
+
+  function save() {
+    if (!canSave) return;
+    setEditing(false);
+    onEdit?.(trimmed);
+  }
+
+  if (editing) {
+    return (
+      <form
+        className="flex flex-col items-end gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          save();
+        }}
+      >
+        <textarea
+          ref={box}
+          autoFocus
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") close();
+            else if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              save();
+            }
+          }}
+          aria-label="Edit your question"
+          rows={1}
+          className="w-full max-w-[85%] resize-none rounded-2xl border border-brand-300 bg-surface px-4 py-2.5 text-[0.9375rem] leading-relaxed text-ink ring-2 ring-brand-100 focus:outline-none sm:max-w-[75%]"
+        />
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={close}
+            className="rounded-full px-3 py-1.5 text-[0.8125rem] text-ink-muted hover:bg-bg hover:text-ink"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={!canSave}
+            className="rounded-full bg-brand-500 px-3 py-1.5 text-[0.8125rem] font-medium text-white hover:bg-brand-600 disabled:opacity-40"
+          >
+            Save &amp; ask
+          </button>
+        </div>
+      </form>
+    );
+  }
+
   return (
-    <div className="flex flex-col items-end gap-1">
+    <div className="group/question flex flex-col items-end gap-1">
       <div className="max-w-[85%] rounded-3xl bg-bg px-4 py-2.5 text-[0.9375rem] leading-relaxed break-words whitespace-pre-wrap text-ink sm:max-w-[75%]">
         {children}
       </div>
-      {when ? (
-        <time dateTime={new Date(at!).toISOString()} className="px-2 text-[0.6875rem] text-ink-muted">
-          {when}
-        </time>
-      ) : null}
+      <div className="flex items-center gap-1">
+        {onEdit && text ? (
+          <button
+            type="button"
+            onClick={() => {
+              setDraft(text);
+              setEditing(true);
+            }}
+            aria-label="Edit question"
+            title="Edit and ask again"
+            className="flex size-7 items-center justify-center rounded-lg text-ink-muted transition-opacity hover:bg-bg hover:text-ink md:opacity-0 md:group-hover/question:opacity-100 md:focus-visible:opacity-100"
+          >
+            <Pencil aria-hidden className="size-3.5" strokeWidth={1.75} />
+          </button>
+        ) : null}
+        {when ? (
+          <time dateTime={new Date(at!).toISOString()} className="px-2 text-[0.6875rem] text-ink-muted">
+            {when}
+          </time>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/** Item 6 — follow-up questions under a finished answer; a click asks it in this conversation. */
+export function FollowUps({
+  question,
+  columns,
+  onAsk,
+}: {
+  question: string | null | undefined;
+  columns?: string[];
+  onAsk?: ((question: string) => void) | null;
+}) {
+  if (!question || !onAsk) return null;
+  const items = followUps(question, columns);
+  if (!items.length) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-1.5" aria-label="Follow-up questions">
+      {items.map((item) => (
+        <button
+          key={item.label}
+          type="button"
+          onClick={() => onAsk(item.question)}
+          title={item.question}
+          className="inline-flex items-center gap-1 rounded-full border border-border bg-surface px-3 py-1 text-[0.8125rem] text-ink-muted transition-colors hover:border-brand-300 hover:bg-brand-50 hover:text-ink"
+        >
+          <CornerDownRight aria-hidden className="size-3.5" strokeWidth={1.75} />
+          {item.label}
+        </button>
+      ))}
     </div>
   );
 }
@@ -107,6 +244,8 @@ export function MessageActions({
   persistent,
   runId,
   at,
+  hasSql = false,
+  verified = null,
   children,
 }: {
   copyText?: string | null;
@@ -114,6 +253,9 @@ export function MessageActions({
   persistent: boolean;
   runId?: string | null;
   at?: string | number | null;
+  /** The answer ran a query, so it can be verified (E-382). */
+  hasSql?: boolean;
+  verified?: VerifiedMark | null;
   children?: React.ReactNode;
 }) {
   const when = formatWhen(at);
@@ -125,6 +267,7 @@ export function MessageActions({
           "transition-opacity md:opacity-0 md:group-hover:opacity-100 md:focus-within:opacity-100 md:has-[[aria-expanded=true]]:opacity-100",
       )}
     >
+      {verified ? <VerifiedBadge mark={verified} /> : null}
       {copyText ? <CopyButton text={copyText} /> : null}
       <ActionButton
         label="Ask again"
@@ -140,6 +283,7 @@ export function MessageActions({
           Answered {when}
         </time>
       ) : null}
+      <VerifyButton runId={runId} hasSql={hasSql} />
       <FeedbackButtons runId={runId} />
     </div>
   );
@@ -634,7 +778,24 @@ function InSimpleTerms({ summary }: { summary: PlainSummary }) {
  * Reads like any other message but without a result table: the agent records how many rows
  * came back, never what they were. Each answer loads when its turn comes near the viewport.
  */
-export function PastTurn({ run, latest, onAskAgain }: { run: RunSummary; latest: boolean; onAskAgain?: () => void }) {
+export function PastTurn({
+  run,
+  latest,
+  onAskAgain,
+  onEdit,
+  onFollowUp,
+  limit,
+  share,
+}: {
+  run: RunSummary;
+  latest: boolean;
+  onAskAgain?: () => void;
+  onEdit?: ((question: string) => void) | null;
+  onFollowUp?: ((question: string) => void) | null;
+  limit?: number;
+  /** Read-only shared view: the token that opens this conversation's runs. */
+  share?: string;
+}) {
   const root = useRef<HTMLDivElement>(null);
   const [near, setNear] = useState(false);
 
@@ -650,30 +811,50 @@ export function PastTurn({ run, latest, onAskAgain }: { run: RunSummary; latest:
 
   return (
     <div ref={root} className="flex flex-col gap-5">
-      <UserMessage at={run.created_at}>{run.question}</UserMessage>
+      <UserMessage at={run.created_at} text={run.question} onEdit={onEdit} limit={limit}>
+        {run.question}
+      </UserMessage>
       <AssistantMessage>
-        {near ? <Reply runId={run.id} latest={latest} onAskAgain={onAskAgain} /> : <ReplySkeleton />}
+        {near ? (
+          <Reply runId={run.id} latest={latest} onAskAgain={onAskAgain} onFollowUp={onFollowUp} share={share} />
+        ) : (
+          <ReplySkeleton />
+        )}
       </AssistantMessage>
     </div>
   );
 }
 
-function Reply({ runId, latest, onAskAgain }: { runId: string; latest: boolean; onAskAgain?: () => void }) {
-  const [detail, setDetail] = useState<RunDetail | null>(null);
+function Reply({
+  runId,
+  latest,
+  onAskAgain,
+  onFollowUp,
+  share,
+}: {
+  runId: string;
+  latest: boolean;
+  onAskAgain?: () => void;
+  onFollowUp?: ((question: string) => void) | null;
+  share?: string;
+}) {
+  const [detail, setDetail] = useState<(RunDetail & { verified?: VerifiedMark | null }) | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const mark = useVerifiedMark(detail?.id, true, detail ? (detail.verified ?? null) : undefined);
 
   useEffect(() => {
     const controller = new AbortController();
-    fetch(`/api/analyst/runs/${encodeURIComponent(runId)}`, { signal: controller.signal })
+    const query = share ? `?share=${encodeURIComponent(share)}` : "";
+    fetch(`/api/analyst/runs/${encodeURIComponent(runId)}${query}`, { signal: controller.signal })
       .then(async (response) => {
         if (!response.ok) throw new Error("failed");
-        setDetail((await response.json()) as RunDetail);
+        setDetail((await response.json()) as RunDetail & { verified?: VerifiedMark | null });
       })
       .catch(() => {
         if (!controller.signal.aborted) setError("Could not load that answer.");
       });
     return () => controller.abort();
-  }, [runId]);
+  }, [runId, share]);
 
   if (error) return <p className="text-[0.875rem] text-danger">{error}</p>;
   if (!detail) return <ReplySkeleton />;
@@ -691,9 +872,12 @@ function Reply({ runId, latest, onAskAgain }: { runId: string; latest: boolean; 
         persistent={latest}
         runId={detail.id}
         at={answeredAt(detail.created_at, detail.duration_ms)}
+        hasSql={Boolean(detail.sql?.trim()) && detail.status === "done"}
+        verified={share ? (detail.verified ?? null) : mark}
       >
         <RunProcess detail={detail} />
       </MessageActions>
+      {detail.status === "done" ? <FollowUps question={detail.question} onAsk={onFollowUp} /> : null}
     </>
   );
 }

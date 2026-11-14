@@ -1,5 +1,6 @@
 // Data Analyst agent — the thread column's list.
 
+import type { ListThread } from "./threadList";
 import type { Thread } from "./types";
 
 /** How many of the caller's conversations the column shows. */
@@ -18,13 +19,21 @@ export function ownThreads(user: { prefix: string }, threads: Thread[]): Thread[
 
 /** The list as it will look once the agent has recorded the question just asked. */
 export function withAskedThread(
-  threads: Thread[],
+  threads: ListThread[],
   asked: { threadId: string; question: string; connectionId: string; at: string },
-): Thread[] {
+): ListThread[] {
   const existing = threads.find((t) => t.thread_id === asked.threadId);
   const rest = threads.filter((t) => t.thread_id !== asked.threadId);
-  const updated: Thread = existing
-    ? { ...existing, run_count: existing.run_count + 1, last_run_at: asked.at, last_status: "running" }
+  const updated: ListThread = existing
+    ? {
+        ...existing,
+        run_count: existing.run_count + 1,
+        last_run_at: asked.at,
+        last_status: "running",
+        // Asking in an archived conversation brings it back (threadStore.recordAsk does the same).
+        archived: false,
+        questions: `${existing.questions ?? existing.title}\n${asked.question}`,
+      }
     : {
         thread_id: asked.threadId,
         // The agent titles a thread by its first question too, so the row does not rename.
@@ -33,6 +42,11 @@ export function withAskedThread(
         last_run_at: asked.at,
         last_status: "running",
         connection_id: asked.connectionId,
+        pinned: false,
+        archived: false,
+        shared: false,
+        title_custom: false,
+        questions: asked.question,
       };
   return [updated, ...rest];
 }
