@@ -25,11 +25,11 @@ export const DATASET_LAYOUT: Record<string, DatasetLayout> = {
         grain: "One row per dealer lead",
         who: "CEO, Admin, Sales Head (all); ISR and ASM (own leads only)",
         columnGroups: [
-            { name: "Identity", keys: ["lead_id", "dealer_name", "phone", "city", "state", "business_type", "gstin"] },
+            { name: "Identity", keys: ["lead_id", "dealer_name", "shop_name", "phone", "city", "state", "business_type", "gstin"] },
             { name: "Source", keys: ["created_on", "source_door", "source_origin", "campaign", "campaign_system", "created_by"] },
             {
                 name: "Owner and speed",
-                keys: ["owner_name", "owner_role", "sales_ready_on", "sales_ready_reason", "assigned_on", "first_attempt_on", "first_contact_on", "last_worked_on", "idle_working_days", "idle_past_limit", "next_follow_up", "last_visit_date", "next_visit_date", "last_call_at", "next_call_at"],
+                keys: ["owner_name", "owner_role", "sales_ready_on", "sales_ready_reason", "assigned_on", "first_attempt_on", "first_contact_on", "last_worked_on", "idle_working_days", "idle_past_limit", "next_follow_up", "last_visit_date", "next_visit_date", "visit_overdue_days", "last_call_at", "next_call_at"],
             },
             {
                 name: "Pipeline",
@@ -37,7 +37,7 @@ export const DATASET_LAYOUT: Record<string, DatasetLayout> = {
             },
             {
                 name: "Outcome",
-                keys: ["won_at", "closed_by_name", "account_activated_on", "lost_on", "lost_reason", "competitor", "invoices", "billed", "last_invoice"],
+                keys: ["won_at", "won_without_approved_quote", "closed_by_name", "account_activated_on", "lost_on", "lost_reason", "competitor", "invoices", "billed", "last_invoice", "billing_match", "visits_before_first_billing"],
             },
         ],
     },

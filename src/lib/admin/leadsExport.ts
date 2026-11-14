@@ -27,11 +27,14 @@
  *                        this person and does not move when the lead is
  *                        reassigned — count conversions on this column.
  *   Last visit           MAX(lead_visits.actual_visit_date)
- *   Next visit           MIN(lead_visits.scheduled_date) on/after today (IST),
- *                        visit still open
+ *   Next visit           ID 247: the lead's ONE open booking (the newest open
+ *                        row, lib/asm/nextBooking.ts), also when its date has
+ *                        passed; "Visit overdue (days)" says by how much
  *   Last call            MAX(performed_at) over inside_sales_call / ai_call
  *   Next call            MIN(next_action_at) on/after now, over the same rows
- *   Latest remarks       remarks of the most recent touchpoint of ANY type
+ *   Latest remarks       ID 224: the newest remark written by a person, a
+ *                        NeoDove call or an AI call (REMARK_TOUCHPOINT_TYPES);
+ *                        not re-inquiry / sales-ready / correction / assignment
  *   Business till date   Σ total of the matched non-void invoices, LESS the
  *                        matched credit notes (negative rows) — the same rows
  *                        as the Revenue card
@@ -48,6 +51,7 @@ import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { matchedUnion, REVENUE_IS_CREDIT, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
 import { aiSignalsJoin, buildExportWhere, type LeadListFilters } from "@/lib/leads/leadListQuery";
+import { nextBookingJoin, REMARK_TOUCHPOINT_TYPES } from "@/lib/asm/nextBooking";
 
 /**
  * A12 — what "business" means, per matched lead: every non-void document of
@@ -88,7 +92,10 @@ export type LeadsExportRow = {
     /** ID 117: who held the lead when it was won / lost; null on an open lead. */
     closed_by_name: string | null;
     last_visit_date: string | null;
+    /** ID 247: the one open booking's date, also when it has passed. */
     next_visit_date: string | null;
+    /** ID 247: days past the booking date (IST); null when not overdue or none. */
+    visit_overdue_days: number | null;
     last_call_at: string | null;
     next_call_at: string | null;
     latest_remarks: string | null;
@@ -133,11 +140,7 @@ export async function fetchLeadsForExport(
         ),
         visits AS (
             SELECT v.dealer_lead_id,
-                   MAX(v.actual_visit_date) AS last_visit_date,
-                   MIN(v.scheduled_date) FILTER (
-                       WHERE v.scheduled_date >= (SELECT d FROM today)
-                         AND v.visit_status NOT IN ('visited', 'cancelled', 'no_show')
-                   ) AS next_visit_date
+                   MAX(v.actual_visit_date) AS last_visit_date
               FROM lead_visits v
              WHERE v.dealer_lead_id IN (SELECT id FROM picked)
              GROUP BY v.dealer_lead_id
@@ -155,6 +158,7 @@ export async function fetchLeadsForExport(
             SELECT DISTINCT ON (t.dealer_lead_id) t.dealer_lead_id, t.remarks
               FROM lead_touchpoints t
              WHERE t.remarks IS NOT NULL AND trim(t.remarks) <> ''
+               AND t.touchpoint_type IN (${sql.join(REMARK_TOUCHPOINT_TYPES.map((x) => sql`${x}`), sql`, `)})
                AND t.dealer_lead_id IN (SELECT id FROM picked)
              ORDER BY t.dealer_lead_id, t.performed_at DESC NULLS LAST, t.created_at DESC
         ),
@@ -191,7 +195,8 @@ export async function fetchLeadsForExport(
                CASE WHEN dl.lead_status IN ('Won', 'Converted', 'Lost')
                     THEN closer.name END              AS closed_by_name,
                vi.last_visit_date::text               AS last_visit_date,
-               vi.next_visit_date::text               AS next_visit_date,
+               nb.scheduled_date::text                AS next_visit_date,
+               nb.overdue_days                        AS visit_overdue_days,
                c.last_call_at::text                   AS last_call_at,
                c.next_call_at::text                   AS next_call_at,
                r.remarks                              AS latest_remarks,
@@ -204,6 +209,7 @@ export async function fetchLeadsForExport(
           LEFT JOIN users owner ON owner.id::text = dl.current_owner_id
           LEFT JOIN users closer ON closer.id::text = dl.closing_owner_id
           LEFT JOIN visits vi ON vi.dealer_lead_id = dl.id
+          ${nextBookingJoin("nb")}
           LEFT JOIN calls c ON c.dealer_lead_id = dl.id
           LEFT JOIN remarks r ON r.dealer_lead_id = dl.id
           LEFT JOIN billing b ON b.dealer_lead_id = dl.id::text

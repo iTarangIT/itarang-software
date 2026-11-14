@@ -20,6 +20,7 @@ import { needsActionAccess } from "@/lib/dashboard/needsActionAccess";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { ECOFY_MANAGER_ROLES } from "@/lib/ecofy/access";
 import { csvDateTime, csvResponse } from "@/lib/leads/queueCsv";
+import { dateOnlyWords, isDateOnly } from "@/lib/visits/visitTimeText";
 import { LEAD_STATUS_LABEL } from "@/lib/leads/queueFilters";
 import {
     DRILL_KINDS,
@@ -90,7 +91,8 @@ export const GET = withErrorHandler(async (req: Request) => {
                 { header: "Status", value: (r) => statusText(r.status) },
                 { header: "Rating", value: (r) => r.rating ?? "" },
                 { header: "Current owner / dealer", value: (r) => r.owner_name ?? "" },
-                { header: "When", value: (r) => csvDateTime(r.at) },
+                // ID 237: same as the pop-up: photo time, else the date + "no time recorded".
+                { header: "When", value: (r) => (isDateOnly(r.at) ? dateOnlyWords(r.at!) : csvDateTime(r.at)) },
                 { header: "Detail", value: (r) => r.detail ?? "" },
             ],
         });

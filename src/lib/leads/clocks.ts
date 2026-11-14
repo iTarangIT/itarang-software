@@ -46,6 +46,7 @@ import {
     type StatusChange,
 } from "@/lib/leads/clockRules";
 import { timeLimitDef } from "@/lib/timeLimits/registry";
+import { visitTimeSql } from "@/lib/visits/visitTime";
 
 const rowsOf = <T>(r: unknown): T[] => (Array.isArray(r) ? r : ((r as { rows?: T[] })?.rows ?? [])) as T[];
 const d = (v: string | Date | null | undefined): Date | null => (v == null ? null : v instanceof Date ? v : new Date(v));
@@ -145,8 +146,9 @@ export async function computeLeadClocks(now = new Date(), opts: { kinds?: readon
               FROM lead_touchpoints t
              WHERE ${humanCall(sql`t`)} AND t.performed_at IS NOT NULL
             UNION ALL
-            -- A visit has a date, not a time: read as office opening (10:00 IST) on that day.
-            SELECT v.dealer_lead_id, COALESCE((v.actual_visit_date + TIME '10:00') AT TIME ZONE 'Asia/Kolkata', v.updated_at),
+            -- ID 245: a visit's time = the shop photo's time, else when it was logged (same
+            -- day), else 10:00 IST on the visit day (lib/visits/visitTime.ts).
+            SELECT v.dealer_lead_id, COALESCE(${visitTimeSql("v")}, v.updated_at),
                    v.asm_id, 'visit', v.visit_status IN ('visited', 'no_show'), v.visit_status = 'visited'
               FROM lead_visits v
              WHERE v.visit_status IN ('visited', 'no_show')

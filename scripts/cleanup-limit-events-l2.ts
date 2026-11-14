@@ -25,6 +25,7 @@
 //   node --import tsx --env-file=.env.production scripts/cleanup-limit-events-l2.ts
 //   node --import tsx --env-file=.env.production scripts/cleanup-limit-events-l2.ts --apply --confirm-live
 //   … --since=2026-10-16   change the cut-off day (IST)
+//   … --no-recheck         keep older misses even when today's rules no longer see them (ID 245)
 //
 // Then: scripts/verify-id85-86-time-limits.ts on the same database.
 
@@ -87,12 +88,35 @@ async function main() {
                ${doomed} AS doomed
           FROM lead_limit_events e
     `)) as unknown as Array<Row & { doomed: boolean }>;
-    const gone = all.filter((r) => r.doomed);
-    const kept = all.filter((r) => !r.doomed);
+    // ID 245 (14 Nov): a third kind — an OLDER miss that today's rules no longer see. Since
+    // 245 a visit's time is its photo time (else when it was logged that day), not 10:00 am,
+    // so a visit made minutes after the lead arrived is no longer late. Those records sit
+    // before the cut-off and were never re-checked. With --no-recheck they are kept.
+    const computed = await computeLeadClocks(new Date(), { kinds: await storableClockKinds() });
+    const key = (lead: string, clock: string, started: string | Date) => `${lead}|${clock}|${new Date(started).toISOString()}`;
+    const stillPassed = new Set(computed.filter((c) => c.limit_passed_at).map((c) => key(c.dealer_lead_id, c.clock, c.started_at)));
+    // Only a clock today's rules still compute, and find NOT past its limit. A record whose
+    // lead or clock is no longer computed at all (closed, test lead, deleted) is history and stays.
+    const stillComputed = new Set(computed.map((c) => key(c.dealer_lead_id, c.clock, c.started_at)));
+    const recheck = !flag("no-recheck");
+    const stale = new Set(
+        recheck
+            ? all
+                  .filter((r) => {
+                      const k = key(r.dealer_lead_id, r.clock, r.clock_started_at);
+                      return !r.doomed && stillComputed.has(k) && !stillPassed.has(k);
+                  })
+                  .map((r) => r.id)
+            : [],
+    );
+    const gone = all.filter((r) => r.doomed || stale.has(r.id));
+    const kept = all.filter((r) => !r.doomed && !stale.has(r.id));
+    console.log(`  older misses today's rules no longer see (ID 245 visit time, and any other since-fixed rule): ${stale.size}`);
 
     console.log(`\nlead_limit_events: ${all.length} rows; ${gone.length} to clear, ${kept.length} kept`);
     const byClock = new Map<string, { since: number; charged: number }>();
     for (const r of gone) {
+        if (stale.has(r.id)) continue; // counted above
         const c = byClock.get(r.clock) ?? { since: 0, charged: 0 };
         if (new Date(r.passed_at) >= new Date(cutoff)) c.since++;
         else c.charged++;
@@ -104,8 +128,8 @@ async function main() {
 
     // What the refresh would record again, without writing: the computed
     // misses not already held by a kept row (same lead, clock and start).
-    const clocks = await computeLeadClocks(new Date(), { kinds: await storableClockKinds() });
-    const keyOf = (lead: string, clock: string, started: string | Date) => `${lead}|${clock}|${new Date(started).toISOString()}`;
+    const clocks = computed;
+    const keyOf = key;
     const keptKeys = new Set(kept.map((r) => keyOf(r.dealer_lead_id, r.clock, r.clock_started_at)));
     const again = clocks.filter(
         (c) => c.limit_passed_at && c.limit_key && c.limit_value != null && !keptKeys.has(keyOf(c.dealer_lead_id, c.clock, c.started_at)),
@@ -154,9 +178,12 @@ async function main() {
     const file = join(dir, `l2-limit-events-backup-${host.split(".")[0]}-${new Date().toISOString().replace(/[:.]/g, "-")}.json`);
     const removed = await db.transaction(async (tx) => {
         await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('lead_clocks_refresh'))`);
-        const rows = (await tx.execute(sql`SELECT e.* FROM lead_limit_events e WHERE ${doomed}`)) as unknown as Row[];
+        // The cut-off kinds, plus the older misses today's rules no longer see (by id).
+        const staleIds = JSON.stringify([...stale]);
+        const target = sql`(${doomed} OR e.id::text IN (SELECT jsonb_array_elements_text(${staleIds}::jsonb)))`;
+        const rows = (await tx.execute(sql`SELECT e.* FROM lead_limit_events e WHERE ${target}`)) as unknown as Row[];
         writeFileSync(file, JSON.stringify({ host, cutoff, taken_at: new Date().toISOString(), rows }, null, 1));
-        await tx.execute(sql`DELETE FROM lead_limit_events e WHERE ${doomed}`);
+        await tx.execute(sql`DELETE FROM lead_limit_events e WHERE ${target}`);
         return rows.length;
     });
     console.log(`\nbacked up ${removed} rows → ${file}`);

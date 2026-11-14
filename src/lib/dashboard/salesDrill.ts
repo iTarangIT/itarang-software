@@ -38,6 +38,7 @@ import { hasAccountOwnershipTables } from "@/lib/accounts/tables";
 import { ENGAGED_OUTCOMES } from "@/lib/asm/types";
 import { SALES_LOST_REASONS } from "@/lib/lifecycle/transitions";
 import { FV_COLUMN, fieldVisitSegmentsSql, type FvMeasure } from "@/lib/dashboard/fieldVisitTrend";
+import { visitWhenTextSql } from "@/lib/visits/visitTime";
 
 export const DRILL_KINDS = [
     // Calling (inside sales) — per person
@@ -265,7 +266,7 @@ async function leadEvents(kind: DrillKind, f: DrillFilters, persons: string[] | 
                       ? sql`AND ${isRepeatSql()}`
                       : sql``;
             return sql`SELECT DISTINCT ON (${distinct})
-                              v.dealer_lead_id AS lead_id, v.asm_id::text AS person, v.actual_visit_date::timestamp AS at,
+                              v.dealer_lead_id AS lead_id, v.asm_id::text AS person, ${visitWhenTextSql("v")} AS at,
                               concat_ws(' · ', replace(v.visit_status, '_', ' '), replace(v.visit_outcome, '_', ' '),
                                         CASE WHEN ${isNewToItarangSql()} THEN 'new to iTarang'
                                              WHEN ${isFreshSql()} THEN 'fresh (first visit by this person)'
@@ -288,7 +289,7 @@ async function leadEvents(kind: DrillKind, f: DrillFilters, persons: string[] | 
                           AND v.gps_check_in_lat IS NOT NULL AND v.gps_check_in_lng IS NOT NULL`
                     : sql`v.visit_outcome IN (${list(ENGAGED_OUTCOMES)})`;
             return sql`SELECT v.dealer_lead_id AS lead_id, v.asm_id::text AS person,
-                              COALESCE(v.actual_visit_date::timestamp, v.updated_at) AS at,
+                              COALESCE(${visitWhenTextSql("v")}, (v.updated_at AT TIME ZONE ${IST})::date::text) AS at,
                               concat_ws(' · ', replace(v.visit_outcome, '_', ' '), left(v.visit_remarks, 140)) AS detail
                          FROM lead_visits v JOIN dealer_leads dl ON dl.id = v.dealer_lead_id
                         WHERE v.visit_status = 'visited' AND ${extra}
