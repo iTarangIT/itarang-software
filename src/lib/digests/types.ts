@@ -31,7 +31,8 @@ export type DigestKindId =
   | "my_day"
   | "my_team"
   | "emi_messages"
-  | "missed_callbacks";
+  | "missed_callbacks"
+  | "analyst_feedback";
 
 /** One figure about the covered day. */
 export type ActivityLine = {

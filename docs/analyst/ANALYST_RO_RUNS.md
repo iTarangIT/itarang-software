@@ -92,27 +92,22 @@ source so the saved list and the selected tables' columns are re-read. `analyst_
    Put all six (plus `ANALYST_CRM_READONLY_DSN` from the steps below) in prod `shared/.env` **and** `PROD_ENV_FILE_B64`.
    Prod's tenant starts empty, so step 4 below is "connect", not "remove and connect".
 
-## Prod: to do (needs a password, so not run by Claude)
+## Prod: status (updated 14 Nov, ID 167)
 
-**Since 23 Oct the CRM fails closed:** a server whose `ANALYST_CRM_READONLY_DSN` login is not
-`analyst_ro` (or that has no DSN at all) refuses to connect the iTarang database, refuses questions
-on a saved iTarang source (403), and the tab says personal data is not masked yet. Uploads still
-work. On prod that stays the case until steps 1 to 3 below are done.
+The CRM still **fails closed** (since 23 Oct): a server whose `ANALYST_CRM_READONLY_DSN` login is not
+`analyst_ro` refuses to connect or ask the iTarang database. Prod passed that gate on 26-27 Oct.
 
-1. Choose a strong password (at least 16 characters) and keep it in the password manager.
-2. Run against prod:
-   ```bash
-   ANALYST_RO_PASSWORD='<password>' node --env-file=.env.production scripts/_create-analyst-readonly-role.mjs
-   ```
-   The script prints the host before it changes anything; check it says `database-2`.
-3. Set `ANALYST_CRM_READONLY_DSN=postgres://analyst_ro:<password>@<db-2 host>:5432/postgres?sslmode=require`
-   in the prod env: on the box (`shared/.env`) **and** in the `PROD_ENV_FILE_B64` GitHub secret.
-   Then `pm2 reload itarang-crm-web --update-env`.
-4. In the Analyst (CEO login), remove the old iTarang database source and connect it again.
-5. Business check: ask "show me a dealer's notes" and "a customer's vehicle number".
-   The Analyst must say it cannot read them.
-6. Data sources › iTarang database › **Refresh tables**, then pick the tables again.
-7. Clean-up of saved outside sources (once the agent's sign-in works again, see the 23 Oct row):
-   `node --import tsx --env-file=.env.production scripts/_delete-analyst-outside-connections.ts`, then again with `--apply`.
-   The agent is one shared tenant, so this clears sandbox too.
-8. Add a row to the table above for each step.
+| Step | Status | Record |
+|---|---|---|
+| 1-2. `analyst_ro` on db-2 with its own password | **Done** 26 Oct; re-run 27 Oct | Table rows 2026-10-26 / 2026-10-27 (db-2): `all_rules_hold: true` |
+| 3. `ANALYST_CRM_READONLY_DSN` + ANALYST_* in prod `shared/.env` and `PROD_ENV_FILE_B64` | **Done** 26 Oct (by Aditya) | Prod Analyst answers from db-2 (27 Oct row) |
+| 4. Connect the iTarang database on the prod tenant | **Done** 27 Oct | Prod tenant "iTarang Prod" has one source, `iTarang CRM` (29 Oct row) |
+| 5. Business check: "show me a dealer's notes" / "a customer's vehicle number" → cannot read them | **To post** (167 test 1) | Database side proven 26 Oct (`dealer_leads.memory`, `vehicle_number` refused 42501); ask the live Analyst and paste the two replies here |
+| 6. Refresh tables | **Done** 27 Oct, and again after each role-script run | 27 Oct rows |
+| 7. Outside-source clean-up | **Done** 29 Oct on both tenants: 0 outside databases | 29 Oct rows |
+| Gemini key on a paid plan (167 item 1) | **To post** | Account name + billing screenshot in the tracker row |
+| Data sources: only iTarang database, uploads, Google Sheets/Drive (167 test 2) | Built (fail-closed outside DSNs, web connector gone) | Screenshot of the Data sources drawer on live |
+
+Screen names vs stored values (167 item 3, after 215): the Analyst rules already map them
+(`metricDefinitions.ts` "Status words"); E-383 also writes it into the `dealer_leads.lead_status`
+column comment, which the agent's table ranker reads.

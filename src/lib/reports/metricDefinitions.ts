@@ -239,7 +239,7 @@ export const ANALYST_RULES: ReadonlyArray<{ topics: readonly AnalystTopic[]; tex
     {
         topics: [],
         text:
-            "No date or period in the question means today (IST) - say that today was assumed. Open every answer with the period counted, in real dates (e.g. 'Today, 13 Nov 2026 (IST):').",
+            "No date or period in the question means today (IST) - say that today was assumed. Open every answer with the period counted, in real dates (e.g. 'Today, 13 Nov 2026 (IST):'), and the full names of anyone matched (e.g. 'Biplabh Ghosh, 10 Nov 2026 (IST):').",
     },
     {
         topics: [],
@@ -249,7 +249,7 @@ export const ANALYST_RULES: ReadonlyArray<{ topics: readonly AnalystTopic[]; tex
     {
         topics: [],
         text:
-            "A person named in the question is first looked up in analyst_staff (name ILIKE every word of the name, partial spelling allowed); give the matched full name in the answer. " +
+            "A person named in the question is first looked up in analyst_staff: name ILIKE '%name%' (a name of several words: every word must match, partial spelling allowed); give the matched full name in the answer. " +
             "If no staff name matches, say 'no staff member matches' with the closest names - never answer 0 for a name that matched nobody. If several match, list their full names and ask which one. " +
             "A person's visits are lead_visits.asm_id = analyst_staff.user_id; their leads, calls and quotes join their owner / assigned_to / performed_by column to analyst_staff.user_id.",
     },

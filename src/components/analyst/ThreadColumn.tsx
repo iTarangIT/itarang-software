@@ -8,7 +8,7 @@ import { Archive, ArchiveRestore, MessageSquarePlus, MoreHorizontal, Pencil, Pin
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { viewThreads, type ListThread, type ThreadView } from "@/lib/analyst/threadList";
+import { groupByDate, viewThreads, type ListThread, type ThreadView } from "@/lib/analyst/threadList";
 import { formatWhenShort } from "@/lib/analyst/when";
 import { cn } from "@/lib/utils";
 
@@ -42,7 +42,8 @@ export function ThreadColumn({
   const view: ThreadView = chosenView === "archived" && archivedCount === 0 ? "active" : chosenView;
   const shown = useMemo(() => viewThreads(threads, view, query), [threads, view, query]);
   const pinned = shown.filter((t) => t.pinned);
-  const rest = shown.filter((t) => !t.pinned);
+  // 251 item 19: the rest grouped Today / Yesterday / Last 7 days / Older.
+  const groups = useMemo(() => groupByDate(shown.filter((t) => !t.pinned)), [shown]);
 
   return (
     <aside className={cn("w-64 shrink-0 flex-col border-r border-border bg-bg/60", className)}>
@@ -107,10 +108,16 @@ export function ThreadColumn({
               <>
                 <p className="px-2 pt-1 pb-1 text-[0.6875rem] font-medium text-ink-muted">Pinned</p>
                 <ThreadList threads={pinned} basePath={basePath} activeId={activeId} enabled={enabled} actions={actions} />
-                {rest.length ? <p className="px-2 pt-3 pb-1 text-[0.6875rem] font-medium text-ink-muted">Recent</p> : null}
               </>
             ) : null}
-            <ThreadList threads={rest} basePath={basePath} activeId={activeId} enabled={enabled} actions={actions} />
+            {groups.map((g, i) => (
+              <div key={g.label}>
+                <p className={cn("px-2 pb-1 text-[0.6875rem] font-medium text-ink-muted", i === 0 && !pinned.length ? "pt-1" : "pt-3")}>
+                  {g.label}
+                </p>
+                <ThreadList threads={g.threads} basePath={basePath} activeId={activeId} enabled={enabled} actions={actions} />
+              </div>
+            ))}
           </>
         )}
       </nav>
@@ -209,7 +216,7 @@ function ThreadRow({
     <li ref={root} className="group/row relative">
       <Link
         href={`${basePath}?thread=${encodeURIComponent(thread.thread_id)}`}
-        title={thread.title}
+        title={thread.full_title && thread.full_title !== thread.title ? `${thread.title}\n${thread.full_title}` : thread.title}
         aria-current={active ? "page" : undefined}
         className={cn(
           "block rounded-lg py-2 pr-8 pl-2.5 text-[0.8125rem] transition-colors",

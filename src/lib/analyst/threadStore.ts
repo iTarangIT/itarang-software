@@ -83,7 +83,7 @@ export async function ensureThreadRow(input: {
 type MetaRow = Omit<ThreadMeta, "shared"> & { share_token: string | null };
 
 const META_COLUMNS = sql`thread_id, title, title_custom, questions, connection_id, run_count,
-    last_asked_at::text AS last_asked_at, pinned_at::text AS pinned_at, archived_at::text AS archived_at,
+    created_at::text AS created_at, last_asked_at::text AS last_asked_at, pinned_at::text AS pinned_at, archived_at::text AS archived_at,
     deleted_at::text AS deleted_at, share_token`;
 
 function toMeta(row: MetaRow): ThreadMeta {
