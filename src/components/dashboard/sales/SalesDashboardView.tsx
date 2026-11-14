@@ -62,8 +62,15 @@ function teamLine(members: Array<{ name: string | null; from: string; to: string
 export function SalesDashboardView({
     mode,
     people,
+    myTargets,
 }: {
     mode: SalesDashboardMode;
+    /**
+     * ID 239: the person's own targets card, rendered right under the Showing pick so the
+     * targets follow it (Me → my targets; a member → theirs, read-only; Team total → the
+     * team against my target and the Team targets table).
+     */
+    myTargets?: React.ReactNode;
     /**
      * ID 155/156: a manager on their own Performance page — themself first,
      * then their direct reports. With more than one, a person picker shows and
@@ -127,6 +134,8 @@ export function SalesDashboardView({
                 </div>
             )}
             {teamTotal && <TeamTargetsCard />}
+            {showPeople && personId && !teamTotal && <TeamTargetsCard member={personId} />}
+            {(!showPeople || !personId) && myTargets}
             <SalesFilterBar
                 filters={filters}
                 onChange={set}
