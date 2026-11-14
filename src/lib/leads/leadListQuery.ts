@@ -605,6 +605,11 @@ function buildWhere(f: LeadListFilters, opts?: { ignoreIntent?: boolean; keepTes
     if (hideDead && f.contactability !== "only" && f.aiBand !== "Disqualified") {
         conds.push(sql`dl.current_status IS DISTINCT FROM 'disqualified'`);
     }
+    // ID 234 (14 Nov): the same box hides Lost leads too ("Hide Lost, dead & AI-rejected").
+    // A Status filter of Lost asks for exactly those, so it wins.
+    if (hidesLost(f)) {
+        conds.push(sql`dl.lead_status IS DISTINCT FROM 'Lost'`);
+    }
 
     // ID 46: "9876543210, 9123456789" selects exactly those leads by mobile
     // (last 10 digits — dealer_leads.phone is stored in mixed formats).
@@ -644,6 +649,23 @@ function buildWhere(f: LeadListFilters, opts?: { ignoreIntent?: boolean; keepTes
  *
  * Assumes the caller aliases dealer_leads as `dl`.
  */
+/** ID 234: does this filter set hide Lost leads (the Hide box on, Status not Lost)? */
+export function hidesLost(f: LeadListFilters): boolean {
+    const hideDead = f.hideDead !== false && f.contactability !== "include" && !f.readyNoOwner;
+    return hideDead && f.status !== "Lost" && !(numberSearchMode(f.search)?.mobiles?.length);
+}
+
+/**
+ * ID 234: how many Lost leads the search would also have matched, while the Hide box hides
+ * them; 0 when nothing is hidden or there is no search. Drives the "N Lost leads match" hint.
+ */
+export async function countHiddenLostMatches(f: LeadListFilters): Promise<number> {
+    if (!f.search || !hidesLost(f)) return 0;
+    const where = buildWhere({ ...f, status: "Lost", hideDead: false, contactability: "include" });
+    const rows = (await db.execute(sql`SELECT COUNT(*)::int AS n FROM dealer_leads dl ${aiSignalsJoin(f)} WHERE ${where}`)) as unknown as Array<{ n: number }>;
+    return Number(rows[0]?.n ?? 0);
+}
+
 export function buildExportWhere(f: LeadListFilters) {
     return buildWhere(f, { keepTestLeads: true });
 }

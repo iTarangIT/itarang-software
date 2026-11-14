@@ -1,5 +1,9 @@
 // GET /api/admin/exports/leads.xlsx?<the /leads filters>
 //
+// ⚠ ID 224 (14 Nov): no screen calls this any more. The Leads page's Download and
+// "Download all" build the Data downloads › Leads file (one file, one set of fixes).
+// Kept for one release for bookmarked links; remove after.
+//
 // B11 — every dealer lead matching the current list filters, one row each,
 // with visit, call, remarks and billing columns (src/lib/admin/leadsExport.ts
 // says what each means and how billing is matched). Same filter params as the

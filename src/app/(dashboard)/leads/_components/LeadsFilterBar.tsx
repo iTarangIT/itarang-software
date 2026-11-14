@@ -124,6 +124,8 @@ type Props = {
     onAssignedRange: (from: string, to: string) => void;
     busy?: boolean;
     /** ID 46: numbers in the search that were unreadable or matched no lead. */
+    /** ID 234: Lost leads the search also matches while the Hide box hides them. */
+    hiddenLost?: number;
     numberSearch?: {
         invalid: string[];
         not_found: string[];
@@ -147,6 +149,7 @@ export function LeadsFilterBar({
     onAssignedRange,
     busy,
     numberSearch,
+    hiddenLost = 0,
 }: Props) {
     const moreCount = countSecondary(draft);
     const aiFacets = facets?.aiSignals;
@@ -227,6 +230,15 @@ export function LeadsFilterBar({
                     className="pl-9"
                 />
             </div>
+            {hiddenLost > 0 && (
+                <p className="text-xs text-amber-700">
+                    {hiddenLost} Lost lead{hiddenLost === 1 ? "" : "s"} also match{hiddenLost === 1 ? "es" : ""} this search, hidden by
+                    &ldquo;Hide Lost, dead &amp; AI-rejected&rdquo;.{" "}
+                    <button type="button" className="font-medium underline" onClick={() => onChange("status", "Lost")}>
+                        Show the Lost ones
+                    </button>
+                </p>
+            )}
             {numberSearch &&
                 (numberSearch.invalid.length > 0 ||
                     numberSearch.not_found.length > 0 ||
@@ -239,7 +251,7 @@ export function LeadsFilterBar({
                     {(numberSearch.filtered_out?.length ?? 0) > 0 && (
                         <span>
                             Hidden by your filters: {numberSearch.filtered_out!.join(", ")}. Clear filters to see them.{" "}
-                            <InfoTip>Or untick &ldquo;Hide dead &amp; disqualified&rdquo; — those leads are hidden by default.</InfoTip>{" "}
+                            <InfoTip>Or untick &ldquo;Hide Lost, dead &amp; AI-rejected&rdquo; — those leads are hidden by default.</InfoTip>{" "}
                         </span>
                     )}
                     {numberSearch.invalid.length > 0 && (
@@ -683,7 +695,7 @@ export function LeadsFilterBar({
                             them (hide_dead=0); source reports always count them. */}
                         <label
                             className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-600 hover:border-gray-400"
-                            title="We hide dead or non-responsive numbers (in Number Repair) and leads the AI disqualified."
+                            title="Hides Lost leads, dead or non-responsive numbers (in Number Repair) and leads the AI disqualified. Status = Lost shows Lost leads."
                         >
                             <input
                                 type="checkbox"
@@ -691,7 +703,7 @@ export function LeadsFilterBar({
                                 checked={draft.showDead !== "1"}
                                 onChange={(e) => onChange("showDead", e.target.checked ? "" : "1")}
                             />
-                            Hide dead &amp; disqualified
+                            Hide Lost, dead &amp; AI-rejected
                         </label>
                     </div>
                     {/* ── Assigned-date range ──

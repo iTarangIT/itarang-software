@@ -14,6 +14,7 @@ import {
   fetchLeadListFacets,
   fetchLeadListIds,
   fetchLeadListRows,
+  countHiddenLostMatches,
   fetchNumberSearchMisses,
   fetchLeadListStats,
   type LeadListFilters,
@@ -337,7 +338,7 @@ export const GET = withErrorHandler(async (req: Request) => {
     });
   }
 
-  const [rows, stats, allFacets, campaignFacets, scrapeRuns, businessTypeCounts, numberSearch] =
+  const [rows, stats, allFacets, campaignFacets, scrapeRuns, businessTypeCounts, numberSearch, hiddenLost] =
     await Promise.all([
       fetchLeadListRows(filters, page, limit),
       fetchLeadListStats(filters),
@@ -349,6 +350,8 @@ export const GET = withErrorHandler(async (req: Request) => {
       fetchBusinessTypeCounts(filters),
       // ID 46: numbers typed in the search that were unreadable or matched nothing.
       fetchNumberSearchMisses(filters),
+      // ID 234: Lost leads the search also matches while the Hide box hides them.
+      countHiddenLostMatches(filters).catch(() => 0),
     ]);
 
   // Same tiering on the way out: the source list is for everyone, the people
@@ -502,6 +505,8 @@ export const GET = withErrorHandler(async (req: Request) => {
     business_type_counts: businessTypeCounts,
     // null unless the search box held mobile numbers (ID 46).
     number_search: numberSearch,
+    // ID 234: Lost leads hidden by the Hide box that the search also matches.
+    hidden_lost_matches: hiddenLost,
     stats: {
       hot: stats.hot,
       warm: stats.warm,

@@ -1266,6 +1266,8 @@ export default function LeadsUnifiedPage() {
     filtered_out?: string[];
     over_limit?: number;
   } | null>(null);
+  // ID 234: Lost leads the search matched that the Hide box hides.
+  const [hiddenLost, setHiddenLost] = useState(0);
   // Lead opened in the side drawer (row click).
   const [drawerLead, setDrawerLead] = useState<LeadRow | null>(null);
   // C37: open on load when the URL already sets a filter that lives in there
@@ -1484,6 +1486,7 @@ export default function LeadsUnifiedPage() {
           if (data.facets) setFacets(data.facets);
           setBusinessTypeCounts(data.business_type_counts ?? null);
           setNumberSearch(data.number_search ?? null);
+          setHiddenLost(Number(data.hidden_lost_matches ?? 0));
           // The server decides what this role may see and do; the client just
           // renders it. Keeps the gate in one place instead of duplicating role
           // lists here and hoping they stay in sync with the APIs.
@@ -1639,43 +1642,8 @@ export default function LeadsUnifiedPage() {
   // not the selection. Same params the table fetched with (status, owner, date
   // range, business type, …), so the sheet is exactly what is on screen, only
   // complete. The route still serves CSV without format=xlsx.
-  // B11 — the FULL export: every matching lead with visit, call, remarks and
-  // billing columns, from /api/admin/exports/leads.xlsx. Same filter params as
-  // the follow-up export above; the route refuses (400) above its row cap
-  // instead of truncating, and that message is what the toast shows.
-  const [exportingAll, setExportingAll] = useState(false);
-  const exportAllLeads = useCallback(async () => {
-    setExportingAll(true);
-    try {
-      const params = toSearchParams(applied, 1, 1);
-      params.delete("page");
-      params.delete("limit");
-      const res = await fetch(`/api/admin/exports/leads.xlsx?${params.toString()}`);
-      if (!res.ok) {
-        let detail = "";
-        try {
-          const j = await res.json();
-          detail = j?.error?.message ?? j?.error ?? "";
-        } catch {
-          detail = await res.text().catch(() => "");
-        }
-        throw new Error(String(detail).slice(0, 240) || "Couldn't download the file. Try again.");
-      }
-      const rowCount = Number(res.headers.get("X-Export-Rows") ?? 0);
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "all-leads.xlsx";
-      a.click();
-      URL.revokeObjectURL(url);
-      toast.success(`Downloaded ${rowCount.toLocaleString("en-IN")} lead${rowCount === 1 ? "" : "s"} with visits, calls and billing.`);
-    } catch (e) {
-      toast.error((e as Error).message);
-    } finally {
-      setExportingAll(false);
-    }
-  }, [applied]);
+  // ID 224: "Download all" (More) and "Download" are the same Leads file now: Data
+  // downloads › Leads with the page filters (exportFilteredExcel below).
 
   const [exportingExcel, setExportingExcel] = useState(false);
   const exportFilteredExcel = useCallback(async () => {
@@ -1687,6 +1655,54 @@ export default function LeadsUnifiedPage() {
       const params = toSearchParams(applied, 1, 1);
       params.delete("page");
       params.delete("limit");
+
+      // ID 224 (12 Nov): one Leads download. The button builds the Data downloads ›
+      // Leads file with this page's filters, so every column fix lands in one place.
+      // The page's Hide box (ID 234) carries over: hidden leads stay out of the file
+      // and its filter line says so.
+      const dd: Record<string, string> = Object.fromEntries(params.entries());
+      if (params.get("hide_dead") !== "0") {
+        dd.contactability = "hide";
+        dd.hidden = "Lost, dead & AI-rejected (the Leads page's Hide box)";
+      }
+      const ask = (format: "xlsx" | "csv") =>
+        fetch("/api/admin/data-downloads/leads", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ params: dd, format }),
+        });
+      let ddRes = await ask("xlsx");
+      if (ddRes.status === 400) {
+        // ID 223: no Excel above 5,000 rows; the same file comes as CSV instead.
+        const why = await ddRes.clone().json().catch(() => null);
+        if (/too big for excel/i.test(String(why?.error?.message ?? ""))) {
+          toast.info("Too many leads for Excel at once: downloading as CSV.");
+          ddRes = await ask("csv");
+        }
+      }
+      if (ddRes.status === 202) {
+        const body = await ddRes.json().catch(() => null);
+        toast.success(`It is a big file: we will email the link to ${body?.data?.sent_to ?? "you"} when it is ready.`);
+        return;
+      }
+      if (ddRes.ok) {
+        const blob = await ddRes.blob();
+        const cd = ddRes.headers.get("content-disposition") ?? "";
+        const name = /filename="?([^";]+)"?/.exec(cd)?.[1] ?? "leads.xlsx";
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = name;
+        a.click();
+        URL.revokeObjectURL(url);
+        toast.success("Downloaded the Leads file (the same file as Data downloads › Leads).");
+        return;
+      }
+      if (ddRes.status !== 403) {
+        const detail = await ddRes.json().catch(() => null);
+        throw new Error(detail?.error?.message ?? detail?.error ?? "Couldn't download the file. Try again.");
+      }
+      // A role Data downloads › Leads does not serve keeps the old file.
       params.set("format", "xlsx");
       const res = await fetch(`/api/dealer-leads/export?${params.toString()}`);
       if (!res.ok) {
@@ -2103,8 +2119,8 @@ export default function LeadsUnifiedPage() {
               so it stays discoverable. */}
           {tab === "leads" && (
             <LeadsMoreActions
-              onDownloadAll={exportAllLeads}
-              downloadingAll={exportingAll}
+              onDownloadAll={exportFilteredExcel}
+              downloadingAll={exportingExcel}
               selectedIds={[...selectedLeadIds]}
             />
           )}
@@ -2217,6 +2233,7 @@ export default function LeadsUnifiedPage() {
             onAssignedRange={setAssignedRange}
             busy={leadsLoading}
             numberSearch={numberSearch}
+            hiddenLost={hiddenLost}
           />
         </div>
       )}
