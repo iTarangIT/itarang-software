@@ -18,6 +18,7 @@
  */
 
 import React from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ChevronDown, ChevronUp, ChevronsUpDown } from "lucide-react";
 import {
   makeComparator,
@@ -126,4 +127,63 @@ export function SortableTh({
       </button>
     </th>
   );
+}
+
+/**
+ * ID 243 — the same control, with the sort kept in the page link (`?sort=<key>&dir=asc|desc`,
+ * or a prefix for a page with two tables), so a copied link opens in the same order and Back
+ * keeps it. `mode: "server"` is for a PAGED list: the comparator is null and the caller sends
+ * `sort` / `dir` to its API, which accepts only its own columns (lib/http/sortParam.ts) — a
+ * page-2 that carries on the order instead of re-sorting one page in the browser.
+ */
+export function useUrlTableSort<T>(
+  specs: SortSpec<T>[],
+  opts: { prefix?: string; mode?: "client" | "server"; defaultSort?: SortState | null } = {},
+) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const params = useSearchParams();
+  const sortKey = `${opts.prefix ?? ""}sort`;
+  const dirKey = `${opts.prefix ?? ""}dir`;
+
+  const specByKey = React.useMemo(() => new Map(specs.map((s) => [s.key, s] as const)), [specs]);
+  const fromUrl = params?.get(sortKey) ?? "";
+  const dirUrl = params?.get(dirKey) === "desc" ? "desc" : "asc";
+  const defaultSort = opts.defaultSort ?? null;
+  const sort: SortState | null = React.useMemo(
+    () => (specByKey.has(fromUrl) ? { key: fromUrl, dir: dirUrl } : defaultSort),
+    [specByKey, fromUrl, dirUrl, defaultSort],
+  );
+
+  const toggle = React.useCallback(
+    (key: string) => {
+      const spec = specByKey.get(key);
+      if (!spec) return;
+      const next = nextSortState(sort, key, spec.type);
+      const sp = new URLSearchParams(params?.toString() ?? "");
+      if (next) {
+        sp.set(sortKey, next.key);
+        sp.set(dirKey, next.dir);
+      } else {
+        sp.delete(sortKey);
+        sp.delete(dirKey);
+      }
+      // A new order starts from the first page.
+      sp.delete(`${opts.prefix ?? ""}page`);
+      const qs = sp.toString();
+      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    },
+    [specByKey, sort, params, sortKey, dirKey, opts.prefix, router, pathname],
+  );
+
+  const comparator = React.useMemo(() => {
+    if (!sort || opts.mode === "server") return null;
+    const spec = specByKey.get(sort.key);
+    return spec ? makeComparator(spec, sort.dir) : null;
+  }, [sort, specByKey, opts.mode]);
+
+  /** The query-string pair for a server-sorted fetch ("" when unsorted). */
+  const query = sort ? `${encodeURIComponent(sortKey)}=${encodeURIComponent(sort.key)}&${encodeURIComponent(dirKey)}=${sort.dir}` : "";
+
+  return { sort, toggle, comparator, query };
 }
