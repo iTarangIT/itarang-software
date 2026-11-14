@@ -92,6 +92,7 @@ The team uses **hand-written, named, idempotent SQL migration files** in `drizzl
 - **Do not run `npm run db:push` against the shared sandbox or production.** It is a diff-based tool that may DROP columns or `ALTER TYPE` data. The current `loan_sanctions` table already shows drift from past `db:push` use — the canonical record of what's actually in the DB has been lost. Don't compound it.
 - `db:push` against a personal local DB you own is fine.
 - To apply a new migration: open Supabase SQL editor (or the team's migration runner) and paste the file content. Re-running the same file should be a no-op.
+- **Release gate (ID 226):** the production deploy runs `node scripts/check-migrations-applied.mjs database-2 --gate` on the box before the `current` swap; any table/column/index a migration creates that is missing on database-2 stops the release. A file written but deliberately not applied yet must carry a header line `-- migration-gate: held` (remove it when the file is applied). `scripts/list-duplicate-migration-numbers.mjs [database-1|database-2]` lists reused E- numbers.
 
 ## Deployment
 
