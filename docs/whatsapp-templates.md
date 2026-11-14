@@ -30,9 +30,22 @@ One template, three parameters. Sent whenever the service window is closed.
 
 | Param | Value |
 |---|---|
-| {{1}} | Dealer's name |
+| {{1}} | The **customer's** name (`greetName` / `customerName` — see `src/lib/whatsapp/templates.ts`, `params: ["customerName", "referenceId", "whatIsNeeded"]`). It is NOT the dealer's name. |
 | {{2}} | Lead reference id |
 | {{3}} | The stage's one-line "what is needed" from the table below |
+
+Before adding `lead_action` to `WA_TEMPLATES_APPROVED` (tracker live step L15), check
+the approved template in Meta WhatsApp Manager:
+
+- language **English (`en`)**, not English (US) — the code sends `en` and every send fails otherwise;
+- category **Utility**, not Marketing;
+- the wording fits {{1}} = customer name. A body starting "Hi {{1}}" greets the dealer
+  with his customer's name. Proposed body if it must be (re)submitted:
+  `iTarang update on {{1}} (ref {{2}}): {{3}}. Reply to this message to see the details.`
+
+`WA_TEMPLATES_APPROVED` must be set in the live server settings AND in the saved copy
+each deploy writes back (GitHub secret `PROD_ENV_FILE_B64`), or the next release
+switches the doorbell off again.
 
 ## Stage messages
 
