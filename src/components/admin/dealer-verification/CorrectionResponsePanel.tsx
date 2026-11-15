@@ -315,7 +315,7 @@ export default function CorrectionResponsePanel({ dealerId, round, onApplied }: 
             : round.status === "applied"
               ? "This round has already been applied to the application."
               : round.status === "pending"
-                ? "Waiting for the dealer to submit. The magic link in their email is valid for 14 days."
+                ? "Waiting for the dealer to submit. The link in their email is valid for 72 hours."
                 : null}
         </p>
         <button
