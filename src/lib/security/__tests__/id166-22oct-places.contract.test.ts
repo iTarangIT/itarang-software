@@ -91,3 +91,34 @@ describe("ID 166 — WhatsApp onboarding drawer documents", () => {
         expect(code).toMatch(/\(seesDocuments \? Array\.from\(latestPerType\.values\(\)\) : \[\]\)/);
     });
 });
+
+describe("ID 166 item 1 (23 Oct) — expense tracker: CEO views, Finance three writes", () => {
+    it("write roles are Admin and Sales Head only", () => {
+        expect(src("lib/auth/requireApiAdmin.ts")).toMatch(/EXPENSE_WRITE_ROLES = \["admin", "sales_head"\]/);
+    });
+
+    it.each([
+        "app/api/admin/ai-expenses/route.ts",
+        "app/api/admin/ai-expenses/bulk/route.ts",
+        "app/api/admin/ai-expenses/extract/route.ts",
+        "app/api/admin/ai-expenses/drive/scan/route.ts",
+        "app/api/admin/ai-expenses/drive/folders/route.ts",
+        "app/api/admin/sales-invoices/drive/folders/route.ts",
+    ])("%s gates its writes on requireApiExpenseWriter", (p) => {
+        expect(src(p)).toMatch(/requireApiExpenseWriter\(\)/);
+    });
+
+    it.each([
+        "app/api/admin/ai-expenses/[id]/route.ts",
+        "app/api/admin/sales-invoices/[id]/route.ts",
+        "app/api/admin/sales-invoices/drive/folders/route.ts",
+    ])("%s lets Finance through only for its one field", (p) => {
+        const code = src(p);
+        expect(code).toMatch(/requireApiExpenseWriteOrFinance\(\)/);
+        expect(code).toMatch(/guard\.access === "finance"/);
+    });
+
+    it("the page hands the role's access to the screen", () => {
+        expect(src("app/(dashboard)/admin/expense-tracker/page.tsx")).toMatch(/<ExpenseTrackerView access=\{access\} \/>/);
+    });
+});

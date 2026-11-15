@@ -22,6 +22,53 @@ const makeUploadItem = (label: string): UploadFileItem => ({
   progress: 0,
 });
 
+// ID 166-B: what survives a reload of an upload slot — the file's name and
+// where it is stored. Never the File, the browser preview, or any URL (the
+// stored URL is rebuilt by the server; a view link comes only after the code).
+type PersistedUpload = Pick<
+  UploadFileItem,
+  "id" | "label" | "storagePath" | "bucketName" | "fileName" | "uploadedAt"
+>;
+
+function slimUpload(item: UploadFileItem | null | undefined): PersistedUpload | null {
+  if (!item?.storagePath) return null;
+  return {
+    id: item.id,
+    label: item.label,
+    storagePath: item.storagePath,
+    bucketName: item.bucketName ?? "dealer-documents",
+    fileName:
+      item.fileName || item.file?.name || item.storagePath.split("/").pop() || null,
+    uploadedAt: item.uploadedAt,
+  };
+}
+
+// Several slots are typed `UploadFileItem | null`, so the fresh slot may be
+// empty: keep it empty when nothing was stored, else rebuild from the label.
+function restoreUpload(persisted: unknown, fresh: UploadFileItem): UploadFileItem;
+function restoreUpload(
+  persisted: unknown,
+  fresh: UploadFileItem | null | undefined
+): UploadFileItem | null;
+function restoreUpload(
+  persisted: unknown,
+  fresh: UploadFileItem | null | undefined
+): UploadFileItem | null {
+  const p = persisted as PersistedUpload | null | undefined;
+  if (!p || typeof p.storagePath !== "string" || !p.storagePath) return fresh ?? null;
+  const base = fresh ?? makeUploadItem(p.label || "");
+  return {
+    ...base,
+    id: p.id || base.id,
+    storagePath: p.storagePath,
+    bucketName: p.bucketName ?? "dealer-documents",
+    fileName: p.fileName ?? null,
+    uploadedAt: p.uploadedAt,
+    verificationState: "verified",
+    progress: 100,
+  };
+}
+
 function generateDealerId() {
   const now = new Date();
 
@@ -282,6 +329,11 @@ const PERSISTED_DOC_SLOTS: Array<{
   { type: "undated_cheques", pick: (s) => s.compliance.undatedCheques },
   { type: "passport_photo", pick: (s) => s.compliance.passportPhoto },
   { type: "udyam_certificate", pick: (s) => s.compliance.udyamCertificate },
+  // ID 166-B: same type names the submit route stores for these slots.
+  { type: "owner_photo", pick: (s) => s.ownership.ownerPhoto },
+  { type: "partnership_deed", pick: (s) => s.ownership.partnershipDeed },
+  { type: "mou_document", pick: (s) => s.ownership.mouDocument },
+  { type: "aoa_document", pick: (s) => s.ownership.aoaDocument },
 ];
 
 // Build the documents array for the save route from any upload slot that has a
@@ -294,6 +346,7 @@ function collectUploadedDocuments(state: DealerOnboardingState) {
     if (!item?.storagePath) return [];
     const fileName =
       item.file?.name ||
+      item.fileName ||
       item.storagePath.split("/").pop() ||
       item.label ||
       type;
@@ -359,8 +412,7 @@ function buildSavePayload(state: DealerOnboardingState) {
 function partializeOnboarding(state: DealerOnboardingState & StoreActions) {
   const stripRow = (row: Record<string, unknown>) => {
     const { photo, ...rest } = row;
-    void photo;
-    return rest;
+    return { ...rest, photo: slimUpload(photo as UploadFileItem | null) };
   };
   const { signedAgreementFile, ...agreementRest } = state.agreement;
   void signedAgreementFile;
@@ -380,6 +432,15 @@ function partializeOnboarding(state: DealerOnboardingState & StoreActions) {
       gstNumber: state.company.gstNumber,
       companyPanNumber: state.company.companyPanNumber,
       businessSummary: state.company.businessSummary,
+      gstCertificate: slimUpload(state.company.gstCertificate),
+      companyPanFile: slimUpload(state.company.companyPanFile),
+    },
+    compliance: {
+      itr3Years: slimUpload(state.compliance.itr3Years),
+      bankStatement3Months: slimUpload(state.compliance.bankStatement3Months),
+      undatedCheques: slimUpload(state.compliance.undatedCheques),
+      passportPhoto: slimUpload(state.compliance.passportPhoto),
+      udyamCertificate: slimUpload(state.compliance.udyamCertificate),
     },
     ownership: {
       ownerName: state.ownership.ownerName,
@@ -398,6 +459,10 @@ function partializeOnboarding(state: DealerOnboardingState & StoreActions) {
       beneficiaryName: state.ownership.beneficiaryName,
       branch: state.ownership.branch,
       accountType: state.ownership.accountType,
+      ownerPhoto: slimUpload(state.ownership.ownerPhoto),
+      partnershipDeed: slimUpload(state.ownership.partnershipDeed),
+      mouDocument: slimUpload(state.ownership.mouDocument),
+      aoaDocument: slimUpload(state.ownership.aoaDocument),
       partners: (state.ownership.partners as Record<string, unknown>[]).map(
         stripRow
       ),
@@ -427,30 +492,43 @@ function mergeOnboarding(
     internalApplicationId:
       p.internalApplicationId ?? current.internalApplicationId,
     draftApplicationId: p.draftApplicationId ?? current.draftApplicationId,
-    // Overlay persisted text onto fresh sections so upload slots (File/preview)
-    // keep their valid runtime shape from initialState.
-    company: { ...current.company, ...(p.company ?? {}) },
-    compliance: current.compliance,
+    // Overlay persisted text onto fresh sections; upload slots are rebuilt from
+    // fresh ones plus the stored name/path (ID 166-B), never a File or URL.
+    company: {
+      ...current.company,
+      ...(p.company ?? {}),
+      gstCertificate: restoreUpload(p.company?.gstCertificate, current.company.gstCertificate),
+      companyPanFile: restoreUpload(p.company?.companyPanFile, current.company.companyPanFile),
+    },
+    compliance: {
+      itr3Years: restoreUpload(p.compliance?.itr3Years, current.compliance.itr3Years),
+      bankStatement3Months: restoreUpload(
+        p.compliance?.bankStatement3Months,
+        current.compliance.bankStatement3Months
+      ),
+      undatedCheques: restoreUpload(p.compliance?.undatedCheques, current.compliance.undatedCheques),
+      passportPhoto: restoreUpload(p.compliance?.passportPhoto, current.compliance.passportPhoto),
+      udyamCertificate: restoreUpload(p.compliance?.udyamCertificate, current.compliance.udyamCertificate),
+    },
     ownership: {
       ...current.ownership,
       ...(p.ownership ?? {}),
       partners: Array.isArray(p.ownership?.partners)
         ? p.ownership.partners.map((row: Record<string, unknown>) => ({
             ...row,
-            photo: makeUploadItem("Partner Photograph"),
+            photo: restoreUpload(row.photo, makeUploadItem("Partner Photograph")),
           }))
         : current.ownership.partners,
       directors: Array.isArray(p.ownership?.directors)
         ? p.ownership.directors.map((row: Record<string, unknown>) => ({
             ...row,
-            photo: makeUploadItem("Director Photograph"),
+            photo: restoreUpload(row.photo, makeUploadItem("Director Photograph")),
           }))
         : current.ownership.directors,
-      // Upload-bearing slots are never persisted — keep the fresh ones.
-      ownerPhoto: current.ownership.ownerPhoto,
-      partnershipDeed: current.ownership.partnershipDeed,
-      mouDocument: current.ownership.mouDocument,
-      aoaDocument: current.ownership.aoaDocument,
+      ownerPhoto: restoreUpload(p.ownership?.ownerPhoto, current.ownership.ownerPhoto),
+      partnershipDeed: restoreUpload(p.ownership?.partnershipDeed, current.ownership.partnershipDeed),
+      mouDocument: restoreUpload(p.ownership?.mouDocument, current.ownership.mouDocument),
+      aoaDocument: restoreUpload(p.ownership?.aoaDocument, current.ownership.aoaDocument),
     },
     finance: { ...current.finance, ...(p.finance ?? {}) },
     agreement: { ...current.agreement, ...(p.agreement ?? {}) },
@@ -557,8 +635,33 @@ export const useOnboardingStore = create<DealerOnboardingState & StoreActions>()
         );
       }
 
+      // ID 166-B: upload slots now survive a reload. Keep them only when this
+      // is the same application the browser was already on (a file picked
+      // moments before the reload); a different application starts empty so
+      // one dealer's files never show on another's form.
+      const sameApplication =
+        !!str(a.id) && str(a.id) === (state.draftApplicationId ?? "");
+      const slots = sameApplication
+        ? null
+        : {
+            gstCertificate: makeUploadItem("GST Certificate"),
+            companyPanFile: makeUploadItem("Company PAN"),
+            itr3Years: makeUploadItem("Last 3 Years Company Income Tax Returns"),
+            bankStatement3Months: makeUploadItem("Last 3 Months Company Bank Statement"),
+            undatedCheques: makeUploadItem("4 Undated Cheques"),
+            passportPhoto: makeUploadItem("Passport Size Photograph"),
+            udyamCertificate: makeUploadItem("Udyam Registration Certificate"),
+            ownerPhoto: makeUploadItem("Owner Photograph"),
+            partnershipDeed: makeUploadItem("Partnership Deed"),
+            mouDocument: makeUploadItem("MoU"),
+            aoaDocument: makeUploadItem("AoA"),
+          };
+
       const company: CompanyStepData = {
         ...state.company,
+        ...(slots
+          ? { gstCertificate: slots.gstCertificate, companyPanFile: slots.companyPanFile }
+          : {}),
         companyName: str(a.company_name),
         companyType: str(
           a.company_type,
@@ -570,7 +673,21 @@ export const useOnboardingStore = create<DealerOnboardingState & StoreActions>()
         companyPanNumber: str(a.pan_number),
         companyAddress,
       };
-      const compliance: ComplianceStepData = { ...state.compliance };
+      const compliance: ComplianceStepData = slots
+        ? {
+            itr3Years: slots.itr3Years,
+            bankStatement3Months: slots.bankStatement3Months,
+            undatedCheques: slots.undatedCheques,
+            passportPhoto: slots.passportPhoto,
+            udyamCertificate: slots.udyamCertificate,
+          }
+        : { ...state.compliance };
+      const ownershipSlots = {
+        ownerPhoto: slots?.ownerPhoto ?? state.ownership.ownerPhoto,
+        partnershipDeed: slots?.partnershipDeed ?? state.ownership.partnershipDeed,
+        mouDocument: slots?.mouDocument ?? state.ownership.mouDocument,
+        aoaDocument: slots?.aoaDocument ?? state.ownership.aoaDocument,
+      };
 
       // Re-attach any already-saved documents to their wizard upload slots
       // (none on a fresh conversion; populated after a prior submit).
@@ -584,6 +701,7 @@ export const useOnboardingStore = create<DealerOnboardingState & StoreActions>()
           uploadedUrl: str(doc.file_url) || null,
           storagePath: str(doc.storage_path) || null,
           bucketName: str(doc.bucket_name) || null,
+          fileName: str(doc.file_name) || null,
           verificationState: "verified",
           progress: 100,
           uploadedAt: str(doc.uploaded_at) || new Date().toISOString(),
@@ -595,7 +713,12 @@ export const useOnboardingStore = create<DealerOnboardingState & StoreActions>()
           case "passport_photo": compliance.passportPhoto = item; break;
           case "udyam_certificate": compliance.udyamCertificate = item; break;
           case "gst_certificate": company.gstCertificate = item; break;
-          case "pan_card": company.companyPanFile = item; break;
+          case "pan_card":
+          case "company_pan": company.companyPanFile = item; break;
+          case "owner_photo": ownershipSlots.ownerPhoto = item; break;
+          case "partnership_deed": ownershipSlots.partnershipDeed = item; break;
+          case "mou_document": ownershipSlots.mouDocument = item; break;
+          case "aoa_document": ownershipSlots.aoaDocument = item; break;
         }
       }
 
@@ -621,6 +744,7 @@ export const useOnboardingStore = create<DealerOnboardingState & StoreActions>()
         compliance,
         ownership: {
           ...state.ownership,
+          ...ownershipSlots,
           ownerName: str(a.owner_name),
           ownerPhone: str(a.owner_phone),
           ownerEmail: str(a.owner_email),

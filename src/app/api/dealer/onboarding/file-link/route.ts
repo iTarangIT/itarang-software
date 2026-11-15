@@ -6,6 +6,7 @@ import { dealerCorrectionRounds } from "@/lib/db/schema";
 import { hashCorrectionToken } from "@/lib/onboarding/correction-token";
 import { onboardingFileLinkFor } from "@/lib/onboarding/onboardingFileLinks";
 import { verifyResumeToken } from "@/lib/onboarding/submitAccess";
+import { boundApplication } from "@/lib/onboarding/docBinding";
 
 /**
  * POST /api/dealer/onboarding/file-link — tracker ID 166 (decision 5).
@@ -16,6 +17,11 @@ import { verifyResumeToken } from "@/lib/onboarding/submitAccess";
  * login). The proof the application is the caller's own is either the resume
  * token (after the mobile code) or a live correction link. The file must be
  * one of THAT application's documents, matched on bucket/key.
+ *
+ * ID 166-C (decision 17): links are minted only for the browser that entered
+ * the mobile code for this application (the httpOnly cookie set by the resume
+ * verify-otp or the correction page's code check). A correction link alone no
+ * longer shows any document, and a forwarded token mints nothing elsewhere.
  */
 
 export const runtime = "nodejs";
@@ -55,6 +61,12 @@ export async function POST(req: NextRequest) {
       ? verifyResumeToken(resumeToken)
       : await applicationFromCorrectionToken(correctionToken!);
     if (!applicationId) return NextResponse.json({ success: false, message: NOPE }, { status: 403 });
+    if (boundApplication(req.cookies) !== applicationId) {
+      return NextResponse.json(
+        { success: false, codeRequired: true, message: "Enter the code we sent to your mobile to view your documents." },
+        { status: 403 },
+      );
+    }
 
     const link = await onboardingFileLinkFor(applicationId, url);
     if (!link) return NextResponse.json({ success: false, message: NOPE }, { status: 404 });

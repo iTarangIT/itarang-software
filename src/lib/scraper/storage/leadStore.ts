@@ -6,11 +6,7 @@ import { toTenDigits } from "@/lib/ai/phone";
 import { normalizeRegion } from "@/lib/locations/normalize";
 import type { PlaceComponents } from "@/lib/scraper/query/sources/googlePlaces";
 import { loadExistingByPhone, normalizePhone } from "@/lib/leads/dedupe";
-import {
-  recordLeadsCreatedBulk,
-  recordReinquiries,
-  stampLeadSourceBulk,
-} from "@/lib/leads/leadSource";
+import { recordLeadsCreatedBulk, stampLeadSourceBulk } from "@/lib/leads/leadSource";
 import { campaignForScrapeRun } from "@/lib/leads/acquisitionCampaigns";
 
 const CHUNK_SIZE = 100;
@@ -37,9 +33,9 @@ export interface PromotionResult {
 //     not seen and got a second copy.
 //   - door = scraper, origin = scraped_listing, the RUN's acquisition
 //     campaign (one per scrape run, made on first use), and "Lead created".
-//   - "Re-inquiry via scraper" on a dealer we already have — at most once per
-//     REINQUIRY_WINDOW_DAYS, so a weekly re-scrape of one city does not write
-//     a line on every known dealer every week.
+//   - a dealer we already have is counted in skippedDuplicate ("already in
+//     CRM") and nothing is written on its lead (ID 249, 12 Nov — was a
+//     "Re-inquiry via scraper" line + bell).
 //
 // Returns counters for each filter step so the caller (finalizeChunkedRun)
 // can persist them and the UI can show "5 scraped, 0 promoted (5 duplicates)".
@@ -137,16 +133,15 @@ export async function promoteLeadsToDealerLeads(
   const existing = await loadExistingByPhone(
     rows.map((r) => normalizePhone(r.phone)).filter((p): p is string => !!p),
   );
-  const known: { id: string; name: string | null }[] = [];
+  // ID 249: a dealer we already hold is only COUNTED (skippedDuplicate, shown
+  // as "already in CRM" on the run) — no Re-inquiry line, no Last activity
+  // bump, no bell. A scrape is not the dealer coming back.
+  const known: string[] = [];
   const fresh = rows.filter((r) => {
     const hit = existing.get(normalizePhone(r.phone) ?? "");
-    if (hit) known.push({ id: hit.id, name: r.dealer_name });
+    if (hit) known.push(hit.id);
     return !hit;
   });
-  await recordReinquiries(
-    known.map((k) => ({ id: k.id, note: k.name })),
-    { door: "scraper", actorId: null },
-  );
   rows.splice(0, rows.length, ...fresh);
 
   if (!rows.length) {

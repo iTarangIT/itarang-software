@@ -6,11 +6,12 @@ const { KEEPS_CREATED_LEAD_ROLES, keepsCreatedLead } = await import("../types");
 
 describe("who keeps a lead they create (ID 83)", () => {
     it("an inside-sales rep, an ASM and the partner login keep it; an admin's goes to the pool", () => {
-        for (const role of ["inside_sales_rep", "asm", "partner"]) {
+        // ID 252 (12 Nov): the Sales Head keeps his own new lead too.
+        for (const role of ["inside_sales_rep", "asm", "partner", "sales_head"]) {
             expect(creationOwnership(role).selfAssigns, role).toBe(true);
             expect(keepsCreatedLead(role), role).toBe(true);
         }
-        for (const role of ["admin", "ceo", "sales_head", "sales_manager", ""]) {
+        for (const role of ["admin", "ceo", "sales_manager", ""]) {
             expect(creationOwnership(role).selfAssigns, role).toBe(false);
             expect(keepsCreatedLead(role), role).toBe(false);
         }
@@ -26,6 +27,6 @@ describe("who keeps a lead they create (ID 83)", () => {
     });
 
     it("the writer and the screens read one list", () => {
-        expect([...KEEPS_CREATED_LEAD_ROLES].sort()).toEqual(["asm", "inside_sales_rep", "partner"]);
+        expect([...KEEPS_CREATED_LEAD_ROLES].sort()).toEqual(["asm", "inside_sales_rep", "partner", "sales_head"]);
     });
 });

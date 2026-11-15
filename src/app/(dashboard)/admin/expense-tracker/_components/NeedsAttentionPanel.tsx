@@ -37,6 +37,7 @@ import { startScanAndWait } from "@/lib/drive/scanClient";
 import { EXPENSE_DEPARTMENTS } from "@/lib/expenses";
 
 import { onFreshFileClick } from "@/lib/storage/freshFileLink";
+import type { ExpenseAccess } from "@/lib/auth/requireApiAdmin";
 interface FlaggedExpense {
   id: string;
   vendor: string | null;
@@ -61,8 +62,12 @@ interface AttentionFile {
 const inputCls =
   "w-full px-2.5 py-1.5 rounded-lg border border-gray-200 text-sm text-gray-900 bg-white focus:outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100";
 
-export function NeedsAttentionPanel() {
+export function NeedsAttentionPanel({ access }: { access: ExpenseAccess }) {
   const qc = useQueryClient();
+  // ID 166 item 1: Fix and Retry are Admin / Sales Head; Finance may also
+  // clear the flag; the CEO views.
+  const canWrite = access === "write";
+  const canClear = canWrite || access === "finance";
   const [retryNote, setRetryNote] = useState<string | null>(null);
 
   const { data: expenses, isLoading: loadingExpenses } = useQuery({
@@ -169,6 +174,7 @@ export function NeedsAttentionPanel() {
             </InfoTip>
           </p>
           <div className="flex items-center gap-3">
+            {canWrite && (
             <Button
               type="button"
               variant="outline"
@@ -183,6 +189,7 @@ export function NeedsAttentionPanel() {
               )}
               Retry these ({unreadable.length})
             </Button>
+            )}
             {retryNote && <span className="text-xs text-gray-600">{retryNote}</span>}
           </div>
           <ul className="divide-y divide-gray-100 rounded-xl border border-gray-100">
@@ -213,7 +220,13 @@ export function NeedsAttentionPanel() {
           </p>
           <ul className="divide-y divide-gray-100 rounded-xl border border-gray-100">
             {flagged.map((row) => (
-              <FlaggedRow key={row.id} row={row} onSaved={() => invalidate(qc)} />
+              <FlaggedRow
+                key={row.id}
+                row={row}
+                canEdit={canWrite}
+                canClear={canClear}
+                onSaved={() => invalidate(qc)}
+              />
             ))}
           </ul>
         </div>
@@ -222,7 +235,17 @@ export function NeedsAttentionPanel() {
   );
 }
 
-function FlaggedRow({ row, onSaved }: { row: FlaggedExpense; onSaved: () => void }) {
+function FlaggedRow({
+  row,
+  canEdit,
+  canClear,
+  onSaved,
+}: {
+  row: FlaggedExpense;
+  canEdit: boolean;
+  canClear: boolean;
+  onSaved: () => void;
+}) {
   const [editing, setEditing] = useState(false);
   const [vendor, setVendor] = useState(row.vendor ?? "");
   const [expenseDate, setExpenseDate] = useState(row.expense_date ?? "");
@@ -301,9 +324,12 @@ function FlaggedRow({ row, onSaved }: { row: FlaggedExpense; onSaved: () => void
           )}
           {!editing && (
             <>
+              {canEdit && (
               <Button type="button" variant="outline" size="sm" onClick={() => setEditing(true)}>
                 Fix
               </Button>
+              )}
+              {canClear && (
               <Button
                 type="button"
                 variant="ghost"
@@ -318,12 +344,13 @@ function FlaggedRow({ row, onSaved }: { row: FlaggedExpense; onSaved: () => void
                   <Check className="w-3.5 h-3.5" />
                 )}
               </Button>
+              )}
             </>
           )}
         </div>
       </div>
 
-      {editing && (
+      {editing && canEdit && (
         <div className="flex flex-wrap items-end gap-3 pt-1">
           <div className="flex-1 min-w-[160px]">
             <label className="block text-[11px] font-semibold text-gray-600 mb-1">Vendor</label>

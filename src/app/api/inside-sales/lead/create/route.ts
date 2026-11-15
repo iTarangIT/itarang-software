@@ -11,7 +11,9 @@ import { BusinessTypeSchema } from "@/lib/leads/businessType";
 import { createInsideSalesLead, creationOwnership, DuplicatePhoneError } from "@/lib/inside-sales/createLead";
 import { LEAD_ORIGINS } from "@/lib/leads/leadSource";
 
-const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
+// ID 252 (decided 12 Nov): the Sales Head works the leads HE OWNS like an ASM;
+// the owner check below still applies, so anyone else's lead stays view-only.
+const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner", "sales_head"];
 
 const BodySchema = z.object({
     dealer_name: z.string().trim().min(2).max(200),

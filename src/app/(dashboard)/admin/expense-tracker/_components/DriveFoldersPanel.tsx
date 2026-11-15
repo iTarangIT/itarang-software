@@ -30,6 +30,7 @@ import {
   startScanAndWait,
   type ScanRunResult,
 } from "@/lib/drive/scanClient";
+import type { ExpenseAccess } from "@/lib/auth/requireApiAdmin";
 import {
   AlertTriangle,
   Check,
@@ -199,10 +200,16 @@ export const SALES_PANEL: DriveFoldersPanelConfig = {
 
 export function DriveFoldersPanel({
   config = EXPENSE_PANEL,
+  access,
 }: {
   config?: DriveFoldersPanelConfig;
-} = {}) {
+  access: ExpenseAccess;
+}) {
   const qc = useQueryClient();
+  // ID 166 item 1: add / pause / remove / scan are Admin / Sales Head only;
+  // Finance may also switch what a sales folder holds; the CEO views.
+  const canWrite = access === "write";
+  const canSetKind = canWrite || access === "finance";
   const [folderInput, setFolderInput] = useState("");
   const [newKind, setNewKind] = useState<"sale" | "credit_note">("sale");
   const [error, setError] = useState<string | null>(null);
@@ -323,6 +330,7 @@ export function DriveFoldersPanel({
           <h2 className="text-sm font-semibold text-gray-900">{config.title}</h2>
           <p className="text-xs text-gray-500 mt-0.5">{config.description}</p>
         </div>
+        {canWrite && (
         <Button
           type="button"
           onClick={() => scan.mutate({})}
@@ -336,6 +344,7 @@ export function DriveFoldersPanel({
           )}
           {config.scanLabel}
         </Button>
+        )}
       </div>
 
       {!driveConfigured && !isLoading && (
@@ -348,6 +357,7 @@ export function DriveFoldersPanel({
       )}
 
       {/* Add a folder */}
+      {canWrite && (
       <div className="flex flex-wrap items-end gap-3">
         <div className="flex-1 min-w-[280px]">
           <label className="block text-xs font-semibold text-gray-700 mb-1.5 uppercase tracking-wider">
@@ -392,6 +402,7 @@ export function DriveFoldersPanel({
           Add
         </Button>
       </div>
+      )}
 
       {error && (
         <div className="flex items-start gap-2 p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-800">
@@ -438,7 +449,7 @@ export function DriveFoldersPanel({
                   aria-label="What this folder holds"
                   className="rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs"
                   value={f.doc_kind === "credit_note" ? "credit_note" : "sale"}
-                  disabled={toggleFolder.isPending}
+                  disabled={toggleFolder.isPending || !canSetKind}
                   onChange={(e) =>
                     toggleFolder.mutate({ id: f.id, doc_kind: e.target.value as "sale" | "credit_note" })
                   }
@@ -447,6 +458,7 @@ export function DriveFoldersPanel({
                   <option value="credit_note">Credit notes — subtracted from revenue</option>
                 </select>
               )}
+              {canWrite ? (
               <button
                 type="button"
                 onClick={() => toggleFolder.mutate({ id: f.id, is_active: !f.is_active })}
@@ -459,6 +471,18 @@ export function DriveFoldersPanel({
               >
                 {f.is_active ? "Active" : "Paused"}
               </button>
+              ) : (
+                <span
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold ${
+                    f.is_active
+                      ? "bg-green-50 text-green-700 border border-green-200"
+                      : "bg-gray-100 text-gray-500 border border-gray-200"
+                  }`}
+                >
+                  {f.is_active ? "Active" : "Paused"}
+                </span>
+              )}
+              {canWrite && (
               <button
                 type="button"
                 onClick={() => removeFolder.mutate(f.id)}
@@ -468,6 +492,7 @@ export function DriveFoldersPanel({
               >
                 <Trash2 className="w-4 h-4" />
               </button>
+              )}
             </li>
           ))}
         </ul>

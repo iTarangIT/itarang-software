@@ -20,7 +20,7 @@ import { z } from "zod";
 
 import { db } from "@/lib/db";
 import { driveExpenseFolders } from "@/lib/db/schema";
-import { requireApiAdmin } from "@/lib/auth/requireApiAdmin";
+import { requireApiAdmin, requireApiExpenseWriter } from "@/lib/auth/requireApiAdmin";
 import { isNextRedirectError, errorMessage } from "@/lib/api-utils";
 import {
   describeDriveError,
@@ -79,7 +79,7 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
-    const guard = await requireApiAdmin();
+    const guard = await requireApiExpenseWriter();
     if (!guard.ok) return guard.response;
     const user = guard.user;
 
@@ -180,7 +180,8 @@ export async function POST(req: NextRequest) {
 
 export async function PATCH(req: NextRequest) {
   try {
-    const guard = await requireApiAdmin();
+    // Expense folders have no doc_kind, so Finance has no write here.
+    const guard = await requireApiExpenseWriter();
     if (!guard.ok) return guard.response;
 
     const parsed = PatchSchema.safeParse(await req.json());
@@ -223,7 +224,7 @@ export async function PATCH(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   try {
-    const guard = await requireApiAdmin();
+    const guard = await requireApiExpenseWriter();
     if (!guard.ok) return guard.response;
 
     const id = req.nextUrl.searchParams.get("id");

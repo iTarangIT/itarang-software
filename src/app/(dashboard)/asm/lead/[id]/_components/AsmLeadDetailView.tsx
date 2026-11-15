@@ -39,7 +39,7 @@ type Props = {
 };
 
 /** The roles GET/POST /api/inside-sales/lead/[id]/reassign accept (its MUTATE_ROLES). */
-const REASSIGN_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
+const REASSIGN_ROLES = ["inside_sales_rep", "asm", "admin", "partner", "sales_head"];
 
 export function AsmLeadDetailView({ leadId, viewerId, viewerRole }: Props) {
     const qc = useQueryClient();

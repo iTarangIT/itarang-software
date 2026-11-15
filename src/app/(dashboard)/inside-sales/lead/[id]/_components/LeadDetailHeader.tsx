@@ -18,7 +18,7 @@ import { InfoTip } from "@/components/ui/info-tip";
 import { capabilitiesFor, canReactivateLead } from "@/lib/leads/access";
 
 // Roles permitted to override a lead's temperature (mirrors the PATCH route).
-const INTEREST_EDIT_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
+const INTEREST_EDIT_ROLES = ["inside_sales_rep", "asm", "admin", "partner", "sales_head"];
 
 type Props = {
     bundle: LeadDetailBundle;

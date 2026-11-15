@@ -27,7 +27,7 @@ import { writeTouchpoint } from "@/lib/touchpoints/write";
 import { markSalesReady } from "@/lib/leads/salesReady";
 import type { UploadBatchSummary } from "@/lib/admin/types";
 import { LEAD_ORIGINS } from "@/lib/leads/leadSourceVocab";
-import { recordLeadsCreatedBulk, recordReinquiries, stampLeadSourceBulk } from "@/lib/leads/leadSource";
+import { recordLeadsCreatedBulk, stampLeadSourceBulk } from "@/lib/leads/leadSource";
 import { campaignForUploadBatch, resolveLeadCampaign } from "@/lib/leads/acquisitionCampaigns";
 
 export const dynamic = "force-dynamic";
@@ -86,9 +86,10 @@ export const POST = withErrorHandler(async (req: Request) => {
     const aiRecall = b.routing_to_ai ? "awaiting_re_dial" : "qualified";
     const interest = b.routing_to_ai ? null : "warm";
 
-    // ID 81: the leads this batch created, and the dealers it found again.
+    // ID 81: the leads this batch created. ID 249: the dealers it found again
+    // get NO Re-inquiry (an upload is not the dealer coming back) — they are
+    // counted in duplicate_rows, shown as "Already in CRM".
     const insertedIds: string[] = [];
-    const known: { id: string; note: string }[] = [];
 
     for (const row of result.rows) {
         if (row.status === "error" || !row.payload) continue;
@@ -169,7 +170,6 @@ export const POST = withErrorHandler(async (req: Request) => {
                 `);
             }
         } else if (row.status === "reactivate" && row.duplicate_lead_id) {
-            known.push({ id: row.duplicate_lead_id, note: p.dealer_name });
             await reactivateLead({
                 leadId: row.duplicate_lead_id,
                 trigger: "upload",
@@ -188,7 +188,6 @@ export const POST = withErrorHandler(async (req: Request) => {
                 `);
             }
         } else if (row.status === "duplicate_skip" && row.duplicate_lead_id) {
-            known.push({ id: row.duplicate_lead_id, note: p.dealer_name });
             if (p.prior_call_notes) {
                 await db.execute(sql`
                     INSERT INTO lead_touchpoints
@@ -201,7 +200,6 @@ export const POST = withErrorHandler(async (req: Request) => {
                 `);
             }
         } else if (row.status === "address_mismatch" && row.duplicate_lead_id) {
-            known.push({ id: row.duplicate_lead_id, note: p.dealer_name });
             await db.execute(sql`
                 INSERT INTO duplicate_merge_requests
                     (request_type, source_lead_id, target_lead_id, requested_by,
@@ -224,8 +222,8 @@ export const POST = withErrorHandler(async (req: Request) => {
 
     // ID 81. Every lead this batch created gets its source — Entered via Bulk
     // upload (the trigger already set it from the batch id), Found via, and the
-    // batch's campaign — and a "Lead created" line. Every dealer the file found
-    // again gets a Re-inquiry on the lead it already has. All best-effort and
+    // batch's campaign — and a "Lead created" line. A dealer the file found
+    // again gets nothing written (ID 249). All best-effort and
     // after the import: the leads exist either way. A file that created
     // nothing (every row a known dealer) does not get a campaign of its own.
     const campaignId =
@@ -241,7 +239,6 @@ export const POST = withErrorHandler(async (req: Request) => {
             : null;
     await stampLeadSourceBulk(insertedIds, { door: "bulk_upload", origin: b.origin, campaignId });
     await recordLeadsCreatedBulk(insertedIds, { door: "bulk_upload", actorId: user.id });
-    await recordReinquiries(known, { door: "bulk_upload", actorId: user.id });
 
     const summaryRows = await db.execute<UploadBatchSummary>(sql`
         SELECT batch_id, file_name, uploaded_by, NULL AS uploaded_by_name,

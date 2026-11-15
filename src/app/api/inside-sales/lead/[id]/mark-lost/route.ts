@@ -17,7 +17,9 @@ import {
     TestLeadRoleError,
 } from "@/lib/leads/markLost";
 
-const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
+// ID 252 (decided 12 Nov): the Sales Head works the leads HE OWNS like an ASM;
+// the owner check below still applies, so anyone else's lead stays view-only.
+const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner", "sales_head"];
 
 const BodySchema = z.object({
     lost_reason: z.enum(LOST_REASON),

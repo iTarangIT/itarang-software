@@ -146,6 +146,17 @@ export function isConversationTouchpoint(type: TouchpointType): boolean {
   return CONVERSATION_TOUCHPOINT_TYPES.includes(type);
 }
 
+/**
+ * ID 249 (12 Nov): touchpoint types shown ONLY on the lead's "Lead tracking"
+ * tab (buildLeadTracking reads every touchpoint), never in its Activity
+ * timeline. Display only — the rows stay in lead_touchpoints untouched.
+ */
+export const LEAD_TRACKING_ONLY_TOUCHPOINT_TYPES: readonly TouchpointType[] = ["lead_reinquiry"];
+
+export function showsInActivity(type: string | null | undefined): boolean {
+  return !(LEAD_TRACKING_ONLY_TOUCHPOINT_TYPES as readonly string[]).includes(type ?? "");
+}
+
 export const CALL_STATUS = [
   "connected",
   "not_reachable",

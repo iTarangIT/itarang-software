@@ -51,6 +51,21 @@ function extFor(contentType: string): string {
 }
 
 /**
+ * Why a downloaded body is NOT a recording, or null when it may be one. Rejects
+ * text / HTML / JSON / XML content types, bodies that start like a web page or
+ * JSON, and bodies too small to hold any audio. `application/octet-stream` and
+ * every `audio/*` / `video/*` type pass (providers label audio inconsistently).
+ */
+export function notAudioReason(contentType: string, body: Buffer): string | null {
+  const ct = contentType.toLowerCase();
+  if (ct.startsWith("text/") || /html|json|xml/.test(ct)) return `content-type ${ct}`;
+  if (body.length < 1024) return `only ${body.length} bytes`;
+  const head = body.subarray(0, 64).toString("utf8").trimStart().toLowerCase();
+  if (head.startsWith("<") || head.startsWith("{") || head.startsWith("[")) return "body is a web page or JSON";
+  return null;
+}
+
+/**
  * Download `recordingUrl` and re-host it in the public `call-recordings` bucket.
  * Returns the public, browser-playable URL. Falls back to the original
  * `recordingUrl` on any failure, or "" when there is no recording to host.
@@ -76,6 +91,11 @@ export async function rehostRecording(opts: {
       res.headers.get("content-type")?.split(";")[0]?.trim() || "audio/mpeg";
     const ext = extFor(contentType);
     const buffer = Buffer.from(await res.arrayBuffer());
+    // L11 (13 Nov): an expired provider link can answer 200 with a web page or
+    // an error JSON. Saving that would replace the real link with a
+    // "recording" that is not audio — refuse it (the provider link is kept).
+    const notAudio = notAudioReason(contentType, buffer);
+    if (notAudio) throw new Error(`not a recording: ${notAudio}`);
     const key = `${envPrefix()}${sanitize(provider)}/${sanitize(callId)}.${ext}`;
 
     if (isS3Backend) {

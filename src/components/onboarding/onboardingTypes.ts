@@ -30,6 +30,8 @@ export type UploadFileItem = {
   viewUrl?: string | null;
   storagePath?: string | null;
   bucketName?: string | null;
+  /** ID 166-B: the original file name, kept with storagePath across visits. */
+  fileName?: string | null;
   verificationState: VerificationState;
   progress: number;
   uploadedAt?: string;

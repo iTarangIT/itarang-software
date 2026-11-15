@@ -12,6 +12,7 @@ import { recordLeadCapture } from "@/lib/leads/lead-registry";
 import { markDocsSubmitted } from "@/lib/onboarding/leadMilestones";
 import { resolveSalesperson, salespersonMobile } from "@/lib/onboarding/salesperson";
 import { checkCustomerGstin, GSTIN_CHECK_MESSAGE } from "@/lib/leads/gstin";
+import { checkStoredPaths } from "@/lib/onboarding/storedDocuments";
 
 type NullableString = string | null;
 type SafeRecord = Record<string, unknown>;
@@ -504,13 +505,47 @@ export async function POST(req: NextRequest) {
     // array. Omitting the field must leave existing rows untouched —
     // otherwise any partial save (e.g. company-name edit) would wipe every
     // uploaded KYC file for the applicationId.
-    if (documentsProvided) {
+    //
+    // ID 166-B: the form re-sends a stored path for a file uploaded on an
+    // earlier visit. Check every path BEFORE the replace: this draft's own
+    // document or a fresh form upload only — a path naming another
+    // application's file aborts the document update (text is still saved).
+    // The stored URL is derived here, never taken from the browser.
+    let documentUrlFor: ((bucket: string, key: string) => string) | null = null;
+    if (documentsProvided && documents.length > 0) {
+      const check = await checkStoredPaths(
+        application.id,
+        documents
+          .filter(
+            (doc) =>
+              typeof doc["bucketName"] === "string" &&
+              typeof doc["storagePath"] === "string"
+          )
+          .map((doc) => ({
+            bucketName: String(doc["bucketName"]),
+            storagePath: String(doc["storagePath"]),
+          })),
+      );
+      if (check.ok) {
+        documentUrlFor = check.urlFor;
+      } else {
+        console.warn(
+          "[dealer-onboarding/save] refused a document path not belonging to",
+          application.id
+        );
+      }
+    }
+    const replaceDocuments =
+      documentsProvided && (documents.length === 0 || documentUrlFor !== null);
+
+    if (replaceDocuments) {
       await db
         .delete(dealerOnboardingDocuments)
         .where(eq(dealerOnboardingDocuments.application_id, application.id));
     }
 
-    if (documentsProvided && documents.length > 0) {
+    if (replaceDocuments && documentUrlFor && documents.length > 0) {
+      const urlFor = documentUrlFor;
       const validDocuments = documents
         .filter((doc) => {
           return (
@@ -526,7 +561,7 @@ export async function POST(req: NextRequest) {
           bucket_name: String(doc["bucketName"]),
           storage_path: String(doc["storagePath"]),
           file_name: String(doc["fileName"]),
-          file_url: typeof doc["fileUrl"] === "string" ? doc["fileUrl"] : null,
+          file_url: urlFor(String(doc["bucketName"]), String(doc["storagePath"])),
           mime_type: typeof doc["mimeType"] === "string" ? doc["mimeType"] : null,
           file_size: typeof doc["fileSize"] === "number" ? doc["fileSize"] : null,
           uploaded_by: dealerUserId,

@@ -8,6 +8,7 @@ import { and, eq, ne } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { dealerOnboardingDocuments } from "@/lib/db/schema";
 import { filesProxyTarget, onboardingFileLink } from "@/lib/storage/fileAccess";
+import { storedDocumentUrl } from "@/lib/onboarding/storedDocuments";
 
 /** bucket/key identity of a stored URL, ignoring any query string. */
 function fileIdentity(url: string | null | undefined): string | null {
@@ -40,6 +41,48 @@ export async function onboardingDocumentLinks(applicationId: string): Promise<Re
     if (link) out[url] = link;
   }
   return out;
+}
+
+export type OnboardingStoredDocument = {
+  documentType: string;
+  fileName: string;
+  bucketName: string;
+  storagePath: string;
+  /** Fresh 15-minute link signed for the application; null if none can be made. */
+  viewUrl: string | null;
+};
+
+/**
+ * ID 166-B: the application's current documents, by document type, for a
+ * dealer that just proved it owns the application (resume code). The form
+ * matches them to its upload slots by type — on another phone it has nothing
+ * stored — and by storage path, never by URL.
+ */
+export async function onboardingStoredDocuments(applicationId: string): Promise<OnboardingStoredDocument[]> {
+  const rows = await db
+    .select({
+      documentType: dealerOnboardingDocuments.document_type,
+      fileName: dealerOnboardingDocuments.file_name,
+      bucketName: dealerOnboardingDocuments.bucket_name,
+      storagePath: dealerOnboardingDocuments.storage_path,
+      fileUrl: dealerOnboardingDocuments.file_url,
+    })
+    .from(dealerOnboardingDocuments)
+    .where(
+      and(
+        eq(dealerOnboardingDocuments.application_id, applicationId),
+        ne(dealerOnboardingDocuments.doc_status, "superseded"),
+      ),
+    );
+  return rows
+    .filter((r) => r.documentType && r.bucketName && r.storagePath)
+    .map((r) => ({
+      documentType: r.documentType,
+      fileName: r.fileName || r.storagePath.split("/").pop() || r.documentType,
+      bucketName: r.bucketName,
+      storagePath: r.storagePath,
+      viewUrl: onboardingFileLink(r.fileUrl || storedDocumentUrl(r.bucketName, r.storagePath), applicationId),
+    }));
 }
 
 /**

@@ -15,6 +15,8 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { safeEqual } from "@/lib/cron-auth";
+import { seesFullDealerIds } from "@/lib/kyc/dealerIdMask";
+import { isMaskedPan, maskPan } from "@/lib/kyc/panMask";
 import { z } from "zod";
 import { isValidGstin } from "@/lib/leads/gstin";
 import { createClient } from "@/lib/supabase/server";
@@ -204,7 +206,9 @@ export async function GET(
       rbiRegistrationNo: row.rbi_registration_no,
       cin: row.cin,
       gstNumber: row.gst_number,
-      panNumber: row.pan_number,
+      // ID 119-B (decision 2, 23 Oct): the company PAN in full only for
+      // Admin, CEO and Sales Head; the Business Head gets the last 4.
+      panNumber: seesFullDealerIds(admin.role) ? row.pan_number : maskPan(row.pan_number),
       nbfcType: row.nbfc_type,
       registeredAddress: row.registered_address,
       activeGeographies: row.active_geographies,
@@ -285,6 +289,9 @@ export async function PATCH(
       );
     }
     const patch = parsed.data;
+    // ID 119-B: the Business Head's form holds the masked PAN; saving it back
+    // means "unchanged" — never store the mask over the real PAN.
+    if (isMaskedPan(patch.panNumber)) delete patch.panNumber;
 
     const existingRows = await db
       .select()

@@ -23,8 +23,11 @@ import { z } from "zod";
 
 import { db } from "@/lib/db";
 import { salesInvoiceFolders } from "@/lib/db/schema";
-import { requireApiAdmin } from "@/lib/auth/requireApiAdmin";
-import { requireAuth } from "@/lib/auth-utils";
+import {
+  requireApiAdmin,
+  requireApiExpenseWriteOrFinance,
+  requireApiExpenseWriter,
+} from "@/lib/auth/requireApiAdmin";
 import { isNextRedirectError, errorMessage } from "@/lib/api-utils";
 import {
   describeDriveError,
@@ -63,23 +66,13 @@ const PatchSchema = z
   .refine((o) => Object.keys(o).length > 1, { message: "No fields to update" });
 
 /**
- * ID 71: Finance marks which folders hold credit notes, so the list (GET) and
- * the doc-type switch (PATCH doc_kind only) also admit finance_controller.
+ * ID 71 / ID 166 item 1: everyone on the tracker reads the list (GET); Finance
+ * may switch what a folder holds (PATCH doc_kind only); the CEO views only.
  * Adding, removing, filters and scans stay with Admin / Sales Head.
  */
-const DOC_KIND_ROLES = new Set(["finance_controller"]);
-
-async function guardRead() {
-  const admin = await requireApiAdmin();
-  if (admin.ok) return { ok: true as const, user: admin.user, finance: false };
-  const user = await requireAuth();
-  if (DOC_KIND_ROLES.has((user.role || "").toLowerCase())) return { ok: true as const, user, finance: true };
-  return admin;
-}
-
 export async function GET() {
   try {
-    const guard = await guardRead();
+    const guard = await requireApiAdmin();
     if (!guard.ok) return guard.response;
 
     const rows = await db
@@ -102,7 +95,7 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
-    const guard = await requireApiAdmin();
+    const guard = await requireApiExpenseWriter();
     if (!guard.ok) return guard.response;
 
     if (!isDriveConfigured()) {
@@ -208,10 +201,11 @@ export async function POST(req: NextRequest) {
 
 export async function PATCH(req: NextRequest) {
   try {
-    const guard = await guardRead();
+    const guard = await requireApiExpenseWriteOrFinance();
     if (!guard.ok) return guard.response;
 
-    const parsed = PatchSchema.safeParse(await req.json());
+    const body = await req.json();
+    const parsed = PatchSchema.safeParse(body);
     if (!parsed.success) {
       return NextResponse.json(
         { success: false, error: { message: "Validation failed" } },
@@ -219,7 +213,12 @@ export async function PATCH(req: NextRequest) {
       );
     }
     const { id, ...fields } = parsed.data;
-    if (guard.finance && Object.keys(fields).some((k) => k !== "doc_kind")) {
+    // Raw body keys too: zod drops unknown keys, so only { id, doc_kind }.
+    const rawKeys = body && typeof body === "object" ? Object.keys(body) : [];
+    if (
+      guard.access === "finance" &&
+      (fields.doc_kind === undefined || rawKeys.some((k) => k !== "id" && k !== "doc_kind"))
+    ) {
       return NextResponse.json(
         { success: false, error: { message: "Finance can change only what a folder holds (sales invoices or credit notes)." } },
         { status: 403 },
@@ -273,7 +272,7 @@ export async function PATCH(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   try {
-    const guard = await requireApiAdmin();
+    const guard = await requireApiExpenseWriter();
     if (!guard.ok) return guard.response;
 
     const id = req.nextUrl.searchParams.get("id");

@@ -13,6 +13,7 @@ import { useState } from "react";
 import { Tabs } from "@/components/ui/tabs";
 import type { TabItem } from "@/components/ui/tabs";
 import type { LeadDetailBundle } from "@/lib/inside-sales/types";
+import { showsInActivity } from "@/lib/lifecycle/touchpointTypes";
 
 import { LeadTrackingPanel } from "@/components/leads/lead-tracking-panel";
 import { LeadDocumentsPanel } from "@/components/leads/lead-documents-panel";
@@ -33,12 +34,14 @@ export function LeadActivityPanes({
     canExportHistory: boolean;
 }) {
     const [tab, setTab] = useState<Tab>("touchpoints");
+    // ID 249: Re-inquiry lines show on Lead tracking only (display filter).
+    const activity = bundle.touchpoints.filter((t) => showsInActivity(t.touchpoint_type));
 
     const tabs: TabItem[] = [
         {
             value: "touchpoints",
             label: "Activity",
-            count: bundle.touchpoints.length,
+            count: activity.length,
         },
         { value: "calls", label: "AI calls" },
         // E-295 — the journey (who held it, for how long, what they did) and
@@ -65,7 +68,7 @@ export function LeadActivityPanes({
                 {tab === "touchpoints" ? (
                     <TouchpointHistoryPane
                         leadId={leadId}
-                        touchpoints={bundle.touchpoints}
+                        touchpoints={activity}
                         statusHistory={bundle.status_history}
                         limitEvents={bundle.limit_events ?? []}
                         canExport={canExportHistory}
