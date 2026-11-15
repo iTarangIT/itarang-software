@@ -204,7 +204,7 @@ export default async function NbfcReviewPage({
     rbiRegistrationNo: row.rbi_registration_no,
     cin: row.cin,
     gstNumber: row.gst_number,
-    panNumber: panShown,
+    panNumber: panShown ?? "",
     nbfcType: row.nbfc_type,
     registeredAddress: row.registered_address,
     activeGeographies: row.active_geographies,

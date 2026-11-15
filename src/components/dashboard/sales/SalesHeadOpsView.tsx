@@ -1660,7 +1660,7 @@ function TeamSubtotalRow({
     data: TeamScorecardSubtotal | null;
     loading: boolean;
 }) {
-    const field = scoreKind === "field";
+    const field = score === "field";
     const grid = field ? "grid-cols-[180px_repeat(6,minmax(0,1fr))_150px]" : "grid-cols-[180px_repeat(5,minmax(0,1fr))_150px]";
     let cells: Array<{ actual: string; note?: string }>;
     let last = "—";
