@@ -193,9 +193,17 @@ const METRICS: Record<RepMetricKey, MetricDef> = {
 };
 
 /** The one target "% of target" is read against: metric shown vs sales_targets key. */
-const PRIMARY_TARGET: Record<"asm" | "inside_sales_rep", { metric: RepMetricKey; target: string }> = {
+/**
+ * The roles that get their own rows. ID 252 (decided 12 Nov): the Sales Head
+ * works the leads he owns like an ASM, so his work is listed under his own name
+ * on the field columns, in a group of its own — never inside an ASM or ISR Total.
+ */
+export type RepRole = "asm" | "inside_sales_rep" | "sales_head";
+
+const PRIMARY_TARGET: Record<RepRole, { metric: RepMetricKey; target: string }> = {
     asm: { metric: "visited", target: "dealer_visits" },
     inside_sales_rep: { metric: "calls", target: "calls_per_day" },
+    sales_head: { metric: "visited", target: "dealer_visits" },
 };
 
 type ColSpec =
@@ -255,14 +263,14 @@ const ISR_COLS: ColSpec[] = [
     { header: "% of target", pctTarget: true },
 ];
 
-const COLS = { asm: ASM_COLS, inside_sales_rep: ISR_COLS } as const;
+const COLS = { asm: ASM_COLS, inside_sales_rep: ISR_COLS, sales_head: ASM_COLS } as const;
 
 /**
  * ID 194 #1 — the metrics a block shows for Yesterday, named without the
  * " · Yesterday" suffix ("Dealers visited", "Calls", …), in column order. My
  * day compares each with the same day last week.
  */
-export function yesterdayMetricsOf(role: "asm" | "inside_sales_rep"): Array<{ label: string; metric: RepMetricKey }> {
+export function yesterdayMetricsOf(role: RepRole): Array<{ label: string; metric: RepMetricKey }> {
     return COLS[role].flatMap((c) =>
         "metric" in c && c.period === "y" ? [{ label: c.header.replace(/ · Yesterday$/, ""), metric: c.metric }] : [],
     );
@@ -310,7 +318,7 @@ function allZero(values: Partial<Record<RepMetricKey, RepValue>>): boolean {
  *     still did something stays, marked "(inactive)".
  */
 export function buildRepBlocks(
-    role: "asm" | "inside_sales_rep",
+    role: RepRole,
     y: Pick<SalesDashboard, "per_spoc">,
     mtd: Pick<SalesDashboard, "per_spoc">,
     extras: { y: RepExtras; mtd: RepExtras },
@@ -330,7 +338,9 @@ export function buildRepBlocks(
     for (const b of [...(mtd.per_spoc ?? []), ...(y.per_spoc ?? [])]) {
         if (!info.has(b.spoc_id)) info.set(b.spoc_id, b);
         if (b.role === role) ids.add(b.spoc_id);
-        else if (role === "inside_sales_rep" && b.role !== "asm" && (b.totals.calls > 0 || handedHot(b.spoc_id))) ids.add(b.spoc_id);
+        // ID 252: the Sales Head has his own group, so his calls are not summed
+        // into the inside-sales Total.
+        else if (role === "inside_sales_rep" && b.role !== "asm" && b.role !== "sales_head" && (b.totals.calls > 0 || handedHot(b.spoc_id))) ids.add(b.spoc_id);
     }
 
     const pick = (def: MetricDef, b: SalesSpocBlock | undefined, ex: RepExtras, id: string): number | null => {
@@ -467,7 +477,7 @@ export const TEAM_SUBTOTAL_PREFIX = "Team subtotal · ";
  * (↳) and "Team subtotal · <manager>" — their numbers only, "% of target" "—".
  */
 export function repBlockTableRows(
-    role: "asm" | "inside_sales_rep",
+    role: RepRole,
     blocks: RepBlock[],
     teamOf?: TeamOf,
     teamGroups?: TeamGroups,
@@ -578,10 +588,22 @@ export function repBlockTableRows(
 export const BY_PERSON_COLUMNS = ["Person", "Yesterday", "Day before", "Same day last week", "MTD", "MTD target", "% of target"];
 export const BY_PERSON_PCT_COLUMN = BY_PERSON_COLUMNS.indexOf("% of target");
 
-const BY_PERSON_GROUP: Record<"asm" | "inside_sales_rep", string> = {
+const BY_PERSON_GROUP: Record<RepRole, string> = {
     asm: "FIELD TEAM (ASM) · DEALERS VISITED",
     inside_sales_rep: "INSIDE SALES (ISR / CC) · CALLS",
+    sales_head: "SALES HEAD (OWN LEADS) · DEALERS VISITED",
 };
+
+/**
+ * ID 252: the Sales Head's own rows for Block B, under a header row and after
+ * the ASM rows and their Total — on the same columns, never in that Total.
+ * Empty when no Sales Head worked a lead in the period. Pure.
+ */
+export function salesHeadBlockRows(blocks: RepBlock[]): Rows {
+    if (!blocks.length) return [];
+    const header = ASM_COLS.map((c) => ("name" in c ? "SALES HEAD · OWN LEADS (not in the ASM Total)" : ""));
+    return [header, ...repBlockTableRows("sales_head", blocks)];
+}
 
 /**
  * ID 188 (Sales Head's format, 22 Oct) — "A2 · By person", right under Block
@@ -596,7 +618,7 @@ const BY_PERSON_GROUP: Record<"asm" | "inside_sales_rep", string> = {
  * row closes each group of more than one person. Pure.
  */
 export function byPersonRows(
-    groups: Array<{ role: "asm" | "inside_sales_rep"; blocks: RepBlock[] }>,
+    groups: Array<{ role: RepRole; blocks: RepBlock[] }>,
     earlier: { prev: Pick<SalesDashboard, "per_spoc">; wk: Pick<SalesDashboard, "per_spoc"> },
 ): Rows {
     const prevBy = new Map((earlier.prev.per_spoc ?? []).map((b) => [b.spoc_id, b]));

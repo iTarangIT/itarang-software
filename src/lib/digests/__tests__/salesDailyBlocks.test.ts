@@ -16,6 +16,7 @@ const {
     datedTeamGroup,
     outsideManagerBlock,
     repBlockTableRows,
+    salesHeadBlockRows,
 } = await import("../salesDailyBlocks");
 const { NOT_MEASURED } = await import("../salesDailyBlockA");
 
@@ -487,5 +488,35 @@ describe("A2 · By person (ID 188) — the Sales Head's columns per person", asy
             { prev: { per_spoc: [] }, wk: { per_spoc: [] } },
         );
         expect(rows).toEqual([]);
+    });
+});
+
+describe("ID 252 — the Sales Head's own leads have their own rows", () => {
+    const extras = { y: noExtras, mtd: noExtras };
+    const mtd = {
+        per_spoc: [
+            spoc("a1", "Jiten", "asm", { unique_visits: 3 }),
+            spoc("a2", "Sonu", "asm", { unique_visits: 2 }),
+            spoc("i1", "Nidhi", "inside_sales_rep", { calls: 40 }),
+            spoc("h1", "Anirudh", "sales_head", { unique_visits: 5, calls: 7 }),
+        ],
+    };
+
+    it("is in neither the ASM nor the ISR group, and gets a group of his own", () => {
+        expect(buildRepBlocks("asm", { per_spoc: [] }, mtd, extras, new Map()).map((b) => b.name)).toEqual(["Jiten", "Sonu"]);
+        expect(buildRepBlocks("inside_sales_rep", { per_spoc: [] }, mtd, extras, new Map()).map((b) => b.name)).toEqual(["Nidhi"]);
+        expect(buildRepBlocks("sales_head", { per_spoc: [] }, mtd, extras, new Map()).map((b) => b.name)).toEqual(["Anirudh"]);
+    });
+
+    it("Block B lists him after the ASM Total, under his own header, outside that Total", () => {
+        const asm = repBlockTableRows("asm", buildRepBlocks("asm", { per_spoc: [] }, mtd, extras, new Map()));
+        const sh = salesHeadBlockRows(buildRepBlocks("sales_head", { per_spoc: [] }, mtd, extras, new Map()));
+        expect(asm.map((r) => r[0])).toEqual(["Jiten", "Sonu", "Total"]);
+        expect(sh.map((r) => r[0])).toEqual(["SALES HEAD · OWN LEADS (not in the ASM Total)", "Anirudh"]);
+        expect(sh[0].slice(1).every((c) => c === "")).toBe(true);
+    });
+
+    it("adds nothing when no Sales Head worked a lead", () => {
+        expect(salesHeadBlockRows([])).toEqual([]);
     });
 });

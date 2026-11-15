@@ -57,12 +57,39 @@ export const POST = withErrorHandler(
             .where(eq(dealerLeads.id, id))
             .limit(1);
         const isOwner = !!lead && lead.current_owner_id === user.id;
-        const teamMemberIds = isOwner ? [] : await getTeamMemberIds(user.id);
-        if (isOwner || teamMemberIds.length === 0) await assertOwner(id, user.id);
+        // ID 252 (decided 12 Nov): someone else's lead is view-only for the
+        // Sales Head; to work it he takes it — reassigns it to HIMSELF, whoever
+        // owns it (on live nobody reports to him in user_reporting_lines, so
+        // the manager path below would refuse). Only to himself, never onward.
+        const salesHeadTakes = !isOwner && user.role === "sales_head" && body.target_user_id === user.id;
+        const teamMemberIds = isOwner || salesHeadTakes ? [] : await getTeamMemberIds(user.id);
+        if (!salesHeadTakes && (isOwner || teamMemberIds.length === 0)) await assertOwner(id, user.id);
 
         let visitsMoved = 0;
         try {
-            if (isOwner) {
+            if (salesHeadTakes) {
+                const refusal = await db.transaction(async (tx) => {
+                    const locked = (await tx.execute(sql`
+                        SELECT current_owner_id::text AS current_owner_id FROM dealer_leads WHERE id = ${id} FOR UPDATE
+                    `)) as unknown as Array<{ current_owner_id: string | null }>;
+                    if (!locked[0]) return { message: "Lead not found", status: 404 as const };
+                    if (locked[0].current_owner_id === user.id) {
+                        return { message: "The lead is already with you.", status: 400 as const };
+                    }
+                    ({ visitsMoved } = await reassignLead(
+                        {
+                            leadId: id,
+                            actorId: user.id,
+                            targetUserId: user.id,
+                            reason: body.reason,
+                            fromOwnerId: locked[0].current_owner_id ?? undefined,
+                        },
+                        { tx },
+                    ));
+                    return null;
+                });
+                if (refusal) return errorResponse(refusal.message, refusal.status);
+            } else if (isOwner) {
                 // ID 221: only to someone in the owner's own team.
                 const reports = await activeReportTargets(user.id);
                 const ownerCheck = checkOwnerReassign({ targetUserId: body.target_user_id, reportIds: reports.map((r) => r.id) });
@@ -149,7 +176,14 @@ export const GET = withErrorHandler(
         }
         const teamMemberIds = await getTeamMemberIds(user.id);
         const managesOwner = !!lead.current_owner_id && teamMemberIds.includes(lead.current_owner_id);
-        if (!managesOwner) return successResponse({ can_team_reassign: false, can_owner_reassign: false, targets: [] });
+        if (!managesOwner) {
+            // ID 252: the Sales Head may take anyone's lead — to himself only.
+            if (user.role === "sales_head") {
+                const self = await teamTargetsFor([user.id], user.id);
+                return successResponse({ can_team_reassign: self.length > 0, can_owner_reassign: false, targets: self });
+            }
+            return successResponse({ can_team_reassign: false, can_owner_reassign: false, targets: [] });
+        }
         const ids = ownerScopeIds(user.id, teamMemberIds).filter((u) => u !== lead.current_owner_id);
         const targets = await teamTargetsFor(ids, user.id);
         return successResponse({ can_team_reassign: true, can_owner_reassign: false, targets });
