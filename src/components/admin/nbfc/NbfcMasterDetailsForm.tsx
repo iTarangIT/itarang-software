@@ -59,6 +59,12 @@ export interface NbfcMasterDetailsFormProps {
    * NbfcReadOnlyBanner above this form.
    */
   locked?: boolean;
+  /**
+   * ID 119-B: the PAN arrived masked (`XXXXXX589L`) because this role may not
+   * see it in full. The field is read-only and skips the PAN pattern check;
+   * the PATCH route ignores a masked PAN, so the stored value is kept.
+   */
+  panMasked?: boolean;
 }
 
 type SubmitIntent = "draft" | "submit-for-ceo";
@@ -169,6 +175,7 @@ export default function NbfcMasterDetailsForm({
   initial,
   hasOpenCorrectionRound = false,
   locked = false,
+  panMasked = false,
 }: NbfcMasterDetailsFormProps) {
   const router = useRouter();
   const formRef = useRef<HTMLFormElement | null>(null);
@@ -740,13 +747,19 @@ export default function NbfcMasterDetailsForm({
             className={`input-itarang font-mono text-[13px] uppercase ${inputErrorClass("gstNumber")}`}
           />
         </Field>
-        <Field label="PAN" hint="10 chars" mono error={fieldErrors.panNumber}>
+        <Field
+          label="PAN"
+          hint={panMasked ? "Only the last 4 are shown for your role" : "10 chars"}
+          mono
+          error={fieldErrors.panNumber}
+        >
           <input
             name="panNumber"
             placeholder="AABCB1518L"
             defaultValue={initialMap.panNumber ?? ""}
             required
-            pattern="[A-Z]{5}\d{4}[A-Z]"
+            readOnly={panMasked}
+            pattern={panMasked ? "[X]{6}\\d{3}[A-Z]" : "[A-Z]{5}\\d{4}[A-Z]"}
             title="PAN format: 5 letters + 4 digits + 1 letter (uppercase)"
             maxLength={10}
             aria-invalid={fieldErrors.panNumber ? true : undefined}

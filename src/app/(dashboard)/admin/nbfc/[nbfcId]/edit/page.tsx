@@ -9,6 +9,9 @@ import { isNbfcLocked } from "@/lib/nbfc/admin/editability";
 import { loadOpenRoundSummary } from "@/lib/nbfc/admin/correction-loader";
 import { PageShell, buildNbfcSteps } from "@/components/layout/PageShell";
 import { getStepNavHref } from "@/lib/nbfc/admin/progress";
+import { getSessionUser } from "@/lib/nbfc/tenant";
+import { seesFullDealerIds } from "@/lib/kyc/dealerIdMask";
+import { maskPan } from "@/lib/kyc/panMask";
 
 export const dynamic = "force-dynamic";
 
@@ -50,6 +53,12 @@ export default async function AdminNbfcEditPage({
     roundSummary?.items.filter((i) => i.section === "master_details") ?? [];
   const hasOpenCorrectionRound = roundSummary !== null;
 
+  // ID 119-B (decision 2, 23 Oct): the company PAN in full only for Admin,
+  // CEO and Sales Head; the Business Head gets the last 4. This page reads the
+  // row directly (not through GET /api/admin/nbfc/[id]), so mask it here too.
+  // The PATCH route drops a masked PAN, so saving keeps the stored value.
+  const panMasked = !seesFullDealerIds((await getSessionUser())?.role);
+
   const initial: Record<string, string> = {
     legalName: row.legal_name ?? "",
     shortName: row.short_name ?? "",
@@ -57,7 +66,7 @@ export default async function AdminNbfcEditPage({
     rbiRegistrationNo: row.rbi_registration_no ?? "",
     cin: row.cin ?? "",
     gstNumber: row.gst_number ?? "",
-    panNumber: row.pan_number ?? "",
+    panNumber: (panMasked ? maskPan(row.pan_number) : row.pan_number) ?? "",
     ...flattenAddress(row.registered_address),
     primaryContactName: row.primary_contact_name ?? "",
     primaryContactEmail: row.primary_contact_email ?? "",
@@ -102,6 +111,7 @@ export default async function AdminNbfcEditPage({
           initial={initial}
           hasOpenCorrectionRound={hasOpenCorrectionRound}
           locked={isNbfcLocked(row.status)}
+          panMasked={panMasked}
         />
       </div>
     </PageShell>
