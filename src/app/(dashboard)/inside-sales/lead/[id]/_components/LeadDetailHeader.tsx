@@ -15,7 +15,7 @@ import { ReactivateLeadButton } from "@/components/leads/ReactivateLeadButton";
 import { ChangeLostReasonButton } from "@/components/leads/ChangeLostReasonButton";
 import { WonUndoControl } from "@/components/leads/WonUndoControl";
 import { InfoTip } from "@/components/ui/info-tip";
-import { capabilitiesFor, canReactivateLead } from "@/lib/leads/access";
+import { capabilitiesFor, canMarkUnownedLeadLost, canReactivateLead } from "@/lib/leads/access";
 
 // Roles permitted to override a lead's temperature (mirrors the PATCH route).
 const INTEREST_EDIT_ROLES = ["inside_sales_rep", "asm", "admin", "partner", "sales_head"];
@@ -138,6 +138,23 @@ export function LeadDetailHeader({
                                 compact
                             />
                         )}
+                        {/* ID 233: a lead with no owner (test rows, broken imports) can be
+                            closed by Admin, Sales Head or CEO; the server checks the same. */}
+                        {isUnassigned &&
+                            canMarkUnownedLeadLost(viewerRole) &&
+                            lead.lead_status !== "Lost" &&
+                            lead.lead_status !== "Won" &&
+                            lead.lead_status !== "Converted" &&
+                            statusModalActions?.includes("mark_lost") &&
+                            onStatusModal && (
+                                <button
+                                    type="button"
+                                    onClick={() => onStatusModal("mark_lost")}
+                                    className="inline-flex items-center rounded-md border border-red-200 bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700 hover:bg-red-100"
+                                >
+                                    Mark lost
+                                </button>
+                            )}
                         {/* ID 134: a Won marked by mistake, before onboarding is submitted. */}
                         {lead.lead_status === "Won" && <WonUndoControl leadId={lead.id} onDone={onUpdated} />}
                     </div>

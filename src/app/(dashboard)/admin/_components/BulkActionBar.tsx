@@ -6,6 +6,7 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { bulkSkipWarning } from "@/lib/leads/bulkSkipText";
 import {
     Download,
     FileSpreadsheet,
@@ -193,23 +194,15 @@ export function BulkActionBar({
             if (!res.ok || !json.success) {
                 throw new Error(json?.error?.message ?? "Bulk action failed");
             }
+            // ID 233: the done count in green; every skipped lead named, with its
+            // reason, in a yellow warning that stays until closed.
             toast.success(
-                `Done — ${json.data.affected} updated${
-                    json.data.skipped ? `, ${json.data.skipped} skipped` : ""
-                }.${
-                    json.data.skipped_won
-                        ? ` ${json.data.skipped_won} Won — close those from the onboarding drop-out review.`
-                        : ""
-                }${
-                    json.data.skipped_visit_booked
-                        ? ` ${json.data.skipped_visit_booked} kept with the ASM — a visit is booked; cancel or complete it first.`
-                        : ""
-                }${
-                    json.data.skipped_won_to_asm
-                        ? ` ${json.data.skipped_won_to_asm} Won — a Won lead can't be given to an ASM.`
-                        : ""
-                }`,
+                mode === "mark_lost"
+                    ? `${json.data.affected} marked lost.`
+                    : `Done — ${json.data.affected} updated.`,
             );
+            const skipWarning = bulkSkipWarning(json.data);
+            if (skipWarning) toast.warning(skipWarning, { duration: Infinity, closeButton: true });
             closeModal();
             setReason("");
             setTargetUserId("");

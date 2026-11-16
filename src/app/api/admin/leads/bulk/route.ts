@@ -239,6 +239,13 @@ export const POST = withErrorHandler(async (req: Request) => {
     let skippedVisitBooked = 0;
     // Of `skipped`: Won leads a reassign refused to give to an ASM (ID 179).
     let skippedWonToAsm = 0;
+    // ID 233: why each skipped lead was left alone, in words, for the yellow
+    // warning on the screen ({ "Already Lost": 2, ... }).
+    const skipReasons: Record<string, number> = {};
+    const skipFor = (why: string) => {
+        skipped++;
+        skipReasons[why] = (skipReasons[why] ?? 0) + 1;
+    };
     const reactivated: Array<{ id: string } & Awaited<ReturnType<typeof reactivateLead>>> = [];
 
     if (body.action === "reassign") {
@@ -358,8 +365,10 @@ export const POST = withErrorHandler(async (req: Request) => {
         }
         for (const lead of leads) {
             const status = lead.lead_status as LeadStatus | null;
-            if (!status || !isOpen(status)) {
-                skipped++;
+            // ID 233: a lead with NO status (broken imports, test rows) is open
+            // and can be closed, the same as Mark Lost one at a time.
+            if (status && !isOpen(status)) {
+                skipFor(status === "Lost" ? "Already Lost" : `Already closed (${status.replace(/_/g, " ")})`);
                 continue;
             }
             // ID 115: ask the status guard BEFORE writing. A Won lead is open
@@ -368,8 +377,12 @@ export const POST = withErrorHandler(async (req: Request) => {
             // left the leads before it Lost and the rest untouched. It is
             // skipped and counted instead, and the batch carries on.
             if (!checkStatusMove({ from: status, to: "Lost", event: "mark_lost" }).ok) {
-                skipped++;
-                if (status === "Won") skippedWon++;
+                if (status === "Won") {
+                    skippedWon++;
+                    skipFor("Won (close it from the onboarding drop-out review)");
+                } else {
+                    skipFor("This status cannot go to Lost");
+                }
                 continue;
             }
             try {
@@ -386,7 +399,7 @@ export const POST = withErrorHandler(async (req: Request) => {
                 // row. Each lead is its own transaction, so that one is left
                 // as it was and the rest of the batch still runs.
                 if (err instanceof StatusGuardError) {
-                    skipped++;
+                    skipFor("Changed by someone else meanwhile");
                     continue;
                 }
                 throw err;
@@ -449,6 +462,7 @@ export const POST = withErrorHandler(async (req: Request) => {
         skipped_won: skippedWon,
         skipped_visit_booked: skippedVisitBooked,
         skipped_won_to_asm: skippedWonToAsm,
+        skip_reasons: skipReasons,
         // reactivate only: where each lead went (owner back, or the unassigned pool).
         ...(body.action === "reactivate" ? { reactivated } : {}),
     });
