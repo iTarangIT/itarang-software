@@ -1307,6 +1307,21 @@ export default function LeadsUnifiedPage() {
     setDraft((d) => (d.search === urlSearch ? d : { ...d, search: urlSearch }));
   }, [urlSearch]);
 
+  // ID 232: the tab and the applied filters live in the URL, so '← Back' from
+  // a lead page (which returns to this exact URL) lands on the same filtered
+  // list. replaceState: a filter click is not a new history entry.
+  useEffect(() => {
+    const p = toSearchParams(applied, 1, 1);
+    p.delete("page");
+    p.delete("limit");
+    if (tab !== "leads") p.set("tab", tab);
+    const qs = p.toString();
+    const want = `${window.location.pathname}${qs ? `?${qs}` : ""}`;
+    if (want !== `${window.location.pathname}${window.location.search}`) {
+      window.history.replaceState(window.history.state, "", want);
+    }
+  }, [applied, tab]);
+
   const setFilter = useCallback((key: keyof LeadFilters, value: string) => {
     setDraft((d) => ({ ...d, [key]: value }));
   }, []);

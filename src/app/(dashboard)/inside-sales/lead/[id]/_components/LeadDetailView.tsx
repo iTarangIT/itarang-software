@@ -3,8 +3,8 @@
 import type { LostReason } from "@/lib/lifecycle/transitions";
 import { useState, useCallback, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, AlertTriangle, ArrowLeft } from "lucide-react";
-import Link from "next/link";
+import { Loader2, AlertTriangle } from "lucide-react";
+import { BackToPrevious } from "@/components/layout/BackToPrevious";
 import { hasApprovedQuote, type LeadDetailBundle, type LeadDetailCommercials } from "@/lib/inside-sales/types";
 import { LeadDetailHeader } from "./LeadDetailHeader";
 import { LeadActivityPanes } from "./LeadActivityPanes";
@@ -141,10 +141,11 @@ export function LeadDetailView({ leadId, viewerId, viewerRole, backHref = "/insi
                         )}
                     </div>
                 </div>
-                <Link href={backHref} className="mt-4 inline-flex items-center gap-1 text-sm text-blue-700 hover:underline">
-                    <ArrowLeft className="h-4 w-4" />
-                    Back
-                </Link>
+                <BackToPrevious
+                    homeHref={backHref}
+                    className="mt-4 inline-flex items-center gap-1 text-sm text-blue-700 hover:underline"
+                    iconClassName="h-4 w-4"
+                />
             </div>
         );
     }
