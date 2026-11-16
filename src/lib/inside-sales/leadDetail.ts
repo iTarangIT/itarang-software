@@ -7,6 +7,7 @@
 // checks the user's scope predicate first and then projects an allowlist.
 
 import { campaignName } from "@/lib/leads/acquisitionCampaigns";
+import { leadNeodoveCampaign } from "@/lib/neodove/leadCampaign";
 import { loadLiveOemPrices } from "@/lib/leads/oemPrices";
 import { quotePriceChanged } from "@/lib/leads/oemPricing";
 import { sql } from "drizzle-orm";
@@ -379,6 +380,8 @@ export async function fetchLeadDetailBundle(leadId: string): Promise<LeadDetailB
         caller_not_linked: (lead as LeadDetailLead).current_owner_id ? null : await callerNotLinkedFor(leadId),
         // ID 186: an onboarded dealer's lead shows no deal card (never throws).
         dealer_onboarded: await isDealerOnboarded(leadId),
+        // ID 235: which NeoDove campaign it is in (never throws).
+        neodove_campaign: await leadNeodoveCampaign(leadId),
     };
     return bundle;
 }
