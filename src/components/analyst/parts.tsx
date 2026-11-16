@@ -38,6 +38,7 @@ import type { Attempt, RunDetail, RunSummary } from "@/lib/analyst/types";
 import { formatWhen } from "@/lib/analyst/when";
 import { cn } from "@/lib/utils";
 
+import { DailyButton } from "./daily";
 import { FeedbackButtons } from "./feedback";
 import { useTypedAnswer } from "./hooks";
 import { useVerifiedMark, VerifiedBadge, VerifyButton, type VerifiedMark } from "./verified";
@@ -260,6 +261,7 @@ export function MessageActions({
   at,
   hasSql = false,
   verified = null,
+  question = null,
   children,
 }: {
   copyText?: string | null;
@@ -270,6 +272,8 @@ export function MessageActions({
   /** The answer ran a query, so it can be verified (E-382). */
   hasSql?: boolean;
   verified?: VerifiedMark | null;
+  /** The question asked, so the morning-email envelope knows it (251 item 23). */
+  question?: string | null;
   children?: React.ReactNode;
 }) {
   const when = formatWhen(at);
@@ -298,6 +302,7 @@ export function MessageActions({
         </time>
       ) : null}
       <VerifyButton runId={runId} hasSql={hasSql} />
+      {hasSql ? <DailyButton runId={runId} question={question} /> : null}
       <FeedbackButtons runId={runId} />
     </div>
   );
@@ -974,6 +979,7 @@ function Reply({
         at={answeredAt(detail.created_at, detail.duration_ms)}
         hasSql={Boolean(detail.sql?.trim()) && detail.status === "done"}
         verified={share ? (detail.verified ?? null) : mark}
+        question={share ? null : detail.question}
       >
         <RunProcess detail={detail} />
       </MessageActions>
