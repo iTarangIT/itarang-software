@@ -39,6 +39,11 @@ type RouteContext = {
   params: Promise<{ dealerId: string }>;
 };
 
+/** ID 238: unique, never-matchable GSTIN placeholder for an account with no GSTIN. */
+function pendingGstinPlaceholder(): string {
+  return `PENDING-${Math.floor(Math.random() * 0xffffff).toString(16).toUpperCase().padStart(6, "0")}`;
+}
+
 function generateDealerCode() {
   const now = new Date();
   const yyyy = now.getFullYear();
@@ -791,7 +796,12 @@ export async function POST(req: NextRequest, context: RouteContext) {
         await tx.insert(accounts).values({
           id: dealerCode,
           business_entity_name: application.company_name || "Dealer Business",
-          gstin: application.gst_number || "PENDING",
+          // ID 238: a dealer may skip the GST certificate (no approval block).
+          // accounts.gstin is UNIQUE, so the placeholder is per account
+          // ("PENDING-<6 hex>", 14 chars) — a second GST-less dealer no longer
+          // collides on one shared "PENDING". It fails the GSTIN shape, so every
+          // GSTIN-missing rule (gstinMissingSql) still reads it as missing.
+          gstin: application.gst_number || pendingGstinPlaceholder(),
           pan: application.pan_number || null,
           dealer_code: dealerCode,
           contact_name: application.owner_name || application.company_name || "Dealer",

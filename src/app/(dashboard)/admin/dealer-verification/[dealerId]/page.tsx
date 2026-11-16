@@ -205,6 +205,8 @@ type DealerReviewData = {
   correctionRound?: CorrectionRound | null;
   documents?: DocumentItem[];
   missingDocuments?: { type: string; label: string }[];
+  /** ID 238: documents the dealer tapped Skip on in the WhatsApp chat. */
+  skippedDocuments?: { type: string; label: string }[];
   agreement?: AgreementData | null;
   // E-167: collection channel + bot verification warnings.
   source?: string | null;
@@ -2794,10 +2796,21 @@ export default function DealerReviewPage() {
                   {data.missingDocuments.map((m) => (
                     <li key={m.type} className="text-sm font-medium text-amber-900">
                       • {m.label}
+                      {data.skippedDocuments?.some((s) => s.type === m.type) && (
+                        <span className="ml-1 font-normal text-amber-700">(skipped by dealer)</span>
+                      )}
                     </li>
                   ))}
                 </ul>
               </div>
+            )}
+            {/* ID 238: Skip never blocks approval; the team follows up. */}
+            {data.skippedDocuments && data.skippedDocuments.length > 0 && (
+              <p className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900">
+                <span className="font-semibold">Skipped by dealer:</span>{" "}
+                {data.skippedDocuments.map((s) => s.label).join(", ")}
+                <span className="ml-1 text-xs text-amber-700">— does not block approval; follow up with the dealer.</span>
+              </p>
             )}
             {data.documents && data.documents.length > 0 ? (
               <div className="space-y-3">

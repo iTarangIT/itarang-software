@@ -945,7 +945,7 @@ const dealerAccounts: Dataset = {
             columns: [
                 { key: "account_id", header: "Account ID", meaning: "The dealer account's id (the dealer code).", width: 30 },
                 { key: "dealer", header: "Dealer", meaning: "Business name on the account.", width: 30 },
-                { key: "gstin", header: "GSTIN", meaning: "The account's GSTIN; 'PENDING' when none has been recorded yet." },
+                { key: "gstin", header: "GSTIN", meaning: "The account's GSTIN; 'PENDING' (or 'PENDING-' and a code) when none has been recorded yet." },
                 { key: "city", header: "City", meaning: "Account's city." },
                 { key: "state", header: "State", meaning: "Account's state." },
                 { key: "business_type", header: "Type of business", meaning: "From the lead the dealer came through; 'Not set' for a direct onboarding or an older lead." },

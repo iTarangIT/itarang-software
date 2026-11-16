@@ -148,7 +148,9 @@ import {
   docBatchButtons,
   docGotIt,
   docMissingButtons,
+  docRequestSkipButtons,
   docSendPrompt,
+  withSkipLine,
   isDocDone,
   isDocNext,
   isDocSend,
@@ -1392,7 +1394,12 @@ async function onUploadMode(
       current_state: "COLLECTING_DOC",
       expected_document_type: first.type,
     });
-    await reply(session, `📄 No problem — let's go one by one.\n\n${first.request}`);
+    // ID 238: Skip under the first request as well.
+    await reply(
+      session,
+      withSkipLine(`📄 No problem — let's go one by one.\n\n${first.request}`),
+      docRequestSkipButtons(),
+    );
     return;
   }
 
@@ -1442,7 +1449,8 @@ async function onDocument(
     // When a specific document is expected, mark it for manual admin follow-up;
     // when nothing specific is outstanding (e.g. after the ZIP "resend the file
     // I couldn't read" prompt), just proceed.
-    if (text && SKIP_WORDS.test(text)) {
+    // ID 238: the Skip button under each request arrives as "docs_skip".
+    if (text && (isDocSkip(text) || SKIP_WORDS.test(text))) {
       if (expected) {
         await skipDoc(session, expected, spec?.label ?? expected);
       } else {
@@ -1513,8 +1521,10 @@ async function ingestClassifiedFile(
     await reply(
       session,
       expectedSpec?.request
-        ? `I couldn't read that clearly. ${expectedSpec.request}\n\n_If you don't have a clearer copy, reply *skip*._`
+        ? withSkipLine(`I couldn't read that clearly. ${expectedSpec.request}`)
         : "I couldn't read that document clearly. Please resend a sharp *photo or PDF*, or reply *done* to continue.",
+      // ID 238: Skip under a re-asked document too.
+      expectedSpec?.request ? docRequestSkipButtons() : undefined,
     );
     return;
   }
@@ -1888,13 +1898,9 @@ async function informIssues(
     current_state: "COLLECTING_DOC",
     expected_document_type: firstSpec.type,
   });
-  lines.push(
-    "",
-    firstSpec.request,
-    "",
-    "_If you don't have it, just reply *skip* and our team will follow up._",
-  );
-  await reply(session, lines.join("\n"));
+  lines.push("", firstSpec.request);
+  // ID 238: the Skip button under the request (typed "skip" still works).
+  await reply(session, withSkipLine(lines.join("\n")), docRequestSkipButtons());
 }
 
 // Move the flow forward. Missing documents are asked FIRST (so we don't nag
@@ -1918,7 +1924,8 @@ async function advanceDocument(session: SessionRow): Promise<void> {
       current_state: "COLLECTING_DOC",
       expected_document_type: next.type,
     });
-    await reply(session, next.request);
+    // ID 238: every document request carries a Skip button.
+    await reply(session, withSkipLine(next.request), docRequestSkipButtons());
     return;
   }
 
@@ -1933,7 +1940,10 @@ async function advanceDocument(session: SessionRow): Promise<void> {
     });
     await reply(
       session,
-      `I still need the *${b.fields.map(fieldLabel).join(", ")}* — please resend your *${b.spec.label}* clearly so I can read ${b.fields.length > 1 ? "them" : "it"}.\n\n_If you don't have a clearer copy, reply *skip* and our team will follow up._`,
+      withSkipLine(
+        `I still need the *${b.fields.map(fieldLabel).join(", ")}* — please resend your *${b.spec.label}* clearly so I can read ${b.fields.length > 1 ? "them" : "it"}.`,
+      ),
+      docRequestSkipButtons(),
     );
     return;
   }
