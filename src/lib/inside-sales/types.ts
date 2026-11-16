@@ -5,6 +5,7 @@
 import type { LeadStatus, LostReason } from "@/lib/lifecycle/transitions";
 import type { LeadAssignedBy } from "@/lib/leads/leadAssignedBy";
 import type { DealerOnboardedVerdict } from "@/lib/leads/dealerOnboardedRules";
+import type { LeadNeodoveCampaign } from "@/lib/neodove/leadCampaignText";
 import type { QuoteSend } from "@/lib/leads/quoteSends";
 import type { TeamReviewFields } from "@/lib/leads/teamReviewSql";
 import type {
@@ -354,6 +355,8 @@ export type LeadDetailBundle = {
      * battery invoice)? Then the deal card is neither asked nor shown.
      */
     dealer_onboarded?: DealerOnboardedVerdict | null;
+    /** ID 235: the lead's latest NeoDove push (campaign, sent / refused), null when never pushed. */
+    neodove_campaign?: LeadNeodoveCampaign | null;
 };
 
 export type LeadOnboardingMilestones = {

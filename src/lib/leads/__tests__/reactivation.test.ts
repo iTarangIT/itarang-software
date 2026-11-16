@@ -85,3 +85,19 @@ describe("reactivateLead", () => {
         expect(writeTouchpoint).not.toHaveBeenCalled();
     });
 });
+
+describe("ID 233: a test lead is never reopened automatically", () => {
+    it("refuses an upload, the AI dialer and a NeoDove event (admin trigger, no person)", async () => {
+        lead = { ...lead!, lost_reason: "test_lead" };
+        await expect(reactivateLead({ leadId: "DL-1", trigger: "upload", performedBy: "admin-1" })).rejects.toThrow(/Test lead/);
+        await expect(reactivateLead({ leadId: "DL-1", trigger: "ai_dialer", performedBy: null })).rejects.toThrow(/Test lead/);
+        await expect(reactivateLead({ leadId: "DL-1", trigger: "admin", performedBy: null })).rejects.toThrow(/Test lead/);
+        expect(writeTouchpoint).not.toHaveBeenCalled();
+    });
+
+    it("a person can still reopen it by hand, and it counts again", async () => {
+        lead = { ...lead!, lost_reason: "test_lead" };
+        await reactivateLead({ leadId: "DL-1", trigger: "admin", performedBy: "admin-1" });
+        expect(statements.find((s) => /UPDATE dealer_leads/i.test(s))).toMatch(/is_active = true/);
+    });
+});

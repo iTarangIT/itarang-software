@@ -97,15 +97,21 @@ async function main() {
     `)) as unknown as Array<{ id: string }>;
 
     const plan: Array<{ app: App; phone: string | null; owner: string | null; credit: string | null }> = [];
+    // 16 Nov: two onboardings with the same form number (test dealers) used to
+    // both plan that number; the second insert hit dealer_leads_phone_key and
+    // stopped the run before its record was written. A number is used once.
+    const plannedPhones = new Set<string>();
     for (const app of apps) {
         let phone: string | null = null;
         for (const c of candidatePhones(app)) {
             const p = last10(c.phone);
+            if (plannedPhones.has(p)) continue;
             const taken = (await db.execute(sql`
                 SELECT 1 FROM dealer_leads WHERE right(regexp_replace(COALESCE(phone, ''), '[^0-9]', '', 'g'), 10) = ${p} LIMIT 1
             `)) as unknown as unknown[];
             if (taken.length === 0) {
                 phone = p;
+                plannedPhones.add(p);
                 break;
             }
         }
@@ -129,6 +135,13 @@ async function main() {
     }
 
     const created: Array<{ app_id: string; lead_id: string; approved_at: string; owner: string | null; credit: string | null }> = [];
+    // The record is written even when a lead fails part-way (each lead is its
+    // own transaction, so the ones before it are real and an undo needs them).
+    const dir = join(process.cwd(), "reports");
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, `id214-direct-onboarding-leads-${host.split(".")[0]}-${new Date().toISOString().replace(/[:.]/g, "-")}.json`);
+    const saveRecord = () => writeFileSync(file, JSON.stringify({ host, taken_at: new Date().toISOString(), created }, null, 1));
+    try {
     for (const p of doable) {
         const at = new Date(p.app.approved_at);
         const leadId = `DL-${at.getTime()}-${nanoid(8)}`;
@@ -199,10 +212,9 @@ async function main() {
         });
         created.push({ app_id: p.app.id, lead_id: leadId, approved_at: p.app.approved_at, owner: p.owner, credit: p.credit });
     }
-    const dir = join(process.cwd(), "reports");
-    mkdirSync(dir, { recursive: true });
-    const file = join(dir, `id214-direct-onboarding-leads-${host.split(".")[0]}-${new Date().toISOString().replace(/[:.]/g, "-")}.json`);
-    writeFileSync(file, JSON.stringify({ host, taken_at: new Date().toISOString(), created }, null, 1));
+    } finally {
+        saveRecord();
+    }
     console.log(`\ncreated ${created.length} Direct onboarding leads → ${file}`);
     process.exit(0);
 }

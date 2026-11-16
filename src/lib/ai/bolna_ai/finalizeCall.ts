@@ -708,14 +708,17 @@ async function maybeReactivateOnRecall(
   const rows = await db.execute<{
     lead_status: string | null;
     ai_recall_status: string | null;
+    lost_reason: string | null;
   }>(sql`
-    SELECT lead_status, ai_recall_status FROM dealer_leads
+    SELECT lead_status, ai_recall_status, lost_reason FROM dealer_leads
     WHERE id = ${leadId} LIMIT 1
   `);
   const r = rows[0];
   if (
     !r ||
     r.lead_status !== "Lost" ||
+    // ID 233: a test lead is never reopened automatically.
+    r.lost_reason === "test_lead" ||
     r.ai_recall_status !== "awaiting_re_dial"
   ) {
     return;

@@ -8,6 +8,9 @@ import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { LOST_REASON } from "@/lib/lifecycle/transitions";
 import { assertOwner } from "@/lib/leads/ownership";
+import { canMarkUnownedLeadLost } from "@/lib/leads/access";
+import { db } from "@/lib/db";
+import { sql } from "drizzle-orm";
 import {
     CompetitorRequiredError,
     HighImpactUnconfirmedError,
@@ -19,7 +22,8 @@ import {
 
 // ID 252 (decided 12 Nov): the Sales Head works the leads HE OWNS like an ASM;
 // the owner check below still applies, so anyone else's lead stays view-only.
-const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner", "sales_head"];
+// ID 233: CEO only for a lead with no owner (below).
+const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner", "sales_head", "ceo"];
 
 const BodySchema = z.object({
     lost_reason: z.enum(LOST_REASON),
@@ -35,7 +39,14 @@ export const POST = withErrorHandler(
         if (!id) return errorResponse("Lead id required", 400);
         const body = BodySchema.parse(await req.json());
 
-        await assertOwner(id, user.id);
+        // ID 233: Admin, Sales Head and CEO may close a lead that has NO owner
+        // (test rows, broken imports); any owned lead stays its owner's to close.
+        const ownerRows = (await db.execute<{ current_owner_id: string | null }>(sql`
+            SELECT current_owner_id FROM dealer_leads WHERE id = ${id} LIMIT 1
+        `)) as unknown as { current_owner_id: string | null }[];
+        if (ownerRows.length === 0) return errorResponse("Lead not found", 404);
+        const unownedByManager = !ownerRows[0].current_owner_id && canMarkUnownedLeadLost(user.role);
+        if (!unownedByManager) await assertOwner(id, user.id);
 
         try {
             await markLeadLost({

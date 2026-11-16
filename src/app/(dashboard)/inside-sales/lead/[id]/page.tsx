@@ -1,5 +1,6 @@
 import { requireRole } from "@/lib/auth-utils";
 import { LeadDetailView } from "./_components/LeadDetailView";
+import { roleHome } from "@/lib/nav/backTarget";
 
 export const dynamic = "force-dynamic";
 
@@ -30,7 +31,8 @@ export default async function LeadDetailPage({
             leadId={id}
             viewerId={user.id}
             viewerRole={user.role}
-            backHref={user.role === "partner" ? "/partner/leads" : "/inside-sales"}
+            // ID 232: no previous page → the person's own home queue.
+            backHref={roleHome(user.role)}
         />
     );
 }

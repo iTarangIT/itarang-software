@@ -4,6 +4,7 @@ import { usePathname } from "next/navigation";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Header } from "@/components/layout/header";
 import { UsageHeartbeat } from "@/components/usage/UsageHeartbeat";
+import { NavHistoryTracker } from "@/components/layout/NavHistoryTracker";
 
 export function LayoutWrapper({ children }: { children: React.ReactNode }) {
     const pathname = usePathname() ?? "";
@@ -31,6 +32,7 @@ export function LayoutWrapper({ children }: { children: React.ReactNode }) {
         return (
             <>
                 <UsageHeartbeat />
+                <NavHistoryTracker />
                 {children}
             </>
         );
@@ -38,6 +40,7 @@ export function LayoutWrapper({ children }: { children: React.ReactNode }) {
     return (
         <div className="flex bg-[color:var(--color-bg)] min-h-screen">
             <UsageHeartbeat />
+            <NavHistoryTracker />
             <Sidebar />
             <div className="flex-1 min-w-0 md:ml-64 flex flex-col min-h-screen">
                 <Header />

@@ -12,6 +12,7 @@ import { toast } from "sonner";
 import { Modal } from "../Modal";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { NeodoveMoveOption, moveNeodoveCampaign } from "@/components/leads/NeodoveMoveOption";
 
 export type TeamTarget = { id: string; name: string; role: string; territory?: string; is_self: boolean };
 
@@ -32,6 +33,7 @@ export function ReassignLeadModal({ open, onClose, leadId, onSuccess, targets, a
     const [targetId, setTargetId] = useState("");
     const [reason, setReason] = useState("");
     const [submitting, setSubmitting] = useState(false);
+    const [moveNeodove, setMoveNeodove] = useState(false);
 
     const submit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -54,6 +56,7 @@ export function ReassignLeadModal({ open, onClose, leadId, onSuccess, targets, a
             if (!res.ok) throw new Error(json?.error?.message ?? "Failed to reassign");
             const moved = Number(json?.data?.visits_moved ?? 0);
             toast.success(moved > 0 ? `Lead reassigned; ${moved} booked visit${moved === 1 ? "" : "s"} moved with it.` : "Lead reassigned.");
+            if (moveNeodove) await moveNeodoveCampaign(leadId, targetId);
             setTargetId("");
             setReason("");
             onSuccess();
@@ -104,6 +107,7 @@ export function ReassignLeadModal({ open, onClose, leadId, onSuccess, targets, a
                             : "Only the people in your team are listed. To give a lead to anyone else, ask your manager or the Sales Head."}
                     </p>
                 </div>
+                <NeodoveMoveOption leadId={leadId} targetUserId={targetId} checked={moveNeodove} onChange={setMoveNeodove} />
                 <div>
                     <Label>
                         Reason <span className="text-rose-600">*</span>{" "}

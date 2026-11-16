@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowLeft, Phone, MapPin, AlarmCheck, AlertCircle, RotateCcw, ShieldAlert, CheckCircle2 } from "lucide-react";
+import { Phone, MapPin, AlarmCheck, AlertCircle, RotateCcw, ShieldAlert, CheckCircle2 } from "lucide-react";
 import { wonWithoutQuote, type LeadDetailBundle } from "@/lib/inside-sales/types";
 import { WonWithoutQuoteChip } from "@/components/leads/won-without-quote-chip";
 import { IntentBadge } from "../../../_components/IntentBadge";
@@ -15,7 +15,8 @@ import { ReactivateLeadButton } from "@/components/leads/ReactivateLeadButton";
 import { ChangeLostReasonButton } from "@/components/leads/ChangeLostReasonButton";
 import { WonUndoControl } from "@/components/leads/WonUndoControl";
 import { InfoTip } from "@/components/ui/info-tip";
-import { capabilitiesFor, canReactivateLead } from "@/lib/leads/access";
+import { BackToPrevious } from "@/components/layout/BackToPrevious";
+import { capabilitiesFor, canMarkUnownedLeadLost, canReactivateLead } from "@/lib/leads/access";
 
 // Roles permitted to override a lead's temperature (mirrors the PATCH route).
 const INTEREST_EDIT_ROLES = ["inside_sales_rep", "asm", "admin", "partner", "sales_head"];
@@ -94,10 +95,12 @@ export function LeadDetailHeader({
         <div className="border-b border-gray-200 bg-white sticky top-0 z-10">
             <div className="px-6 py-4 flex items-start justify-between gap-6">
                 <div className="min-w-0 flex-1">
-                    <Link href={backHref} className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 mb-2">
-                        <ArrowLeft className="h-3 w-3" />
-                        Back
-                    </Link>
+                    {/* ID 232: back to the page this lead was opened from, filters kept;
+                        else the person's own home queue (backHref). */}
+                    <BackToPrevious
+                        homeHref={backHref}
+                        className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 mb-2"
+                    />
                     <div className="flex items-center gap-3 flex-wrap">
                         <h1 className="text-xl font-semibold text-gray-900 truncate">
                             {lead.dealer_name || lead.shop_name || "(unnamed dealer)"}
@@ -138,6 +141,23 @@ export function LeadDetailHeader({
                                 compact
                             />
                         )}
+                        {/* ID 233: a lead with no owner (test rows, broken imports) can be
+                            closed by Admin, Sales Head or CEO; the server checks the same. */}
+                        {isUnassigned &&
+                            canMarkUnownedLeadLost(viewerRole) &&
+                            lead.lead_status !== "Lost" &&
+                            lead.lead_status !== "Won" &&
+                            lead.lead_status !== "Converted" &&
+                            statusModalActions?.includes("mark_lost") &&
+                            onStatusModal && (
+                                <button
+                                    type="button"
+                                    onClick={() => onStatusModal("mark_lost")}
+                                    className="inline-flex items-center rounded-md border border-red-200 bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700 hover:bg-red-100"
+                                >
+                                    Mark lost
+                                </button>
+                            )}
                         {/* ID 134: a Won marked by mistake, before onboarding is submitted. */}
                         {lead.lead_status === "Won" && <WonUndoControl leadId={lead.id} onDone={onUpdated} />}
                     </div>

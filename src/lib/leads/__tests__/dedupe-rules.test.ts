@@ -146,3 +146,13 @@ describe("classifyAgainstExisting", () => {
         }
     });
 });
+
+describe("ID 233: a Lost test lead", () => {
+    it("is a duplicate to skip, never a reactivation", () => {
+        expect(classifyAgainstExisting("Ujjain", lead({ lead_status: "Lost", lost_reason: "test_lead" }))).toEqual({
+            outcome: "duplicate_skip",
+            duplicateLeadId: "DL-1",
+        });
+        expect(classifyAgainstExisting("Ujjain", lead({ lead_status: "Lost", lost_reason: "price_high" })).outcome).toBe("reactivate");
+    });
+});
