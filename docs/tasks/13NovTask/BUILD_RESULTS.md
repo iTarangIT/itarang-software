@@ -23,6 +23,7 @@ pushed to `main` (sandbox deploy). **Not on production.** Live steps and proof: 
 | 52b69669 | 227 | NBFC upkeep `?steps=flags|wallet`; "Held: waiting for Kartik" |
 | be1ec6fe | 239 | Targets follow Showing; members' sum; Team targets table |
 | bb158d66 | 243 | First lists keep their sort in the link |
+| (16 Nov) | 243 | Remaining lists: Admin › Accounts, CEO › Invoices (server), Receivables (invoices + debtors), Expense tracker, AI dialer campaigns + calls (server), Analyst review (Sort by row), Ops Console › Jobs (both tables); `scripts/verify-table-sort-243.ts` all checks passed on sandbox |
 
 ## Gates
 
@@ -60,4 +61,4 @@ pushed to `main` (sandbox deploy). **Not on production.** Live steps and proof: 
 
 Not checked in a browser: the screens were exercised through their queries and unit tests;
 Kartik's sandbox re-check (pack rule 3) is the screen check. Not built: 251 item 23 (optional),
-the rest of 243's lists, Sales Head full phone numbers (Apoorv).
+Sales Head full phone numbers (Apoorv).

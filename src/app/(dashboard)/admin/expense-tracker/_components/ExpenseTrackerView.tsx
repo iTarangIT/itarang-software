@@ -16,6 +16,7 @@ import {
   Layers,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SortableTh, sortRows, useUrlTableSort, type SortSpec } from "@/components/shared/TableSort";
 import {
   DEFAULT_EXPENSE_BUCKET,
   EXPENSE_BUCKETS,
@@ -77,6 +78,19 @@ const monthInputCls =
   "px-2.5 py-2 rounded-xl border border-gray-200 text-xs font-medium text-gray-700 bg-white focus:outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100";
 
 const BATCH_SIZE = 5;
+
+// ID 243 — header sort on the recorded list, kept in the link as ?exp_sort=&exp_dir=.
+// The list is capped (the note under it says so), so this orders the rows in hand.
+const EXPENSE_SORT: SortSpec<RecordedExpense>[] = [
+  { key: "date", type: "date", value: (r) => r.expense_date ?? r.created_at },
+  { key: "invoice", type: "text", value: (r) => r.invoice_number },
+  { key: "vendor", type: "text" },
+  { key: "amount", type: "number", value: (r) => Number(r.amount) },
+  { key: "department", type: "text" },
+  { key: "bucket", type: "text" },
+  { key: "project", type: "text", value: (r) => r.project_tag },
+  { key: "file", type: "text", value: (r) => r.file_name },
+];
 
 function chunk<T>(arr: T[], size: number): T[][] {
   const out: T[][] = [];
@@ -194,7 +208,9 @@ export function ExpenseTrackerView() {
     placeholderData: (prev) => prev,
   });
 
+  const { sort, toggle: toggleSort, comparator: expenseComparator } = useUrlTableSort(EXPENSE_SORT, { prefix: "exp_" });
   const recorded = useMemo(() => listing?.rows ?? [], [listing]);
+  const recordedSorted = useMemo(() => sortRows(recorded, expenseComparator), [recorded, expenseComparator]);
 
   const rangeTotal = useMemo(
     () => recorded.reduce((sum, r) => sum + Number(r.amount || 0), 0),
@@ -489,20 +505,20 @@ export function ExpenseTrackerView() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="text-left text-[10px] uppercase tracking-wider text-gray-500 border-b border-gray-100">
-                      <th className="py-2 font-semibold">Date</th>
-                      <th className="py-2 font-semibold">Invoice #</th>
-                      <th className="py-2 font-semibold">Vendor</th>
-                      <th className="py-2 font-semibold">Amount</th>
-                      <th className="py-2 font-semibold">Department</th>
-                      <th className="py-2 font-semibold">Bucket</th>
-                      <th className="py-2 font-semibold">Project</th>
-                      <th className="py-2 font-semibold">File</th>
+                      <SortableTh label="Date" sortKey="date" sort={sort} onToggle={toggleSort} className="px-0" />
+                      <SortableTh label="Invoice #" sortKey="invoice" sort={sort} onToggle={toggleSort} className="px-0" />
+                      <SortableTh label="Vendor" sortKey="vendor" sort={sort} onToggle={toggleSort} className="px-0" />
+                      <SortableTh label="Amount" sortKey="amount" sort={sort} onToggle={toggleSort} className="px-0" />
+                      <SortableTh label="Department" sortKey="department" sort={sort} onToggle={toggleSort} className="px-0" />
+                      <SortableTh label="Bucket" sortKey="bucket" sort={sort} onToggle={toggleSort} className="px-0" />
+                      <SortableTh label="Project" sortKey="project" sort={sort} onToggle={toggleSort} className="px-0" />
+                      <SortableTh label="File" sortKey="file" sort={sort} onToggle={toggleSort} className="px-0" />
                       <th className="py-2 font-semibold">Bill</th>
                       <th className="py-2 font-semibold"></th>
                     </tr>
                   </thead>
                   <tbody>
-                    {recorded.map((row) => (
+                    {recordedSorted.map((row) => (
                       <RecordedRow key={row.id} row={row} />
                     ))}
                   </tbody>

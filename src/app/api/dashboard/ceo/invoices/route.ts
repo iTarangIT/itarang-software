@@ -19,9 +19,11 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { requireAuth } from "@/lib/auth-utils";
+import { parseSortParam } from "@/lib/http/sortParam";
 import { errorMessage, isNextRedirectError } from "@/lib/api-utils";
 import {
   isDriveRevenueAvailable,
+  INVOICE_SORT_KEYS,
   listRevenueInvoices,
   listRevenueInvoicesForExport,
   revenueSummary,
@@ -176,7 +178,7 @@ export async function GET(req: NextRequest) {
     const offset = Math.max(Number(sp.get("offset")) || 0, 0);
 
     const [data, summary, driveAvailable] = await Promise.all([
-      listRevenueInvoices({ ...filters, limit, offset }),
+      listRevenueInvoices({ ...filters, limit, offset, sort: parseSortParam(sp, INVOICE_SORT_KEYS) }),
       revenueSummary(filters),
       isDriveRevenueAvailable(),
     ]);

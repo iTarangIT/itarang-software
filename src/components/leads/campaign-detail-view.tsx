@@ -6,6 +6,7 @@
 "use client";
 
 import { useState } from "react";
+import { SortableTh, sortRows, useUrlTableSort, type SortSpec } from "@/components/shared/TableSort";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -211,6 +212,20 @@ type Lead = {
 };
 
 type Bucket = "all" | CampaignLeadStatus;
+
+// ID 243 — header sort on the calls table, kept in the link (?call_sort=&call_dir=).
+// Sent to the API for the paged tabs (so page 2 carries on), and applied to the
+// rows in hand too — the All view is the banner's three short lists, not a page.
+const CALL_SORT: SortSpec<Lead>[] = [
+  { key: "lead", type: "text", value: (r) => r.shopName || r.dealerName },
+  { key: "location", type: "text", value: (r) => [r.city, r.state].filter(Boolean).join(", ") },
+  { key: "status", type: "text" },
+  { key: "outcome", type: "text", value: (r) => r.callOutcome },
+  { key: "intent", type: "number", value: (r) => r.intentScore },
+  { key: "attempts", type: "number", value: (r) => r.attemptCount },
+  { key: "started", type: "date", value: (r) => r.startedAt },
+  { key: "duration", type: "number", value: (r) => r.durationSeconds },
+];
 
 // Tab order. Labels come from the shared vocabulary: a not-yet-dialled lead is
 // "Queued"; an answered call the dealer never spoke on is "Silent Call" or
@@ -506,6 +521,18 @@ export function CampaignDetailView({
   const canExport = canExportCampaign(user?.role);
   const [bucket, setBucket] = useState<Bucket>("all");
   const [page, setPage] = useState(1);
+  const {
+    sort: callSort,
+    toggle: toggleCallSort,
+    comparator: callComparator,
+  } = useUrlTableSort(CALL_SORT, { prefix: "call_" });
+  // A new order starts from the first page.
+  const callSortId = callSort ? `${callSort.key}:${callSort.dir}` : "";
+  const [pagedFor, setPagedFor] = useState(callSortId);
+  if (pagedFor !== callSortId) {
+    setPagedFor(callSortId);
+    setPage(1);
+  }
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
   // Intent-score filter for the lead table. `intentMin` null = "Any" (off).
   // `intentStrict` toggles ">" vs ">=" so the ">0" preset means strictly
@@ -698,7 +725,7 @@ export function CampaignDetailView({
     resumableLeads > 0;
 
   const { data: leadsData, isLoading: leadsLoading } = useQuery({
-    queryKey: ["dialer-campaign-leads", campaignId, bucket, page, durationBucket?.key ?? null, category],
+    queryKey: ["dialer-campaign-leads", campaignId, bucket, page, durationBucket?.key ?? null, category, callSort?.key ?? null, callSort?.dir ?? null],
     queryFn: async () => {
       const params = new URLSearchParams({
         bucket,
@@ -709,6 +736,10 @@ export function CampaignDetailView({
       // the histogram just counted — with no sign anything was dropped.
       if (durationBucket) params.set("durationBucket", durationBucket.key);
       if (category) params.set("category", category);
+      if (callSort) {
+        params.set("sort", callSort.key);
+        params.set("dir", callSort.dir);
+      }
       const res = await fetch(
         `/api/ai-dialer/campaigns/${campaignId}/leads?${params}`,
       );
@@ -786,7 +817,7 @@ export function CampaignDetailView({
     if (s == null) return false;
     return intentStrict ? s > intentMin : s >= intentMin;
   };
-  const filteredLeads = intentActive ? flatLeads.filter(matchesIntent) : flatLeads;
+  const filteredLeads = sortRows(intentActive ? flatLeads.filter(matchesIntent) : flatLeads, callComparator);
 
   // Value backing the preset <select>. Maps current filter state to an option.
   const intentSelectValue = intentCustom
@@ -1265,31 +1296,17 @@ export function CampaignDetailView({
               <thead className="bg-gray-50 text-gray-600 text-xs uppercase tracking-wider">
                 <tr>
                   <th className="px-3 py-2.5 text-left font-semibold">#</th>
-                  <th className="px-3 py-2.5 text-left font-semibold">Lead</th>
-                  <th className="px-3 py-2.5 text-left font-semibold">
-                    Location
-                  </th>
-                  <th className="px-3 py-2.5 text-left font-semibold">
-                    Status
-                  </th>
-                  <th className="px-3 py-2.5 text-left font-semibold">
-                    Outcome
-                  </th>
+                  <SortableTh label="Lead" sortKey="lead" sort={callSort} onToggle={toggleCallSort} className="px-3 py-2.5 text-left" />
+                  <SortableTh label="Location" sortKey="location" sort={callSort} onToggle={toggleCallSort} className="px-3 py-2.5 text-left" />
+                  <SortableTh label="Status" sortKey="status" sort={callSort} onToggle={toggleCallSort} className="px-3 py-2.5 text-left" />
+                  <SortableTh label="Outcome" sortKey="outcome" sort={callSort} onToggle={toggleCallSort} className="px-3 py-2.5 text-left" />
                   <th className="px-3 py-2.5 text-left font-semibold">
                     Disposition
                   </th>
-                  <th className="px-3 py-2.5 text-left font-semibold">
-                    Intent
-                  </th>
-                  <th className="px-3 py-2.5 text-left font-semibold">
-                    Attempts
-                  </th>
-                  <th className="px-3 py-2.5 text-left font-semibold">
-                    Started
-                  </th>
-                  <th className="px-3 py-2.5 text-left font-semibold">
-                    Duration
-                  </th>
+                  <SortableTh label="Intent" sortKey="intent" sort={callSort} onToggle={toggleCallSort} className="px-3 py-2.5 text-left" />
+                  <SortableTh label="Attempts" sortKey="attempts" sort={callSort} onToggle={toggleCallSort} className="px-3 py-2.5 text-left" />
+                  <SortableTh label="Started" sortKey="started" sort={callSort} onToggle={toggleCallSort} className="px-3 py-2.5 text-left" />
+                  <SortableTh label="Duration" sortKey="duration" sort={callSort} onToggle={toggleCallSort} className="px-3 py-2.5 text-left" />
                 </tr>
               </thead>
               <tbody>

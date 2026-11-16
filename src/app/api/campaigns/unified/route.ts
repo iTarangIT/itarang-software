@@ -24,6 +24,21 @@ import { DURATION_SECONDS_SQL } from "@/lib/ai-dialer/call-duration/derive";
 import { carrierPausesFor } from "@/lib/ai-dialer/lineHealth";
 import { requireAuth } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
+import { parseSortParam, sortOrderSql } from "@/lib/http/sortParam";
+
+// ID 243 — header sort on the Campaigns table. Columns of the merged list, by
+// their quoted output names; an unknown key falls back to newest first.
+const CAMPAIGN_SORT_KEYS = ["name", "status", "provider", "segment", "progress", "started_by", "started", "duration"] as const;
+const CAMPAIGN_SORT_SQL = {
+    name: sql`lower(name)`,
+    status: sql`status`,
+    provider: sql`provider`,
+    segment: sql`lower(category)`,
+    progress: sql`("callsMade"::numeric / NULLIF("totalLeads", 0))`,
+    started_by: sql`lower("triggeredByName")`,
+    started: sql`"startedAt"`,
+    duration: sql`"totalTalkTimeSeconds"`,
+};
 
 // E-224 is additive and unapplied on some DBs (prod at time of writing). A
 // missing table is a PARSE-time failure, not a row-count of zero: naming
@@ -195,7 +210,7 @@ export const GET = withErrorHandler(async (req: Request) => {
                 SELECT * FROM ai
                 ${wantNeodove ? sql`UNION ALL SELECT * FROM nd` : sql``}
                ) merged
-         ORDER BY sort_key DESC NULLS LAST
+         ORDER BY ${sortOrderSql(parseSortParam(searchParams, CAMPAIGN_SORT_KEYS), CAMPAIGN_SORT_SQL, sql`sort_key DESC NULLS LAST, id`)}
          LIMIT ${limit} OFFSET ${offset}
     `);
 

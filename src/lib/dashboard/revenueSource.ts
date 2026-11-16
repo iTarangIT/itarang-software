@@ -33,6 +33,7 @@
  */
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
+import { sortOrderSql, type ServerSort } from "@/lib/http/sortParam";
 import {
   accountOwnerOn,
   accountsByGstinKey,
@@ -533,7 +534,24 @@ export interface RevenueListFilters {
   matchStatuses?: InvoiceMatchStatus[] | null;
   limit?: number;
   offset?: number;
+  /** ID 243 — header sort on the Sales Invoices table (list only). */
+  sort?: ServerSort<InvoiceSortKey> | null;
 }
+
+/** ID 243 — the columns the Sales Invoices table sorts by on the server. */
+export const INVOICE_SORT_KEYS = ["number", "source", "date", "customer", "status", "match", "reference", "total", "balance"] as const;
+export type InvoiceSortKey = (typeof INVOICE_SORT_KEYS)[number];
+const INVOICE_SORT_SQL: Record<InvoiceSortKey, SQL> = {
+  number: sql`r.invoice_number`,
+  source: sql`r.source`,
+  date: sql`r.invoice_date`,
+  customer: sql`lower(r.customer_name)`,
+  status: sql`r.status`,
+  match: sql`r.match_status`,
+  reference: sql`NULLIF(r.payment_reference, '')`,
+  total: sql`r.total`,
+  balance: sql`r.balance`,
+};
 
 /** Matched to a dealer account or lead (on a matchedUnion() row `r`). */
 const MATCHED_TO_DEALER = sql`(r.account_id IS NOT NULL OR r.dealer_lead_id IS NOT NULL)`;
@@ -577,7 +595,7 @@ export async function listRevenueInvoices(
   const res = await db.execute(sql`
     SELECT * FROM ${src} AS r
     WHERE ${listWhere(f)}
-    ORDER BY r.invoice_date DESC NULLS LAST, r.invoice_number DESC
+    ORDER BY ${sortOrderSql(f.sort ?? null, INVOICE_SORT_SQL, sql`r.invoice_date DESC NULLS LAST, r.invoice_number DESC`)}
     LIMIT ${limit} OFFSET ${offset}
   `);
   return rowsOf<RevenueInvoiceRow>(res);

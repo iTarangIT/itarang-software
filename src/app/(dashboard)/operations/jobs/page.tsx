@@ -1,5 +1,7 @@
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import UrlSortTh from "@/components/shared/UrlSortTh";
+import { makeComparator, sortRows, type SortSpec } from "@/components/shared/tableSortCore";
 import {
   formatCount,
   formatDuration,
@@ -25,7 +27,7 @@ import { ScheduledJobsCard } from "../_components/ScheduledJobsCard";
 export const metadata = { title: "Jobs · Ops Console" };
 
 /** ID 227 — the scheduled jobs list; its own failure never hides the collectors. */
-async function ScheduledJobsSection() {
+async function ScheduledJobsSection({ sort }: { sort?: { key?: string; dir?: string } }) {
   let report: ScheduledJobsReport;
   try {
     report = await getScheduledJobsReport();
@@ -41,7 +43,7 @@ async function ScheduledJobsSection() {
       </Card>
     );
   }
-  return <ScheduledJobsCard report={report} />;
+  return <ScheduledJobsCard report={report} sort={sort} />;
 }
 
 /**
@@ -57,6 +59,21 @@ async function ScheduledJobsSection() {
  * so an nginx problem would make the monitoring page fail to explain the
  * problem. The route exists for the client button and for curl.
  */
+
+// ID 243 — header sort on the collectors, kept in the link as ?col_sort=&col_dir=.
+// Status orders worst first: failed, stale, running, never run, OK.
+const collectorRank = (r: CollectorHealth) =>
+  r.status === "failed" ? 0 : r.is_stale ? 1 : r.in_flight ? 2 : !r.status ? 3 : 4;
+const COLLECTOR_SORT: SortSpec<CollectorHealth>[] = [
+  { key: "collector", type: "text", value: (r) => r.label },
+  { key: "status", type: "number", value: collectorRank },
+  { key: "last", type: "date", value: (r) => r.last_run_at },
+  { key: "every", type: "number", value: (r) => r.interval_ms },
+  { key: "duration", type: "number", value: (r) => r.duration_ms },
+  { key: "samples", type: "number", value: (r) => r.samples_written },
+];
+
+type JobsSearch = { col_sort?: string; col_dir?: string; sched_sort?: string; sched_dir?: string };
 
 function StatusBadge({ row }: { row: CollectorHealth }) {
   if (row.in_flight) return <Badge variant="info">Running</Badge>;
@@ -96,7 +113,9 @@ function MissingTables({ message }: { message: string }) {
   );
 }
 
-export default async function OperationsJobsPage() {
+export default async function OperationsJobsPage({ searchParams }: { searchParams: Promise<JobsSearch> }) {
+  const sp = await searchParams;
+  const schedSort = { key: sp.sched_sort, dir: sp.sched_dir };
   let rows: CollectorHealth[];
   let freshness: Awaited<ReturnType<typeof getMonitorFreshness>>;
 
@@ -108,7 +127,7 @@ export default async function OperationsJobsPage() {
   } catch (e) {
     return (
       <div className="space-y-4">
-        <ScheduledJobsSection />
+        <ScheduledJobsSection sort={schedSort} />
         <MissingTables
           message={e instanceof Error ? e.message : String(e)}
         />
@@ -116,12 +135,15 @@ export default async function OperationsJobsPage() {
     );
   }
 
+  const colSpec = COLLECTOR_SORT.find((s) => s.key === sp.col_sort);
+  if (colSpec) rows = sortRows(rows, makeComparator(colSpec, sp.col_dir === "desc" ? "desc" : "asc"));
+
   const failing = rows.filter((r) => r.status === "failed").length;
   const stale = rows.filter((r) => r.is_stale && r.status !== "failed").length;
 
   return (
     <div className="space-y-4">
-      <ScheduledJobsSection />
+      <ScheduledJobsSection sort={schedSort} />
       <Card>
         <CardHeader className="flex flex-row items-start justify-between gap-3">
           <div>
@@ -155,12 +177,12 @@ export default async function OperationsJobsPage() {
               <table className="w-full min-w-[52rem] text-sm">
                 <thead>
                   <tr className="border-b border-border text-left text-[11px] font-semibold uppercase tracking-wide text-ink-muted">
-                    <th className="py-2 pr-3">Collector</th>
-                    <th className="py-2 pr-3">Status</th>
-                    <th className="py-2 pr-3">Last run</th>
-                    <th className="py-2 pr-3 text-right">Every</th>
-                    <th className="py-2 pr-3 text-right">Duration</th>
-                    <th className="py-2 pr-3 text-right">Samples</th>
+                    <UrlSortTh label="Collector" sortKey="collector" type="text" prefix="col_" className="py-2 pl-0 pr-3" />
+                    <UrlSortTh label="Status" sortKey="status" type="number" prefix="col_" className="py-2 pl-0 pr-3" />
+                    <UrlSortTh label="Last run" sortKey="last" type="date" prefix="col_" className="py-2 pl-0 pr-3" />
+                    <UrlSortTh label="Every" sortKey="every" type="number" prefix="col_" className="py-2 pl-0 pr-3" align="right" />
+                    <UrlSortTh label="Duration" sortKey="duration" type="number" prefix="col_" className="py-2 pl-0 pr-3" align="right" />
+                    <UrlSortTh label="Samples" sortKey="samples" type="number" prefix="col_" className="py-2 pl-0 pr-3" align="right" />
                     <th className="py-2 pl-3 text-right">Run</th>
                   </tr>
                 </thead>

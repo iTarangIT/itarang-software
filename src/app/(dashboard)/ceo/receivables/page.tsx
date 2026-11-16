@@ -22,6 +22,8 @@ import {
 
 // ID 166: invoice PDFs open through a fresh 15-minute link on each click.
 import FreshFileLink from "@/components/shared/FreshFileLink";
+import UrlSortTh from "@/components/shared/UrlSortTh";
+import { makeComparator, sortRows, type SortSpec } from "@/components/shared/tableSortCore";
 import { InfoTip } from "@/components/ui/info-tip";
 import { paymentsStaleText, receivablesSourceText } from "@/lib/sales/invoiceFreshnessRules";
 import { invoiceStatusLabel } from "@/lib/sales/invoiceStatusLabel";
@@ -30,6 +32,18 @@ import VyaparPaymentUpload from "./_components/VyaparPaymentUpload";
 export const dynamic = "force-dynamic";
 
 type AgeKey = ReceivableAgeKey | "all";
+
+// ID 243 — header sort on the invoice list, kept in the link as ?inv_sort=&inv_dir=.
+const INVOICE_SORT: SortSpec<Row>[] = [
+    { key: "date", type: "date", value: (r) => r.invoice_date },
+    { key: "number", type: "text", value: (r) => r.invoice_number },
+    { key: "customer", type: "text", value: (r) => r.customer_name },
+    { key: "dealer", type: "text", value: (r) => r.dealer_name },
+    { key: "owner", type: "text", value: (r) => r.owner_name },
+    { key: "age", type: "number", value: (r) => r.age_days },
+    { key: "total", type: "number", value: (r) => r.total },
+    { key: "balance", type: "number", value: (r) => r.balance },
+];
 
 
 const rupees = (n: number) => `${n < 0 ? "−" : ""}₹${Math.abs(n).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
@@ -50,7 +64,7 @@ const fmtDate = (d: string) =>
 export default async function CeoReceivablesPage({
     searchParams,
 }: {
-    searchParams: Promise<{ age?: string; q?: string }>;
+    searchParams: Promise<{ age?: string; q?: string; inv_sort?: string; inv_dir?: string }>;
 }) {
     await requireRole(["ceo", "admin"]);
     const sp = await searchParams;
@@ -76,8 +90,10 @@ export default async function CeoReceivablesPage({
     const noDate = net.filter((r) => ageOf(r) === "no_date");
     // ID 200: the search narrows the invoice list and the customers alike.
     const found = q ? rows.filter((r) => matchesReceivableSearch(r, q)) : rows;
-    const shown =
+    const unsorted =
         age === "all" ? found : net.filter((r) => ageOf(r) === age && (!q || matchesReceivableSearch(r, q)));
+    const sortSpec = INVOICE_SORT.find((s) => s.key === sp.inv_sort);
+    const shown = sortSpec ? sortRows(unsorted, makeComparator(sortSpec, sp.inv_dir === "desc" ? "desc" : "asc")) : unsorted;
 
     // Who owes the most — the list a collections call starts from.
     // Each customer keeps its rows so the table can expand to the invoices behind the count.
@@ -237,14 +253,14 @@ export default async function CeoReceivablesPage({
                     <table className="min-w-full text-sm">
                         <thead className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                             <tr>
-                                <th className="px-4 py-3">Invoice date</th>
-                                <th className="px-4 py-3">Invoice</th>
-                                <th className="px-4 py-3">Customer on invoice</th>
-                                <th className="px-4 py-3">Matched dealer</th>
-                                <th className="px-4 py-3">Owner</th>
-                                <th className="px-4 py-3 text-right">Age</th>
-                                <th className="px-4 py-3 text-right">Invoice total</th>
-                                <th className="px-4 py-3 text-right">Receivable</th>
+                                <UrlSortTh label="Invoice date" sortKey="date" type="date" prefix="inv_" className="px-4 py-3" />
+                                <UrlSortTh label="Invoice" sortKey="number" type="text" prefix="inv_" className="px-4 py-3" />
+                                <UrlSortTh label="Customer on invoice" sortKey="customer" type="text" prefix="inv_" className="px-4 py-3" />
+                                <UrlSortTh label="Matched dealer" sortKey="dealer" type="text" prefix="inv_" className="px-4 py-3" />
+                                <UrlSortTh label="Owner" sortKey="owner" type="text" prefix="inv_" className="px-4 py-3" />
+                                <UrlSortTh label="Age" sortKey="age" type="number" prefix="inv_" className="px-4 py-3" align="right" />
+                                <UrlSortTh label="Invoice total" sortKey="total" type="number" prefix="inv_" className="px-4 py-3" align="right" />
+                                <UrlSortTh label="Receivable" sortKey="balance" type="number" prefix="inv_" className="px-4 py-3" align="right" />
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
