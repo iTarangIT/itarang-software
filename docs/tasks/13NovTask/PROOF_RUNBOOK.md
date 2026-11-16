@@ -43,7 +43,10 @@ Prefix for every script: `node --import tsx --env-file=.env.production` (read-on
 - E-383 on db-2: `node scripts/_apply-e383.mjs database-2`, then Refresh tables on the prod iTarang source.
 - 251 item 9 mail: Admin › Settings › Email reports › AI Analyst review → add Kartik → test → on.
 - 167: post the Gemini plan (account + billing screenshot); ask the live Analyst for "a dealer's notes" and "a customer's vehicle number" (must refuse); paste into `docs/analyst/ANALYST_RO_RUNS.md` §Prod status.
-- Not built: 251 item 23 (optional, after 1-22).
+- 251 item 23 (built 16 Nov): apply E-385 on live (`node scripts/_apply-e385.mjs database-2`), then on
+  an answer press the envelope; next morning at 09:00 the fresh answer arrives by mail. Switch:
+  Admin › Settings › Email reports › AI Analyst morning questions (on by default; only people who
+  pressed the envelope are mailed).
 
 ### 253 — WhatsApp assistant (built: a6639248)
 RUNBOOK §13: `scripts/list-isr-wa-bindings.ts` (post it) → Gemini billing + OpenRouter key → put the printed id list in `ASSISTANT_WRITES_ENABLED_USER_IDS` in **PROD_ENV_FILE_B64 and** the box's `shared/.env` → `pm2 reload itarang-crm-web --update-env` → brief the ISRs → tests.

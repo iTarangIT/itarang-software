@@ -60,5 +60,10 @@ pushed to `main` (sandbox deploy). **Not on production.** Live steps and proof: 
 | verify-id85-86-time-limits | all checks passed |
 
 Not checked in a browser: the screens were exercised through their queries and unit tests;
-Kartik's sandbox re-check (pack rule 3) is the screen check. Not built: 251 item 23 (optional),
-Sales Head full phone numbers (Apoorv).
+Kartik's sandbox re-check (pack rule 3) is the screen check. Not built: Sales Head full phone numbers (Apoorv).
+
+251 item 23 (16 Nov): "Email me this every morning" — envelope under an answer (up to 5 per
+person, E-385), header envelope lists them with Stop, per-person 09:00 mail `analyst_daily`
+(Admin › Settings › Email reports › AI Analyst morning questions). Sandbox:
+`scripts/verify-analyst-daily.ts` — add / same twice = one row / sixth refused / on the mail
+list / mail built with a fresh answer in 40 s / stopped again: all PASS. E-385 on db-1.

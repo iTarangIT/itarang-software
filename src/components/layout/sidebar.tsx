@@ -496,6 +496,16 @@ function analystFeedbackDigestItem(idPrefix: string) {
   };
 }
 
+// 251 item 23 — each person's AI Analyst morning questions, answered fresh at 09:00.
+function analystDailyDigestItem(idPrefix: string) {
+  return {
+    id: `${idPrefix}-analyst-daily-digest`,
+    label: "AI Analyst morning questions",
+    icon: MailCheck,
+    href: "/admin/settings/analyst-daily",
+  };
+}
+
 // R-15 — Monday's count of leads idle over 7 working days, per holder.
 function idleWeeklyDigestItem(idPrefix: string) {
   return {
@@ -599,6 +609,7 @@ const ROLE_TRAILING_SECTIONS: Record<string, any[]> = {
         idleWeeklyDigestItem("sh"),
         missedCallbacksDigestItem("sh"),
         analystFeedbackDigestItem("sh"),
+        analystDailyDigestItem("sh"),
         targetsPendingDigestItem("sh"),
         emiMessagesDigestItem("sh"),
         myDayDigestItem("sh"),
@@ -1747,6 +1758,7 @@ const roleNavigation: Record<string, any[]> = {
         idleWeeklyDigestItem("admin"),
         missedCallbacksDigestItem("admin"),
         analystFeedbackDigestItem("admin"),
+        analystDailyDigestItem("admin"),
         targetsPendingDigestItem("admin"),
         emiMessagesDigestItem("admin"),
         myDayDigestItem("admin"),
