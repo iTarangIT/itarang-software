@@ -22,6 +22,7 @@ import { personalStarters } from "@/lib/analyst/starters";
 import type { ListThread } from "@/lib/analyst/threadList";
 import { hasThreadTable, ownThreadList, recentQuestions, threadMeta } from "@/lib/analyst/threadStore";
 import type { Connection, RunPage, Thread } from "@/lib/analyst/types";
+import { hasDailyTable } from "@/lib/analyst/dailyStore";
 import { hasVerifiedTable } from "@/lib/analyst/verifiedStore";
 
 import { AnalystWorkspace } from "./AnalystWorkspace";
@@ -64,6 +65,7 @@ export async function AnalystPage({
   // E-381: the CRM's own conversation settings; a missing table only hides those controls.
   const threadsEnabled = await hasThreadTable().catch(() => false);
   const verifiedEnabled = await hasVerifiedTable().catch(() => false);
+  const dailyEnabled = await hasDailyTable().catch(() => false);
   const requested = typeof thread === "string" && ownsThread(user, thread) ? thread : null;
   const meta = requested && threadsEnabled ? await threadMeta(user.id, requested).catch(() => null) : null;
   // A deleted conversation opened from an old link starts a new one instead.
@@ -117,6 +119,7 @@ export async function AnalystPage({
       }
       threadsEnabled={threadsEnabled}
       verifiedEnabled={verifiedEnabled}
+      dailyEnabled={dailyEnabled}
       canVerify={verifiedEnabled && canVerifyQueries(user.role)}
       unreachable={false}
       problem={null}

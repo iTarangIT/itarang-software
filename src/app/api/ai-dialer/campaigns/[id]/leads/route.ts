@@ -24,7 +24,11 @@ import { db } from "@/lib/db";
 import { dialerCampaignLeads, dealerLeads } from "@/lib/db/schema";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { latestDispositionsFor, triggerDialKey } from "@/lib/ai/storage/dialDisposition";
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
+import { parseSortParam } from "@/lib/http/sortParam";
+
+// ID 243 — header sort on the campaign calls table (the paged detail list only).
+const CALL_SORT_KEYS = ["lead", "location", "status", "outcome", "intent", "attempts", "started", "duration"] as const;
 import { INTENT_THRESHOLDS } from "@/lib/ai/scoring";
 import {
   correlatedDurationSeconds,
@@ -414,12 +418,37 @@ export const GET = withErrorHandler(
 
     const where = conditions.length === 1 ? conditions[0] : and(...conditions);
 
+    // ID 243 — the header the user clicked first, then the bucket's own order
+    // (and the row id) so page 2 carries on from page 1.
+    const callSort = parseSortParam(searchParams, CALL_SORT_KEYS);
+    const callSortCol: Record<(typeof CALL_SORT_KEYS)[number], SQL> = {
+      lead: sql`lower(coalesce(nullif(${dealerLeads.shop_name}, ''), ${dealerLeads.dealer_name}))`,
+      location: sql`lower(nullif(concat_ws(', ', nullif(${dealerLeads.city}, ''), nullif(${dealerLeads.state}, '')), ''))`,
+      status: sql`${dialerCampaignLeads.status}`,
+      outcome: sql`${dialerCampaignLeads.call_outcome}`,
+      intent: sql`${dialerCampaignLeads.intent_score}`,
+      attempts: detailSelectShape.attemptCount,
+      started: sql`${dialerCampaignLeads.started_at}`,
+      duration: correlatedDurationSeconds(
+        dialerCampaignLeads.started_at,
+        dialerCampaignLeads.completed_at,
+        dialerCampaignLeads.bolna_call_id,
+      ),
+    };
+    const orderBy: SQL[] = callSort
+      ? [
+          sql`${callSortCol[callSort.key]} ${callSort.dir === "desc" ? sql`DESC` : sql`ASC`} NULLS LAST`,
+          orderClause,
+          asc(dialerCampaignLeads.id),
+        ]
+      : [orderClause];
+
     const rows = await db
       .select(hasOutcomes ? { ...detailSelectShape, category: categorySql } : detailSelectShape)
       .from(dialerCampaignLeads)
       .leftJoin(dealerLeads, eq(dealerLeads.id, dialerCampaignLeads.lead_id))
       .where(where)
-      .orderBy(orderClause)
+      .orderBy(...orderBy)
       .limit(PAGE_SIZE)
       .offset(offset);
 

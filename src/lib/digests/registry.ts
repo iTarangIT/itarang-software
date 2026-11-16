@@ -12,6 +12,7 @@
  * settings screen nobody can reach.
  */
 
+import { analystDailyDigest } from "./kinds/analyst-daily";
 import { analystFeedbackDigest } from "./kinds/analyst-feedback";
 import { buybackDailyDigest } from "./kinds/buyback-daily";
 import { emiMessagesDigest } from "./kinds/emi-messages";
@@ -41,6 +42,8 @@ export const DIGEST_KINDS: DigestKindDescriptor[] = [
   missedCallbacksDigest,
   // 251 item 9 — Monday's AI Analyst thumbs-down review mail.
   analystFeedbackDigest,
+  // 251 item 23 — each person's AI Analyst morning questions, answered fresh.
+  analystDailyDigest,
 ];
 
 export function digestKind(id: string): DigestKindDescriptor | null {

@@ -47,6 +47,7 @@ import { ResultChart } from "./result-chart";
 import { sourcesApi } from "./sources/api";
 import { SourcesPanel, type PanelView } from "./sources/SourcesPanel";
 import { ThreadColumn, type ThreadActions } from "./ThreadColumn";
+import { DailyMenu, DailyProvider } from "./daily";
 import { useVerifiedMark, VerifiedProvider } from "./verified";
 
 /** What the CRM keeps about the open conversation (E-381). */
@@ -66,6 +67,8 @@ export type AnalystWorkspaceProps = {
   threadsEnabled?: boolean;
   /** E-382 is applied: verified badges. */
   verifiedEnabled?: boolean;
+  /** E-385 is applied: the morning-email envelope shows (251 item 23). */
+  dailyEnabled?: boolean;
   /** CEO / Sales Head / admin, with E-382: may mark a query verified. */
   canVerify?: boolean;
   /** The agent could not be reached or did not answer in time. */
@@ -91,6 +94,7 @@ export function AnalystWorkspace({
   threadsEnabled = false,
   verifiedEnabled = false,
   canVerify = false,
+  dailyEnabled = false,
   unreachable,
   problem,
   canManage = false,
@@ -256,6 +260,7 @@ export function AnalystWorkspace({
   return (
     <FeedbackProvider threadId={threadId}>
     <VerifiedProvider enabled={verifiedEnabled} canVerify={canVerify}>
+    <DailyProvider enabled={dailyEnabled}>
     <div className="flex h-[calc(100dvh-10rem)] min-h-[32rem] min-w-0 overflow-hidden rounded-xl border border-border bg-surface shadow-card">
       <ThreadColumn
         basePath={basePath}
@@ -275,6 +280,7 @@ export function AnalystWorkspace({
             onRename={renameCurrent}
           />
           <div className="flex shrink-0 items-center gap-1">
+            <DailyMenu />
             {asked && !unreachable && !problem ? (
               <ShareMenu threadId={threadId} shared={shared} canShare={threadsEnabled} onShared={setShared} />
             ) : null}
@@ -443,6 +449,7 @@ export function AnalystWorkspace({
         />
       ) : null}
     </div>
+    </DailyProvider>
     </VerifiedProvider>
     </FeedbackProvider>
   );
@@ -497,6 +504,7 @@ function Turn({
             at={turn.startedAt !== null && turn.durationMs !== null ? turn.startedAt + turn.durationMs : null}
             hasSql={finished && Boolean(turn.sql?.trim())}
             verified={verified}
+            question={turn.question}
           >
             <RunProcess state={turn} />
           </MessageActions>

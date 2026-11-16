@@ -6,6 +6,20 @@
 
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { SortableTh, useUrlTableSort, type SortSpec } from "@/components/shared/TableSort";
+
+// ID 243 — header sort, kept in the page link (?camp_sort=&camp_dir=) and done by
+// /api/campaigns/unified, since the list is paged.
+const CAMPAIGN_SORT: SortSpec<unknown>[] = [
+  { key: "name", type: "text" },
+  { key: "status", type: "text" },
+  { key: "provider", type: "text" },
+  { key: "segment", type: "text" },
+  { key: "progress", type: "number" },
+  { key: "started_by", type: "text" },
+  { key: "started", type: "date" },
+  { key: "duration", type: "number" },
+];
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
@@ -135,6 +149,14 @@ export function CampaignsTable({
   const router = useRouter();
   const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
+  const { sort, toggle: toggleSort } = useUrlTableSort(CAMPAIGN_SORT, { prefix: "camp_", mode: "server" });
+  const sortQs = sort ? `&sort=${sort.key}&dir=${sort.dir}` : "";
+  // A new order starts from the first page.
+  const [pagedFor, setPagedFor] = useState(sortQs);
+  if (pagedFor !== sortQs) {
+    setPagedFor(sortQs);
+    setPage(1);
+  }
 
   const prefetchCampaign = (id: string) => {
     queryClient.prefetchQuery({
@@ -164,9 +186,9 @@ export function CampaignsTable({
   const { data, isLoading, isError } = useQuery({
     // E-224 — unified list: AI-dialer campaigns AND NeoDove campaigns, so the
     // team has one place to look regardless of which engine ran the calls.
-    queryKey: ["unified-campaigns", page],
+    queryKey: ["unified-campaigns", page, sortQs],
     queryFn: async () => {
-      const res = await fetch(`/api/campaigns/unified?page=${page}`);
+      const res = await fetch(`/api/campaigns/unified?page=${page}${sortQs}`);
       const json = await res.json();
       if (!json.success) throw new Error("Failed to load campaigns");
       return json.data;
@@ -222,14 +244,14 @@ export function CampaignsTable({
         <table className="w-full text-sm">
           <thead className="bg-gray-50 text-gray-600 text-xs uppercase tracking-wider">
             <tr>
-              <th className="px-4 py-3 text-left font-semibold">Campaign</th>
-              <th className="px-4 py-3 text-left font-semibold">Status</th>
-              <th className="px-4 py-3 text-left font-semibold">Provider</th>
-              <th className="px-4 py-3 text-left font-semibold">Segment</th>
-              <th className="px-4 py-3 text-left font-semibold">Progress</th>
-              <th className="px-4 py-3 text-left font-semibold">Started by</th>
-              <th className="px-4 py-3 text-left font-semibold">Started</th>
-              <th className="px-4 py-3 text-left font-semibold">Duration</th>
+              <SortableTh label="Campaign" sortKey="name" sort={sort} onToggle={toggleSort} className="px-4 py-3 text-left" />
+              <SortableTh label="Status" sortKey="status" sort={sort} onToggle={toggleSort} className="px-4 py-3 text-left" />
+              <SortableTh label="Provider" sortKey="provider" sort={sort} onToggle={toggleSort} className="px-4 py-3 text-left" />
+              <SortableTh label="Segment" sortKey="segment" sort={sort} onToggle={toggleSort} className="px-4 py-3 text-left" />
+              <SortableTh label="Progress" sortKey="progress" sort={sort} onToggle={toggleSort} className="px-4 py-3 text-left" />
+              <SortableTh label="Started by" sortKey="started_by" sort={sort} onToggle={toggleSort} className="px-4 py-3 text-left" />
+              <SortableTh label="Started" sortKey="started" sort={sort} onToggle={toggleSort} className="px-4 py-3 text-left" />
+              <SortableTh label="Duration" sortKey="duration" sort={sort} onToggle={toggleSort} className="px-4 py-3 text-left" />
               <th className="px-4 py-3 text-right" aria-label="Open" />
             </tr>
           </thead>

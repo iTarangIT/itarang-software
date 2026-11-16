@@ -11,7 +11,7 @@
  */
 import { z } from "zod";
 
-import { accountsPageSql, accountsTotalSql } from "./accountsScreen";
+import { ACCOUNTS_SORT_KEYS, accountsPageSql, accountsTotalSql } from "./accountsScreen";
 
 export const AccountsListQuerySchema = z.object({
     q: z.string().trim().max(200).optional(),
@@ -21,6 +21,9 @@ export const AccountsListQuerySchema = z.object({
     status: z.string().trim().max(30).optional(),
     limit: z.coerce.number().int().min(1).max(500).default(100),
     offset: z.coerce.number().int().min(0).default(0),
+    /** ID 243 — header sort; an unknown column falls back to the default order. */
+    sort: z.string().optional().transform((v) => ((ACCOUNTS_SORT_KEYS as readonly string[]).includes(v ?? "") ? (v as (typeof ACCOUNTS_SORT_KEYS)[number]) : undefined)),
+    dir: z.enum(["asc", "desc"]).optional().catch(undefined),
 });
 export type AccountsListQuery = z.infer<typeof AccountsListQuerySchema>;
 
@@ -57,7 +60,7 @@ export async function listAccountsPage(f: AccountsListQuery): Promise<AccountsLi
         came_through: f.came_through,
         status: f.status,
     };
-    const rows = (await db.execute(await accountsPageSql(filters, f.limit, f.offset))) as unknown as AccountsListRow[];
+    const rows = (await db.execute(await accountsPageSql(filters, f.limit, f.offset, f.sort ? { key: f.sort, dir: f.dir ?? "asc" } : null))) as unknown as AccountsListRow[];
     // A short first page IS the whole list: no count needed.
     const total =
         f.offset === 0 && rows.length < f.limit

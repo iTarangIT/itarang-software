@@ -23,6 +23,7 @@ pushed to `main` (sandbox deploy). **Not on production.** Live steps and proof: 
 | 52b69669 | 227 | NBFC upkeep `?steps=flags|wallet`; "Held: waiting for Kartik" |
 | be1ec6fe | 239 | Targets follow Showing; members' sum; Team targets table |
 | bb158d66 | 243 | First lists keep their sort in the link |
+| (16 Nov) | 243 | Remaining lists: Admin › Accounts, CEO › Invoices (server), Receivables (invoices + debtors), Expense tracker, AI dialer campaigns + calls (server), Analyst review (Sort by row), Ops Console › Jobs (both tables); `scripts/verify-table-sort-243.ts` all checks passed on sandbox |
 
 ## Gates
 
@@ -59,5 +60,10 @@ pushed to `main` (sandbox deploy). **Not on production.** Live steps and proof: 
 | verify-id85-86-time-limits | all checks passed |
 
 Not checked in a browser: the screens were exercised through their queries and unit tests;
-Kartik's sandbox re-check (pack rule 3) is the screen check. Not built: 251 item 23 (optional),
-the rest of 243's lists, Sales Head full phone numbers (Apoorv).
+Kartik's sandbox re-check (pack rule 3) is the screen check. Not built: Sales Head full phone numbers (Apoorv).
+
+251 item 23 (16 Nov): "Email me this every morning" — envelope under an answer (up to 5 per
+person, E-385), header envelope lists them with Stop, per-person 09:00 mail `analyst_daily`
+(Admin › Settings › Email reports › AI Analyst morning questions). Sandbox:
+`scripts/verify-analyst-daily.ts` — add / same twice = one row / sixth refused / on the mail
+list / mail built with a fresh answer in 40 s / stopped again: all PASS. E-385 on db-1.

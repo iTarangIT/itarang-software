@@ -18,6 +18,20 @@ import { sql, type SQL } from "drizzle-orm";
 
 import { dealerAccountSql, gstinMissingSql } from "./accountList";
 import { closedColumns, notClosedSql } from "./accountClosures";
+import { sortOrderSql, type ServerSort } from "@/lib/http/sortParam";
+
+/** ID 243 — the columns the Accounts table sorts by on the server. */
+export const ACCOUNTS_SORT_KEYS = ["name", "gstin", "owner", "came_through", "onboarded_by", "location", "created"] as const;
+export type AccountsSortKey = (typeof ACCOUNTS_SORT_KEYS)[number];
+const ACCOUNTS_SORT_SQL: Record<AccountsSortKey, SQL> = {
+    name: sql`lower(a.business_entity_name)`,
+    gstin: sql`NULLIF(a.gstin, '')`,
+    owner: sql`lower(ou.name)`,
+    came_through: sql`o.came_through`,
+    onboarded_by: sql`lower(ob.name)`,
+    location: sql`lower(NULLIF(concat_ws(', ', NULLIF(a.city, ''), NULLIF(a.state, '')), ''))`,
+    created: sql`a.created_at`,
+};
 
 export interface AccountsScreenFilters {
     q?: string;
@@ -57,8 +71,13 @@ async function whereSql(f: AccountsScreenFilters): Promise<SQL> {
     return sql`WHERE ${sql.join(where, sql` AND `)}`;
 }
 
-/** One page of rows, unowned first, then newest. */
-export async function accountsPageSql(f: AccountsScreenFilters, limit: number, offset: number): Promise<SQL> {
+/** One page of rows, unowned first, then newest (or the header sort, ID 243). */
+export async function accountsPageSql(
+    f: AccountsScreenFilters,
+    limit: number,
+    offset: number,
+    sort: ServerSort<AccountsSortKey> | null = null,
+): Promise<SQL> {
     const closed = await closedColumns(sql`a.id`);
     return sql`
         SELECT a.id,
@@ -80,7 +99,7 @@ export async function accountsPageSql(f: AccountsScreenFilters, limit: number, o
           ${FROM}
           LEFT JOIN users ob ON ob.id = o.onboarded_by_user_id
           ${await whereSql(f)}
-         ORDER BY (o.owner_user_id IS NULL) DESC, a.created_at DESC, a.id
+         ORDER BY ${sortOrderSql(sort, ACCOUNTS_SORT_SQL, sql`(o.owner_user_id IS NULL) DESC, a.created_at DESC, a.id`)}
          LIMIT ${limit} OFFSET ${offset}`;
 }
 
