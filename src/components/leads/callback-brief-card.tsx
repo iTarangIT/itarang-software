@@ -25,6 +25,8 @@ type Brief = {
     promise?: string;
     openQuestions?: string[];
     secondNumber?: string | null;
+    ownerName?: string | null;
+    complaint?: string | null;
     summary?: string | null;
     /** Task 11 — the dealer named no time. */
     timeNotSet?: boolean;
@@ -154,7 +156,9 @@ export function CallbackBriefCard({ leadId, className = "" }: { leadId: string; 
                     {b.openQuestions && b.openQuestions.length > 0 && (
                         <li>Not answered on the call: {b.openQuestions.join(", ")}</li>
                     )}
+                    {b.ownerName && <li>Owner: {b.ownerName}</li>}
                     {b.secondNumber && <li>Second number: {b.secondNumber}</li>}
+                    {b.complaint && <li>Complaint: {b.complaint}</li>}
                     {(b.summary ?? cb.summary) && <li className="text-gray-600">{b.summary ?? cb.summary}</li>}
                 </ul>
             ) : (

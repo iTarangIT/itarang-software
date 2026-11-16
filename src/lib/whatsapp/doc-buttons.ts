@@ -62,6 +62,24 @@ export function docMissingButtons(): ReplyButton[] {
   ];
 }
 
+/**
+ * ID 238: one ⏭ Skip button under every dealer onboarding document request,
+ * with the line that says what happens. Reuses the Still-needed Skip id, so a
+ * tap reaches the handler as the text "docs_skip".
+ */
+export const DOC_REQUEST_SKIP_LINE = "_Don't have it? Tap Skip — our team will follow up._";
+
+export function docRequestSkipButtons(): ReplyButton[] {
+  return [{ id: DOC_SKIP_ID, title: "⏭ Skip" }];
+}
+
+/** The document request with the Skip line under it (WhatsApp body cap 1024). */
+export function withSkipLine(request: string): string {
+  const tail = `\n\n${DOC_REQUEST_SKIP_LINE}`;
+  const head = request.trim();
+  return head.length + tail.length <= 1024 ? head + tail : `${head.slice(0, 1024 - tail.length - 1)}…${tail}`;
+}
+
 /** The Skip button, or "skip" typed. */
 export function isDocSkip(text: string | null | undefined): boolean {
   const t = (text ?? "").trim().toLowerCase();

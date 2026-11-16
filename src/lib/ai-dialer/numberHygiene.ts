@@ -122,8 +122,20 @@ export type EnrolCandidate = {
     observed?: "switchboard" | "dead_number" | null;
     /** D8 — an open promised callback: a person calls him, not the AI. */
     openCallback?: boolean;
+    /**
+     * AI dialer list item 6 — the owner's mobile (else an alternate) a call
+     * learned (E-379), already checked dialable. Rung instead of a main number
+     * that is not a mobile or is a switchboard / dead number.
+     */
+    contactPhone?: string | null;
 };
-export type EnrolDecision = { id: string; phoneType: PhoneType; skip: EnrolSkip | null };
+export type EnrolDecision = {
+    id: string;
+    phoneType: PhoneType;
+    skip: EnrolSkip | null;
+    /** Enrolled on contactPhone instead of the lead's own number. */
+    viaContact?: boolean;
+};
 
 /**
  * One decision per lead, in queue order. A number that is not a mobile is
@@ -135,16 +147,21 @@ export function planEnrolment(leads: EnrolCandidate[]): EnrolDecision[] {
         const phoneType = classifyPhone(l.phone);
         if (l.openCallback) return { id: l.id, phoneType, skip: "open_callback" };
         if (!(l.phone ?? "").trim()) return { id: l.id, phoneType, skip: "no_phone" };
-        if (!isDialablePhoneType(phoneType)) return { id: l.id, phoneType, skip: "not_mobile" };
-        // D7 — only a dead (wrong) number is skipped. A switchboard is dialled
-        // again since 13 Nov 2026 ("call every lead except completed and wrong
-        // number"); it stays listed under Needs dealer mobile.
-        if (l.observed === "dead_number") return { id: l.id, phoneType: l.observed, skip: l.observed };
-        if (isVehicleShowroom(l.name)) return { id: l.id, phoneType, skip: "vehicle_showroom" };
-        const key = phoneKey(l.phone);
-        if (key && seen.has(key)) return { id: l.id, phoneType, skip: "duplicate_number" };
+        // The main number cannot reach a person; a captured owner mobile can.
+        const mainSkip: EnrolSkip | null = !isDialablePhoneType(phoneType)
+            ? "not_mobile"
+            : // D7 — a dead (wrong) number and a switchboard / IVR are skipped:
+              // neither reaches a person (AI dialer list item 2, 13 Nov 2026).
+              // The switchboard stays listed under Needs dealer mobile.
+              (l.observed ?? null);
+        const viaContact = !!mainSkip && !!l.contactPhone && isDialablePhoneType(classifyPhone(l.contactPhone));
+        const typeOut: PhoneType = l.observed && mainSkip === l.observed ? l.observed : phoneType;
+        if (mainSkip && !viaContact) return { id: l.id, phoneType: typeOut, skip: mainSkip };
+        if (isVehicleShowroom(l.name)) return { id: l.id, phoneType: typeOut, skip: "vehicle_showroom" };
+        const key = phoneKey(viaContact ? l.contactPhone : l.phone);
+        if (key && seen.has(key)) return { id: l.id, phoneType: typeOut, skip: "duplicate_number" };
         if (key) seen.add(key);
-        return { id: l.id, phoneType, skip: null };
+        return viaContact ? { id: l.id, phoneType: typeOut, skip: null, viaContact } : { id: l.id, phoneType, skip: null };
     });
 }
 

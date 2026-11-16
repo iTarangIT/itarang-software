@@ -49,6 +49,8 @@ import {
 import { noteTriggerResult } from "@/lib/ai-dialer/lineHealth";
 import { dialTimeSkip, ENROL_SKIP_OUTCOME } from "@/lib/ai-dialer/numberHygiene";
 import { observedNumbers } from "@/lib/ai-dialer/phoneTypeStore";
+import { dialableContactFor, noteContactDialled } from "@/lib/ai-dialer/contactStore";
+import { dialConflict, priorDialsFor } from "@/lib/ai-dialer/dialGuard";
 import { classifyTriggerDetail } from "@/lib/ai-dialer/failureReason";
 import {
   leadsWithRedialNotDue,
@@ -469,10 +471,19 @@ export async function advanceCampaign(
       // B1 — mobiles only, no vehicle showrooms. createCampaign already
       // enrols these as skipped; this catches campaigns created before that,
       // and a number edited to a landline after enrolment.
-      const hygieneSkip = dialTimeSkip({
+      //
+      // AI dialer list item 6 — when the main number cannot reach a person
+      // (not a mobile, or a switchboard / dead number a call found), ring the
+      // owner's mobile a call learned instead (E-379). ElevenLabs only.
+      let dialPhone: string | null = null;
+      const contactInstead = async (): Promise<string | null> =>
+        provider === "elevenlabs" ? ((await dialableContactFor(lead[0].id))?.phone ?? null) : null;
+      const mainSkip = dialTimeSkip({
         phone: lead[0].phone,
         name: [lead[0].shop_name, lead[0].dealer_name].filter(Boolean).join(" | ") || null,
       });
+      if (mainSkip === "not_mobile") dialPhone = await contactInstead();
+      const hygieneSkip = dialPhone ? null : mainSkip;
       if (hygieneSkip) {
         console.warn("[advanceCampaign] skipping lead that is not dialable", {
           campaignId,
@@ -495,7 +506,11 @@ export async function advanceCampaign(
       // number, SIP 404 / 410) is skipped at dial time too, not only when the
       // next campaign enrols it. Matched on the number, so another lead on the
       // same switchboard is skipped with it.
-      const retired = (await observedNumbers([lead[0].phone])).values().next().value;
+      let retired = dialPhone ? undefined : (await observedNumbers([lead[0].phone])).values().next().value;
+      if (retired) {
+        dialPhone = await contactInstead();
+        if (dialPhone) retired = undefined;
+      }
       if (retired) {
         await db
           .update(dialerCampaignLeads)
@@ -570,7 +585,11 @@ export async function advanceCampaign(
       // "AI-connected", and redialling it is the point of the retry.
       const resumingDroppedCall =
         claimed.attemptCount > 1 && claimed.lastOutcome === DISCONNECTED_OUTCOME;
-      if (lead[0].ai_connected && !resumingDroppedCall) {
+      // AI dialer list item 6 — also exempt: a first dial to the owner's mobile
+      // a call captured. That call (with his staff, or an IVR) is what made the
+      // lead "AI-connected"; the owner himself was never spoken to. Once a
+      // person answers on it the contact is 'dialled_ok' and not picked again.
+      if (lead[0].ai_connected && !resumingDroppedCall && !dialPhone) {
         console.warn("[advanceCampaign] skipping lead the AI has already spoken to", {
           campaignId,
           leadId: claimed.leadId,
@@ -602,6 +621,51 @@ export async function advanceCampaign(
         continue;
       }
 
+      // AI dialer list item 7 — one dial per number per campaign, and never two
+      // campaigns on one number at once. Enrolment already dropped duplicate
+      // numbers; this catches a number edited (or an owner mobile captured)
+      // since, and a second campaign running over the same leads.
+      const conflict = dialConflict(
+        await priorDialsFor({
+          phone: dialPhone ?? lead[0].phone,
+          campaignId,
+          campaignLeadId: claimed.campaignLeadId,
+        }),
+        { campaignId, leadId: lead[0].id, now: new Date() },
+      );
+      if (conflict) {
+        console.warn("[advanceCampaign] number already dialled", {
+          campaignId,
+          leadId: lead[0].id,
+          conflict,
+        });
+        if (conflict.kind === "same_campaign_other_lead") {
+          await db
+            .update(dialerCampaignLeads)
+            .set({
+              status: "skipped",
+              completed_at: new Date(),
+              call_outcome: ENROL_SKIP_OUTCOME.duplicate_number,
+            })
+            .where(eq(dialerCampaignLeads.id, claimed.campaignLeadId));
+        } else {
+          // Another campaign rang this number lately: wait out the gap, then
+          // the claim picks the row up again (next_attempt_at). The claim's
+          // attempt is given back — no call was placed.
+          await db
+            .update(dialerCampaignLeads)
+            .set({
+              status: "skipped",
+              call_outcome: "deferred_dialled_by_another_campaign",
+              next_attempt_at: conflict.until,
+              attempt_count: sql`GREATEST(${dialerCampaignLeads.attempt_count} - 1, 0)`,
+            })
+            .where(eq(dialerCampaignLeads.id, claimed.campaignLeadId));
+        }
+        await syncCampaignCounters(campaignId);
+        continue;
+      }
+
       // E-315 — a retry is a deliberate same-day redial; without the bypass the
       // 25h duplicate guard answers success-with-no-call-id and the row sits in
       // 'calling' until the watchdog fails it.
@@ -621,6 +685,7 @@ export async function advanceCampaign(
             phone: lead[0].phone,
             leadId: lead[0].id,
             bypassIdempotency,
+            ...(dialPhone ? { dialPhone } : {}),
           })) as typeof trigResult;
         } else {
           trigResult = (await triggerBolnaCall({
@@ -653,7 +718,7 @@ export async function advanceCampaign(
           campaignLeadId: claimed.campaignLeadId,
           attempt: claimed.attemptCount,
           leadId: lead[0].id,
-          phone: lead[0].phone,
+          phone: dialPhone ?? lead[0].phone,
           reason: exReason,
           callEnd: classifyCallEnd({ triggerError: exReason }),
         });
@@ -696,7 +761,7 @@ export async function advanceCampaign(
           campaignLeadId: claimed.campaignLeadId,
           attempt: claimed.attemptCount,
           leadId: lead[0].id,
-          phone: lead[0].phone,
+          phone: dialPhone ?? lead[0].phone,
           reason,
           callEnd: classifyCallEnd({ triggerError: reason }),
         });
@@ -738,6 +803,9 @@ export async function advanceCampaign(
             },
           );
         }
+        // AI dialer list item 6 — rang the owner's captured mobile: its result
+        // belongs to that contact, not to the lead's main number.
+        if (dialPhone) await noteContactDialled(lead[0].id, dialPhone, trigResult.call_id);
       }
 
       // E-228 — stamp real activity. The stall watchdog measures inactivity

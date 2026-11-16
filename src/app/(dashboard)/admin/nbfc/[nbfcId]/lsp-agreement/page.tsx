@@ -10,6 +10,9 @@ import { notFound } from "next/navigation";
 import { desc, eq } from "drizzle-orm";
 import { ArrowLeft } from "lucide-react";
 import { db } from "@/lib/db";
+import { getSessionUser } from "@/lib/nbfc/tenant";
+import { seesFullDealerIds } from "@/lib/kyc/dealerIdMask";
+import { maskPan } from "@/lib/kyc/panMask";
 import {
   nbfc,
   nbfcLspAgreements,
@@ -58,6 +61,12 @@ export default async function Page({
     .where(eq(nbfc.id, id))
     .limit(1);
   if (!row) notFound();
+
+  // ID 119-B (decision 2, 23 Oct): the company PAN in full only for Admin,
+  // CEO and Sales Head; the Business Head gets the last 4.
+  const panShown = seesFullDealerIds((await getSessionUser())?.role)
+    ? row.panNumber
+    : maskPan(row.panNumber);
 
   const roundSummary = await loadOpenRoundSummary(id);
   const agreementFlagged =
@@ -165,7 +174,7 @@ export default async function Page({
             rbiRegistrationNo: row.rbiRegistrationNo ?? "",
             cin: row.cin ?? "",
             gstNumber: row.gstNumber ?? "",
-            panNumber: row.panNumber ?? "",
+            panNumber: panShown ?? "",
           }}
           initialAgreement={initialAgreement}
           locked={isNbfcLocked(row.status)}

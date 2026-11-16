@@ -19,7 +19,9 @@ import { withLeadActor } from "@/lib/leads/actorContext";
 import { uploadFileToStorage } from "@/lib/storage";
 import { recordWhatsappContact, screenshotHash } from "@/lib/leads/whatsappContact";
 
-const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
+// ID 252 (decided 12 Nov): the Sales Head works the leads HE OWNS like an ASM;
+// the owner check below still applies, so anyone else's lead stays view-only.
+const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner", "sales_head"];
 const IMAGE_TYPES: Record<string, string> = { "image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png", "image/webp": "webp" };
 const MAX_BYTES = 8 * 1024 * 1024;
 

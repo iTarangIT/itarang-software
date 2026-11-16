@@ -200,10 +200,11 @@ describe("planRetryDetailed — how v3 and the old policy meet", () => {
     });
 });
 
-// 13 Nov 2026 — switchboards / tracking numbers are redialled next day.
-describe("switchboard dispositions are redialled", () => {
-    it.each(["IVR / auto-attendant", "Tracking number, no voice"])("%s gets a next-day redial", (label) => {
-        expect(plan(label)).not.toBeNull();
+// AI dialer list item 2 — switchboards / tracking numbers are never redialled,
+// like a wrong number.
+describe("switchboard dispositions are not redialled", () => {
+    it.each(["IVR / auto-attendant", "Tracking number, no voice"])("%s is never redialled", (label) => {
+        expect(plan(label)).toBeNull();
     });
     it.each(["Incorrect / Invalid number", "Number not in use / does not exist / out of service"])(
         "%s (wrong number) is never redialled",

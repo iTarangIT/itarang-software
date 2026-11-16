@@ -28,6 +28,7 @@ import { businessTypeLabel, businessTypeTone } from "@/lib/leads/businessType";
 import { doorLabel, originLabel, SOURCE_LABELS } from "@/lib/leads/leadSourceVocab";
 import { SetLeadSource } from "@/components/leads/SetLeadSource";
 import { InfoTip } from "@/components/ui/info-tip";
+import { neodoveCampaignLine } from "@/lib/neodove/leadCampaignText";
 import { INTEREST_OPTIONS, LEAD_STATUS_LABEL } from "@/lib/leads/queueFilters";
 
 type GroupKey = "snapshot" | "business" | "commercials" | "workflow" | "attribution" | "ownership";
@@ -233,7 +234,13 @@ export function LeadDetailRightPane({ bundle, viewerRole, onReviseQuote, focusQu
                                                     )
                                                 }
                                             />
-                                            <Field label={SOURCE_LABELS.campaign} value={lead.acquisition_campaign_name ?? "None"} />
+                                            {/* ID 235: the campaign the lead CAME IN through (scrape run,
+                                                upload), apart from the NeoDove campaign calling it now. */}
+                                            <Field label="Came in via" value={lead.acquisition_campaign_name ?? "None"} />
+                                            <Field
+                                                label="NeoDove campaign"
+                                                value={neodoveCampaignLine(bundle.neodove_campaign ?? null, (d) => fmtDate(d))}
+                                            />
                                             <Field label="Phone" value={lead.phone} />
                                             <Field label="Language" value={lead.language} />
                                             <Field label="City" value={lead.city} />

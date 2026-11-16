@@ -116,16 +116,49 @@ describe("dialTimeSkip / phoneKey", () => {
 });
 
 describe("D7 — numbers a call already marked", () => {
-    it("skips a dead number, even under another lead, but dials a switchboard", () => {
+    it("skips a dead number and a switchboard, even under another lead", () => {
         const out = planEnrolment([
             { id: "a", phone: "+919811022422", name: null, observed: "switchboard" },
             { id: "b", phone: "+917000123456", name: null, observed: "dead_number" },
             { id: "c", phone: "+919000012345", name: null, observed: null },
         ]);
         expect(out.map((d) => [d.id, d.skip, d.phoneType])).toEqual([
-            ["a", null, "mobile"],
+            ["a", "switchboard", "switchboard"],
             ["b", "dead_number", "dead_number"],
             ["c", null, "mobile"],
         ]);
+    });
+});
+
+describe("AI dialer list item 6 — the owner's captured mobile", () => {
+    it("enrols a switchboard or landline lead on its owner mobile, a plain lead on its own number", () => {
+        const out = planEnrolment([
+            { id: "a", phone: "+919811022422", name: null, observed: "switchboard", contactPhone: "9000012345" },
+            { id: "b", phone: "01123456789", name: null, contactPhone: "9000054321" },
+            { id: "c", phone: "+919000012399", name: null, contactPhone: "9000099999" },
+            { id: "d", phone: "+917000123456", name: null, observed: "dead_number", contactPhone: null },
+        ]);
+        expect(out.map((d) => [d.id, d.skip, d.viaContact ?? false])).toEqual([
+            ["a", null, true],
+            ["b", null, true],
+            ["c", null, false],
+            ["d", "dead_number", false],
+        ]);
+        expect(out[0].phoneType).toBe("switchboard"); // the main number keeps its mark
+    });
+
+    it("two leads on one owner mobile: the second is a duplicate", () => {
+        const out = planEnrolment([
+            { id: "a", phone: "+919811022422", name: null, observed: "switchboard", contactPhone: "9000012345" },
+            { id: "b", phone: "+919000012345", name: null },
+        ]);
+        expect(out.map((d) => d.skip)).toEqual([null, "duplicate_number"]);
+    });
+
+    it("a vehicle showroom stays skipped even with an owner mobile", () => {
+        const out = planEnrolment([
+            { id: "a", phone: "01123456789", name: "Hero MotoCorp showroom", contactPhone: "9000012345" },
+        ]);
+        expect(out[0].skip).toBe("vehicle_showroom");
     });
 });

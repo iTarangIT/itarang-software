@@ -46,6 +46,7 @@ import {
 } from "@/lib/sales/attentionReasons";
 
 import { onFreshFileClick } from "@/lib/storage/freshFileLink";
+import type { ExpenseAccess } from "@/lib/auth/requireApiAdmin";
 interface AttentionFile {
   id: string;
   drive_file_id: string;
@@ -96,8 +97,10 @@ const FILE_STATUS_LABEL: Record<string, string> = {
   unsupported: "Unsupported file",
 };
 
-export function SalesScanAttentionPanel() {
+export function SalesScanAttentionPanel({ access }: { access: ExpenseAccess }) {
   const qc = useQueryClient();
+  // ID 166 item 1: Admin / Sales Head / Finance clear the flag; the CEO views.
+  const canClear = access === "write" || access === "finance";
   const [openId, setOpenId] = useState<string | null>(null);
   const [filter, setFilter] = useState<AttentionCode | "all">("all");
 
@@ -283,7 +286,7 @@ export function SalesScanAttentionPanel() {
                 reasons={reasons}
                 open={openId === inv.id}
                 onToggle={() => setOpenId(openId === inv.id ? null : inv.id)}
-                onClear={() => clearFlag.mutate(inv.id)}
+                onClear={canClear ? () => clearFlag.mutate(inv.id) : undefined}
                 clearing={clearFlag.isPending && clearFlag.variables === inv.id}
               />
             ))}
@@ -341,7 +344,8 @@ function FlaggedRow({
   reasons: AttentionReason[];
   open: boolean;
   onToggle: () => void;
-  onClear: () => void;
+  /** Absent when this viewer may not clear the flag (the CEO). */
+  onClear?: () => void;
   clearing: boolean;
 }) {
   const sub = inv.sub_total == null ? null : Number(inv.sub_total);
@@ -395,6 +399,7 @@ function FlaggedRow({
                 {r.label}
               </Badge>
             ))}
+            {onClear && (
             <button
               type="button"
               onClick={onClear}
@@ -409,6 +414,7 @@ function FlaggedRow({
               )}
               Looks right
             </button>
+            )}
           </div>
 
           {open && (

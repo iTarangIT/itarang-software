@@ -6,7 +6,10 @@ import type { NextRequest } from "next/server";
 // stored in dealer_correction_rounds.token_hash, so a DB compromise alone
 // can't impersonate a dealer.
 
-export const CORRECTION_TOKEN_TTL_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
+// ID 166-C (decision 17, Apoorv to confirm): 72 hours, down from 14 days. The
+// link alone no longer shows any earlier document either: the dealer enters
+// the code sent to the owner mobile first (/api/onboarding/correct/[token]/code).
+export const CORRECTION_TOKEN_TTL_MS = 72 * 60 * 60 * 1000; // 72 hours
 
 export function generateCorrectionToken(): { rawToken: string; tokenHash: string } {
   const rawToken = randomBytes(32).toString("hex");

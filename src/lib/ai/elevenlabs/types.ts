@@ -6,6 +6,9 @@ export interface ElevenLabsCallPayload {
   // deliberate human-initiated re-calls (e.g. the "Retry failed leads"
   // campaign) where a same-day second dial is the intended behaviour.
   bypassIdempotency?: boolean;
+  // AI dialer list item 6 — ring this number instead of the lead's own (the
+  // owner's mobile a call learned, E-379). The lead is then found by leadId.
+  dialPhone?: string;
 }
 
 export interface ElevenLabsCallResponse {

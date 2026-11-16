@@ -32,6 +32,7 @@ import {
   FILE_PROXY_BUCKETS,
   FRESH_LINK_TTL_SECONDS,
   ONBOARDING_LINK_BUCKETS,
+  ONBOARDING_LINK_PREFIX,
   fileLinkTooLong,
   fileLinkValid,
   isOnboardingLinkSubject,
@@ -40,6 +41,7 @@ import {
 } from "@/lib/storage/fileAccess";
 import { canOpenStoredFile, logFileOpen } from "@/lib/storage/fileAuthz";
 import { classifyFile } from "@/lib/storage/fileRules";
+import { boundApplication } from "@/lib/onboarding/docBinding";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -93,9 +95,18 @@ export async function GET(
   // (`by = app:<id>`), minted only after the file was matched to that
   // application (lib/onboarding/onboardingFileLinks.ts). 15 minutes, onboarding
   // buckets only, logged.
+  //
+  // ID 166-C (decision 17): and only in the browser where the dealer entered
+  // the code — that browser holds an httpOnly cookie naming the application
+  // (lib/onboarding/docBinding.ts). The same link copied to another browser or
+  // phone is refused (or, for a signed-in user, falls through to the file rule).
   if (signatureOk && isOnboardingLinkSubject(by) && ONBOARDING_LINK_BUCKETS.includes(bucket)) {
-    await logFileOpen({ file, bucket, key, userId: null, role: by, via: "token_link", allowed: true, ip });
-    return serveFile(req, bucket, key);
+    const linkApp = by!.slice(ONBOARDING_LINK_PREFIX.length);
+    if (boundApplication(req.cookies) === linkApp) {
+      await logFileOpen({ file, bucket, key, userId: null, role: by, via: "token_link", allowed: true, ip });
+      return serveFile(req, bucket, key);
+    }
+    await logFileOpen({ file, bucket, key, userId: null, role: by, via: "token_link", allowed: false, ip });
   }
 
   const user = await sessionUser();

@@ -12,8 +12,8 @@
 //   - a new lead gets Entered via AI-dialer list, Found via (what the uploader
 //     picked, else the calling-list default), the list's acquisition campaign
 //     and a "Lead created" line;
-//   - a dealer we already hold gets a Re-inquiry on the existing lead, and the
-//     file only FILLS BLANKS on it. It used to overwrite the name and city of
+//   - a dealer we already hold is counted as `reused` ("already in CRM"; no
+//     Re-inquiry since ID 249), and the file only FILLS BLANKS on it. It used to overwrite the name and city of
 //     an existing lead with whatever the sheet said, so a shop name a rep had
 //     corrected was lost to a stale calling list.
 //
@@ -28,7 +28,6 @@ import { loadExistingByPhone, normalizePhone } from "@/lib/leads/dedupe";
 import {
   LIST_DEFAULT_ORIGIN,
   recordLeadsCreatedBulk,
-  recordReinquiries,
   stampLeadSourceBulk,
   type LeadOrigin,
 } from "@/lib/leads/leadSource";
@@ -274,12 +273,8 @@ export async function importListRows(
       RETURNING dl.id
     `);
     updated = filled.length;
-
-    // ID 81 — a known dealer on a new list is a Re-inquiry on the lead we hold.
-    await recordReinquiries(
-      fills.map((f) => ({ id: f.id, note: opts?.listName ?? null })),
-      { door: "ai_dialer", actorId },
-    );
+    // ID 249: no Re-inquiry on a known dealer — a calling list is not the
+    // dealer coming back. Counted in `reused` ("already in CRM"), nothing else.
   }
 
   // 4. Re-resolve every phone → id. Covers reused leads, freshly inserted

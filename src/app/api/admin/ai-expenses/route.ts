@@ -11,7 +11,7 @@ import { and, desc, eq, gte, lt, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { expenseSubmissions, users } from "@/lib/db/schema";
-import { requireApiAdmin } from "@/lib/auth/requireApiAdmin";
+import { requireApiAdmin, requireApiExpenseWriter } from "@/lib/auth/requireApiAdmin";
 import { withAllowedBill } from "@/lib/expenses/billAccess";
 import { isNextRedirectError, errorMessage } from "@/lib/api-utils";
 import {
@@ -57,7 +57,8 @@ const CreateSchema = z.object({
 
 export async function POST(req: NextRequest) {
   try {
-    const guard = await requireApiAdmin();
+    // ID 166 item 1: adding an expense is Admin / Sales Head only.
+    const guard = await requireApiExpenseWriter();
     if (!guard.ok) return guard.response;
     const user = guard.user;
 

@@ -39,7 +39,9 @@
 // adds emi_finance_interest; extract-2.4.0 teaches the prompt to read it and
 // spells out the product lines (L3/L5 51–72 V, scooty, lithium inverter battery).
 export const SCORING_VERSION = "qualification-2.3.0";
-export const SIGNAL_SCHEMA_VERSION = "signals-2.4.0";
+// signals-2.5.0 (13 Nov 2026, AI dialer list item 6): owner_name, owner_mobile,
+// alternate_number, complaint_text — contact details, no band impact.
+export const SIGNAL_SCHEMA_VERSION = "signals-2.5.0";
 
 // Tags the EXTRACTION prompt (parser.ts) + its few-shot calibration set
 // (analysis/calibrationExamples.ts). Bump whenever the prompt wording or the
@@ -48,4 +50,5 @@ export const SIGNAL_SCHEMA_VERSION = "signals-2.4.0";
 // came from a new prompt or a new band rule.
 // extract-2.3.1 (D8): callback_topic "complaint" — a problem with a battery / service he has.
 // extract-2.4.0: emi_finance_interest + sharper product-line wording.
-export const EXTRACTION_VERSION = "extract-2.4.0";
+// extract-2.5.0: asks for the owner's name / mobile, an alternate number and the complaint line.
+export const EXTRACTION_VERSION = "extract-2.5.0";

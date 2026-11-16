@@ -37,7 +37,8 @@ import {
     VISIT_STATUS,
 } from "@/lib/asm/types";
 
-const MUTATE_ROLES = ["asm", "admin"];
+// ID 252: the Sales Head logs visits on leads he owns (assertOwner below).
+const MUTATE_ROLES = ["asm", "admin", "sales_head"];
 
 /** Statuses a visit may move a lead to. Converted / Lost / Transfer have their own flows. */
 const VISIT_STATUS_TARGETS = [

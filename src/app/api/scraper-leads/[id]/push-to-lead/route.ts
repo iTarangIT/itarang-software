@@ -18,7 +18,6 @@ import { eq } from "drizzle-orm";
 import {
   findExistingLeadByPhone,
   recordLeadCreated,
-  recordReinquiry,
   stampLeadSource,
 } from "@/lib/leads/leadSource";
 
@@ -39,13 +38,14 @@ export const POST = withErrorHandler(
     if (lead.status === "pushed")
       return errorResponse("Already added to Leads", 409);
 
-    // ID 81: the SHARED duplicate check (last 10 digits). A known dealer is a
-    // Re-inquiry on the existing lead, never a second copy.
+    // ID 81: the SHARED duplicate check (last 10 digits). A known dealer is
+    // never a second copy. ID 249: and not a Re-inquiry either — a scraped
+    // listing is not the dealer coming back, so nothing is written on the
+    // existing lead (no line, no Last activity, no bell).
     const existingId = await findExistingLeadByPhone(lead.phone);
     if (existingId) {
-      await recordReinquiry({ leadId: existingId, door: "scraper", actorId: user.id, note: lead.name ?? null });
       return errorResponse(
-        `A lead with this phone number already exists in Leads (${existingId}) — logged as a re-inquiry.`,
+        `Already in CRM — a lead with this phone number exists (${existingId}). Nothing was added.`,
         409,
       );
     }

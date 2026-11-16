@@ -132,7 +132,10 @@ export function SalesHeadOpsView() {
     const pathname = usePathname();
     const { filters } = useSalesDashboardFilters(true);
     const [team, setTeam] = React.useState<TeamSeg>("all");
-    const [score, setScore] = React.useState<"field" | "inside">("field");
+    // ID 252: "sales_head" lists the Sales Head's own leads on the field columns,
+    // as its own list — never under an ASM manager or inside a Team subtotal.
+    const [score, setScore] = React.useState<"field" | "inside" | "sales_head">("field");
+    const scoreKind: "field" | "inside" = score === "inside" ? "inside" : "field";
     const [phone, setPhone] = React.useState("");
     const [pressed, setPressed] = React.useState<Period | null>(null);
     // ID 88 — "Where open leads are sitting": activity in the period, or time in stage.
@@ -346,11 +349,15 @@ export function SalesHeadOpsView() {
 
     // ID 155: a "Team subtotal" row under each manager's team, by the
     // Performance › Team total rule (each member for the days in the team).
-    const scoreList = orderByTeam(score === "field" ? fieldPeople : insidePeople, managerOf);
+    const salesHeadPeople = people.filter((p) => (p.role ?? "").toLowerCase() === "sales_head");
+    const scoreList =
+        score === "sales_head"
+            ? salesHeadPeople.map((p) => ({ ...p, member: false }))
+            : orderByTeam(scoreKind === "field" ? fieldPeople : insidePeople, managerOf);
     const scoreManagers = scoreList.filter((p, i) => !p.member && scoreList[i + 1]?.member).map((p) => p.spoc_id);
     const subtotalQs = new URLSearchParams(dashQs);
     subtotalQs.delete("spoc_id");
-    subtotalQs.set("score", score);
+    subtotalQs.set("score", scoreKind);
     subtotalQs.set("managers", scoreManagers.join(","));
     const teamSubtotals = useQuery<Record<string, TeamScorecardSubtotal>>({
         queryKey: ["sales-head-ops", "team-subtotals", subtotalQs.toString()],
@@ -821,6 +828,7 @@ export function SalesHeadOpsView() {
                         options={[
                             { value: "field", label: "Field (ASM)" },
                             { value: "inside", label: "Inside sales (ISR)" },
+                            { value: "sales_head", label: "Sales Head (own leads)" },
                         ]}
                         value={score}
                         onChange={setScore}
@@ -842,7 +850,7 @@ export function SalesHeadOpsView() {
                             teamEnd.set(j, p);
                         });
                         const heads =
-                            score === "field"
+                            scoreKind === "field"
                                 ? ["Dealer visits", "Fresh / Repeat", "New dealer visits", "Batteries sold", "KYC submitted", "Revenue"]
                                 : ["Calls per day", "Engaged calls", "Hot leads to field", "Of which visited", "Quotes delivered"];
                         if (list.length === 0) return <NotAvailable empty reason="No one in this team has activity for these filters." />;
@@ -853,16 +861,16 @@ export function SalesHeadOpsView() {
                         return (
                             <div className="overflow-x-auto">
                                 <div className="min-w-[900px]">
-                                    <div className={`grid ${score === "field" ? "grid-cols-[180px_repeat(6,minmax(0,1fr))_150px]" : "grid-cols-[180px_repeat(5,minmax(0,1fr))_150px]"} gap-3 border-b border-border pb-2 ${TABLE_HEAD}`}>
+                                    <div className={`grid ${scoreKind === "field" ? "grid-cols-[180px_repeat(6,minmax(0,1fr))_150px]" : "grid-cols-[180px_repeat(5,minmax(0,1fr))_150px]"} gap-3 border-b border-border pb-2 ${TABLE_HEAD}`}>
                                         <span>Person</span>
                                         {heads.map((h) => (
                                             <span key={h}>{h}</span>
                                         ))}
-                                        <span className="text-right">{score === "field" ? "Revenue needed per day" : monthToDate ? "Won this month" : "Won"}</span>
+                                        <span className="text-right">{scoreKind === "field" ? "Revenue needed per day" : monthToDate ? "Won this month" : "Won"}</span>
                                     </div>
                                     {list.map((p, rowIndex) => {
                                         const cells: ScoreCell[] =
-                                            score === "field"
+                                            scoreKind === "field"
                                                 ? [
                                                       cell(p.spoc_id, "dealer_visits", p.totals.unique_visits),
                                                       // ID 185: Fresh = this person's first visit to the dealer,
@@ -903,7 +911,7 @@ export function SalesHeadOpsView() {
                                         const row = (
                                             <div
                                                 key={p.spoc_id}
-                                                className={`grid min-h-[50px] ${score === "field" ? "grid-cols-[180px_repeat(6,minmax(0,1fr))_150px]" : "grid-cols-[180px_repeat(5,minmax(0,1fr))_150px]"} items-center gap-3 border-b border-[#f1f4f7]`}
+                                                className={`grid min-h-[50px] ${scoreKind === "field" ? "grid-cols-[180px_repeat(6,minmax(0,1fr))_150px]" : "grid-cols-[180px_repeat(5,minmax(0,1fr))_150px]"} items-center gap-3 border-b border-[#f1f4f7]`}
                                             >
                                                 <button
                                                     type="button"
@@ -941,7 +949,7 @@ export function SalesHeadOpsView() {
                                                 })}
                                                 <span
                                                     className={`text-right text-[13px] font-semibold tabular-nums ${
-                                                        score === "field" && need?.rag === "red" && (need.remaining ?? 0) > 0 ? "text-danger" : "text-ink"
+                                                        scoreKind === "field" && need?.rag === "red" && (need.remaining ?? 0) > 0 ? "text-danger" : "text-ink"
                                                     }`}
                                                 >
                                                     {score === "inside"
@@ -979,7 +987,7 @@ export function SalesHeadOpsView() {
                                                 {row}
                                                 <TeamSubtotalRow
                                                     name={head.name ?? "Unnamed"}
-                                                    score={score}
+                                                    score={scoreKind}
                                                     data={teamSubtotals.data?.[head.spoc_id] ?? null}
                                                     loading={teamSubtotals.isLoading}
                                                 />
@@ -1020,7 +1028,7 @@ export function SalesHeadOpsView() {
                     </div>
                 )}
                 {/* ID 171 — revenue and batteries are only as fresh as the invoices read. */}
-                {score === "field" && <InvoicesReadUpTo />}
+                {scoreKind === "field" && <InvoicesReadUpTo />}
                 {score === "inside" && (
                     <span className="text-xs text-ink-muted">
                         Every figure is credited to the person who did it.

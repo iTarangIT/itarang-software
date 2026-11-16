@@ -9,6 +9,7 @@ import {
 } from "@/lib/db/schema";
 import { hashCorrectionToken } from "@/lib/onboarding/correction-token";
 import { onboardingFileLink } from "@/lib/storage/fileAccess";
+import { boundApplication } from "@/lib/onboarding/docBinding";
 import {
   documentLabel,
   fieldLabel,
@@ -39,7 +40,7 @@ async function loadRoundByToken(rawToken: string) {
   return rows[0] ?? null;
 }
 
-export async function GET(_req: NextRequest, context: RouteContext) {
+export async function GET(req: NextRequest, context: RouteContext) {
   try {
     const { token } = await context.params;
     const round = await loadRoundByToken(token);
@@ -115,6 +116,10 @@ export async function GET(_req: NextRequest, context: RouteContext) {
             .where(inArray(dealerOnboardingDocuments.id, previousDocIds))
         : [];
     const previousDocsById = new Map(previousDocs.map((d) => [d.id, d]));
+    // ID 166-C (decision 17): no earlier document is shown until this browser
+    // has entered the code sent to the owner mobile (POST ./code). Until then
+    // the page lists the file names only.
+    const codeVerified = boundApplication(req.cookies) === application.id;
 
     const responseItems = items.map((it) => {
       const previousDoc = it.previous_document_id
@@ -133,7 +138,9 @@ export async function GET(_req: NextRequest, context: RouteContext) {
               // correction link proves the application is its own, so it sees
               // the file being replaced through a 15-minute link signed for
               // the application (the page mints a fresh one on each click).
-              fileUrl: previousDoc.fileUrl ? onboardingFileLink(previousDoc.fileUrl, application.id) : null,
+              fileUrl:
+                codeVerified && previousDoc.fileUrl ? onboardingFileLink(previousDoc.fileUrl, application.id) : null,
+              hasFile: !!previousDoc.fileUrl,
               uploadedAt: previousDoc.uploadedAt,
             }
           : null,
@@ -149,6 +156,7 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         roundNumber: round.round_number,
         remarks: round.remarks,
         expiresAt: round.token_expires_at,
+        codeRequired: !codeVerified && responseItems.some((it) => it.previousDocument?.hasFile),
         items: responseItems,
       },
     });

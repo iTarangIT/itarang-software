@@ -23,6 +23,8 @@ export type ExistingLead = {
     lead_status: string | null;
     city: string | null;
     state: string | null;
+    /** ID 233: a 'Test lead' is never reopened by an upload, NeoDove or the AI dialer. */
+    lost_reason?: string | null;
 };
 
 export type DedupClassification = {
@@ -70,6 +72,11 @@ export function classifyAgainstExisting(
     // Lost leads are revived, never duplicated (BRD §0.9). Checked before the
     // city comparison: a dealer who moved AND was previously lost is still a
     // reactivation — the new address rides along on the revive.
+    // ID 233: a lead closed as 'Test lead' (Admin / Sales Head / CEO) is never
+    // reopened automatically: the incoming row is a duplicate of it, nothing more.
+    if (existing.lead_status === "Lost" && existing.lost_reason === "test_lead") {
+        return { outcome: "duplicate_skip", duplicateLeadId: existing.id };
+    }
     if (existing.lead_status === "Lost") {
         return { outcome: "reactivate", duplicateLeadId: existing.id };
     }

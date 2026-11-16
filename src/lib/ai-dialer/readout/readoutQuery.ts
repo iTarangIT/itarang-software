@@ -14,6 +14,7 @@ import { db } from "@/lib/db";
 import { hasDialDispositionTables } from "@/lib/ai/storage/dialDisposition";
 import { hasInboundTable } from "../inbound";
 import { getDialerAlertSettings } from "../dialerAlerts";
+import { isZeroAnswerDay } from "../zeroAnswer";
 import { readoutLines, readoutRow, readoutTurnsFromProvider, type ReadoutDial, type ReadoutRow } from "./readout";
 
 function rowsOf<T>(r: unknown): T[] {
@@ -103,13 +104,18 @@ async function readoutRecipients(): Promise<string[]> {
 export async function runNightlyReadout(now: Date = new Date()): Promise<Record<string, unknown>> {
     const rows = await buildReadout(now, 7);
     const settings = await getDialerAlertSettings();
-    const lines = readoutLines(rows, { version: settings.agentVersion, changeTested: settings.changeTested });
+    const lines = readoutLines(rows, {
+        version: settings.agentVersion,
+        changeTested: settings.changeTested,
+        zeroAnswerMinDials: settings.zeroAnswerMinDials,
+    });
     const today = rows[0];
     const to = await readoutRecipients();
     if (to.length === 0) return { rows: rows.length, sent: 0, note: "no recipients" };
     const { sendEmail } = await import("@/lib/email/mailer");
     const subject = today
-        ? `AI dialer readout ${today.day}: ${today.per100 == null ? "no dials" : `${today.per100.toFixed(1)} complete per 100 dials`}`
+        ? `AI dialer readout ${today.day}: ${today.per100 == null ? "no dials" : `${today.per100.toFixed(1)} complete per 100 dials`}` +
+          (isZeroAnswerDay(today, settings.zeroAnswerMinDials) ? " — ZERO ANSWERED" : "")
         : "AI dialer readout";
     const escape = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     await sendEmail({

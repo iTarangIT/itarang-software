@@ -94,6 +94,7 @@ import {
   loadRepExtras,
   loadAwaitingFieldVisitPast,
   repBlockTableRows,
+  salesHeadBlockRows,
   type RepBlock,
   type TeamGroups,
 } from "../salesDailyBlocks";
@@ -652,6 +653,8 @@ async function collect(
     // Blocks B / C's people — A2 lists the same ones (ID 188).
     const asmBlocks = buildRepBlocks("asm", yesterday, mtd, extras, blockA.userTargets);
     const isrBlocks = buildRepBlocks("inside_sales_rep", yesterday, mtd, extras, blockA.userTargets);
+    // ID 252: the Sales Head's own leads — his own rows, out of the ASM / ISR Totals.
+    const shBlocks = buildRepBlocks("sales_head", yesterday, mtd, extras, blockA.userTargets);
 
     // ID 155 (22 Oct): a "Team subtotal" adds each member only for the days he
     // reported to the manager this month (dated reporting lines, leavers too),
@@ -830,6 +833,7 @@ async function collect(
               [
                 { role: "asm", blocks: asmBlocks },
                 { role: "inside_sales_rep", blocks: isrBlocks },
+                { role: "sales_head", blocks: shBlocks },
               ],
               { prev: dayBefore, wk: sameDayLastWeek },
             ),
@@ -852,13 +856,14 @@ async function collect(
             key: "block_b",
             title: "B · Field team (ASM)",
             columns: BLOCK_B_COLUMNS,
-            rows: repBlockTableRows("asm", asmBlocks, teamOf, asmGroups, outsideNames),
+            rows: [...repBlockTableRows("asm", asmBlocks, teamOf, asmGroups, outsideNames), ...salesHeadBlockRows(shBlocks)],
             textColumns: 1,
             toneColumns: [BLOCK_B_PCT_COLUMN],
             note:
               "One row per ASM. % of target = dealers visited MTD against the ASM's MTD dealer-visit target (“—” = no target set). " +
               "Under a manager: their team (↳) and a team subtotal — % of target against the manager's own target. " +
               "Total = the ASMs listed; Block A also counts work credited to nobody. " +
+              "The Sales Head's own leads are listed after the Total, under their own header, and are not in it. " +
               // A26: the same figures as Admin › Targets, which runs to today.
               `MTD = ${periods.mtd.from} to ${periods.mtd.to}, the same per-person figures as Admin › Targets (which also counts today).`,
             empty: "No ASMs on the Sales dashboard this month.",

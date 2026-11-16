@@ -76,6 +76,7 @@ export async function noteCallResultForNumber(
     leadId: string,
     status: string,
     outcome: string | null,
+    callId?: string | null,
 ): Promise<void> {
     const observed =
         status === "switchboard"
@@ -84,6 +85,12 @@ export async function noteCallResultForNumber(
                 deriveFailureReason({ status, callOutcome: outcome })?.code === "invalid_number"
               ? "dead_number"
               : null;
+    // AI dialer list item 6 — a dial to the owner's captured mobile (E-379)
+    // says nothing about the lead's main number: the result goes to the contact.
+    if (callId) {
+        const { applyResultToContact } = await import("./contactStore");
+        if (await applyResultToContact(callId, observed, { reached: status === "completed" })) return;
+    }
     if (!observed && status !== "completed") return;
     if (observed) {
         await markNumber(leadId, observed);

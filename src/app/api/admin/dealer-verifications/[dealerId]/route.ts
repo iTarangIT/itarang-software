@@ -6,6 +6,7 @@ import {
   dealerOnboardingApplications,
   dealerOnboardingDocuments,
   dealers,
+  whatsappOnboardingSessions,
 } from "@/lib/db/schema";
 import { and, desc, eq, inArray, ne } from "drizzle-orm";
 import { approvalTagsFor } from "@/lib/dealer/approval-tag";
@@ -16,7 +17,7 @@ import {
   documentLabel,
   fieldLabel,
 } from "@/lib/onboarding/correction-catalog";
-import { type CompanyType, requiredDocuments } from "@/lib/whatsapp/checklist";
+import { type CompanyType, docTypeLabel, requiredDocuments } from "@/lib/whatsapp/checklist";
 import { normalizeAccountType } from "@/lib/onboarding/account-type";
 import { isMaskedAadhaar, maskAadhaar } from "@/lib/kyc/aadhaarMask";
 import { maskDealerIdsDeep, maskIdsInText, seesFullDealerIds, isMaskedBankAccount } from "@/lib/kyc/dealerIdMask";
@@ -264,6 +265,25 @@ export async function GET(_req: NextRequest, context: RouteContext) {
             .map((d) => ({ type: d.type, label: d.label }))
         : [];
 
+    // ID 238: documents the dealer tapped Skip on in the WhatsApp chat (or that
+    // the bot gave up on after repeated unreadable uploads), from the dealer's
+    // session context. Never blocks approval (GST included, Kartik 10 Nov).
+    let skippedDocuments: { type: string; label: string }[] = [];
+    if (row.wa_session_id) {
+      try {
+        const [sess] = await db
+          .select({ context: whatsappOnboardingSessions.context })
+          .from(whatsappOnboardingSessions)
+          .where(eq(whatsappOnboardingSessions.id, row.wa_session_id));
+        const ctxSkipped = ((sess?.context ?? {}) as { skipped?: unknown }).skipped;
+        skippedDocuments = (Array.isArray(ctxSkipped) ? ctxSkipped : [])
+          .filter((t): t is string => typeof t === "string" && !uploadedTypes.has(t))
+          .map((t) => ({ type: t, label: docTypeLabel(t) }));
+      } catch (e) {
+        console.warn("[dealer-verification] skipped documents unavailable:", (e as Error)?.message);
+      }
+    }
+
     // Latest correction round (any status). The review page renders the
     // "Correction Response" panel only when status === "submitted"; other
     // states are surfaced as small status pills so the admin can tell whether
@@ -463,6 +483,7 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         // Required-but-not-uploaded documents (WhatsApp dealers) — drives the
         // "missing documents" alert in Section 2 of the review page.
         missingDocuments,
+        skippedDocuments,
 
         // E-225 — manual-mode dealers (scrap / new+scrap) need this block even
         // with finance off: their agreement is not a finance agreement, and

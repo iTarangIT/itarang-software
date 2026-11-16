@@ -23,6 +23,7 @@ type CorrectionItem = {
   previousDocument: {
     fileName?: string | null;
     fileUrl?: string | null;
+    hasFile?: boolean;
     uploadedAt?: string | null;
   } | null;
 };
@@ -33,6 +34,8 @@ type CorrectionData = {
   roundNumber: number;
   remarks: string;
   expiresAt: string | null;
+  /** ID 166-C: earlier documents stay hidden until the mobile code is entered in this browser. */
+  codeRequired?: boolean;
   items: CorrectionItem[];
 };
 
@@ -60,6 +63,12 @@ export default function DealerCorrectionPage() {
         body: JSON.stringify({ correctionToken: token, url: storedLink }),
       });
       const json = await res.json().catch(() => null);
+      if (json?.codeRequired) {
+        // ID 166-C: the code check ran out (30 minutes) — ask for it again.
+        tab?.close();
+        setReloadKey((k) => k + 1);
+        return;
+      }
       const url = res.ok && json?.success && json.url ? json.url : storedLink;
       if (tab) tab.location.href = url;
       else window.location.href = url;
@@ -75,6 +84,8 @@ export default function DealerCorrectionPage() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState(false);
+  // Bumped after the mobile code is entered, to load the document links.
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -97,7 +108,8 @@ export default function DealerCorrectionPage() {
               initialFields[item.key] = item.previousValue ?? "";
             }
           }
-          setFieldValues(initialFields);
+          // Keep what the dealer already typed when the data reloads after the code.
+          setFieldValues((prev) => (Object.keys(prev).length ? prev : initialFields));
         } else if (json?.state) {
           setLoad({
             state: "info",
@@ -121,7 +133,7 @@ export default function DealerCorrectionPage() {
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, [token, reloadKey]);
 
   const data = load.state === "ready" ? load.data : null;
 
@@ -329,6 +341,9 @@ export default function DealerCorrectionPage() {
             <p className="mt-1 text-sm text-slate-500">
               Upload a fresh copy for each document the reviewer flagged.
             </p>
+            {data.codeRequired ? (
+              <DocumentCodeGate token={token} onVerified={() => setReloadKey((k) => k + 1)} />
+            ) : null}
             <div className="mt-5 grid grid-cols-1 gap-5 sm:grid-cols-2">
               {docItems.map((item) => (
                 <div
@@ -352,8 +367,8 @@ export default function DealerCorrectionPage() {
                       </a>
                     </div>
                   ) : item.previousDocument?.fileName ? (
-                    // 17 Oct (no document without a login): the dealer has no
-                    // login here, so the earlier file is named, not linked.
+                    // ID 166-C: until the mobile code is entered in this
+                    // browser, the earlier file is named, not linked.
                     <div className="mb-3 flex items-center gap-2 rounded-xl border border-[#E3E8EF] bg-white px-3 py-2 text-xs text-slate-500">
                       <FileText className="h-3.5 w-3.5 text-slate-400" />
                       <span className="font-medium text-slate-600">
@@ -450,5 +465,101 @@ function Shell({ children }: { children: React.ReactNode }) {
         {children}
       </div>
     </main>
+  );
+}
+
+// ID 166-C (decision 17): the correction link alone shows no earlier document.
+// The dealer asks for a code (sent to the mobile on the application) and enters
+// it here; the server then binds this browser to the application.
+function DocumentCodeGate({ token, onVerified }: { token: string; onVerified: () => void }) {
+  const [sentWhere, setSentWhere] = useState<string | null>(null);
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const call = async (body: Record<string, unknown>) => {
+    const res = await fetch(`/api/onboarding/correct/${token}/code`, {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return (await res.json().catch(() => null)) as Record<string, unknown> | null;
+  };
+
+  const send = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const json = await call({ action: "send" });
+      if (json?.success) setSentWhere(String(json.sentWhere || json.sentTo || "your registered mobile"));
+      else setError(String(json?.message || "We couldn't send the code. Please try again."));
+    } catch {
+      setError("We couldn't send the code. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const verify = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const json = await call({ action: "verify", code: code.trim() });
+      if (json?.success) onVerified();
+      else setError(String(json?.message || "That code is not right. Please try again."));
+    } catch {
+      setError("Could not check the code. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mt-4 rounded-2xl border border-[#E3E8EF] bg-[#F4F8FC] p-4">
+      <div className="flex items-start gap-2">
+        <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-[#1F5C8F]" />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-[#173F63]">See the documents you uploaded earlier</p>
+          <p className="mt-0.5 text-xs text-slate-500">
+            For your safety, enter the code we send to the mobile number on your application. You can upload new copies without it.
+          </p>
+          {sentWhere ? (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <input
+                inputMode="numeric"
+                maxLength={6}
+                value={code}
+                onChange={(e) => setCode(e.target.value.replace(/D/g, ""))}
+                placeholder="6-digit code"
+                className="w-36 rounded-xl border border-[#E3E8EF] bg-white px-3 py-2 text-sm tracking-widest outline-none focus:border-[#1F5C8F]"
+              />
+              <button
+                type="button"
+                onClick={verify}
+                disabled={busy || code.length !== 6}
+                className="rounded-xl bg-[#1F5C8F] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              >
+                {busy ? "Checking…" : "Show documents"}
+              </button>
+              <button type="button" onClick={send} disabled={busy} className="text-xs text-[#1F5C8F] hover:underline disabled:opacity-50">
+                Send a new code
+              </button>
+              <p className="w-full text-xs text-slate-500">Code sent to {sentWhere}.</p>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={send}
+              disabled={busy}
+              className="mt-3 rounded-xl border border-[#1F5C8F] px-4 py-2 text-sm font-semibold text-[#1F5C8F] disabled:opacity-50"
+            >
+              {busy ? "Sending…" : "Send me a code"}
+            </button>
+          )}
+          {error ? <p className="mt-2 text-xs text-red-600">{error}</p> : null}
+        </div>
+      </div>
+    </div>
   );
 }

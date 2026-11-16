@@ -29,6 +29,8 @@ export type UploadCardValue = {
   viewUrl?: string | null;
   storagePath?: string | null;
   bucketName?: string | null;
+  /** ID 166-B: the original file name, kept with storagePath across visits. */
+  fileName?: string | null;
   verificationState: VerificationState;
   progress: number;
   uploadedAt?: string;
@@ -212,6 +214,7 @@ export default function FileUploadCard({
         viewUrl: result.file?.viewUrl ?? null,
         storagePath: result.file?.path ?? null,
         bucketName: result.file?.bucketName ?? "dealer-documents",
+        fileName: result.file?.name ?? file.name,
         verificationState: "verified",
         progress: 100,
       });
@@ -242,6 +245,7 @@ export default function FileUploadCard({
   );
   const displayName =
     currentValue.file?.name ||
+    currentValue.fileName ||
     currentValue.storagePath?.split("/").pop() ||
     currentValue.label ||
     "Uploaded document";

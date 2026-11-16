@@ -102,7 +102,7 @@ export async function loadExistingByPhone(
     if (byLast10.size === 0) return new Map();
 
     const rows = (await db.execute<ExistingLead & { match_digits: string }>(sql`
-        SELECT id, phone, lead_status, city, state,
+        SELECT id, phone, lead_status, city, state, lost_reason,
                right(regexp_replace(phone, '[^0-9]', '', 'g'), 10) AS match_digits
         FROM dealer_leads
         WHERE right(regexp_replace(phone, '[^0-9]', '', 'g'), 10) IN (
@@ -120,7 +120,8 @@ export async function loadExistingByPhone(
     for (const r of rows) {
         const key = byLast10.get(r.match_digits);
         if (key && !out.has(key)) {
-            out.set(key, { id: r.id, phone: r.phone, lead_status: r.lead_status, city: r.city, state: r.state });
+            // ID 233: lost_reason rides along so a Lost 'Test lead' is never reopened.
+            out.set(key, { id: r.id, phone: r.phone, lead_status: r.lead_status, city: r.city, state: r.state, lost_reason: r.lost_reason ?? null });
         }
     }
     return out;

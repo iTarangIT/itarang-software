@@ -1110,13 +1110,13 @@ export function CampaignDetailView({
           Icon={Voicemail}
           tone="violet"
         />
-        {/* D2 — an IVR menu, hold message or company bot. Redialled since 13 Nov 2026. */}
+        {/* D2 — an IVR menu, hold message or company bot. Not redialled. */}
         <StatCard
           label={CAMPAIGN_LEAD_STATUS_LABELS.switchboard}
           value={count("switchboard")}
           Icon={Building2}
           tone="neutral"
-          hint="IVR menu or company bot answered. Redialled like other unreached leads."
+          hint="IVR menu or company bot answered. These numbers are not redialled."
         />
         {/* The old single "Pending" card, split. Legacy no_conversation rows
             (not yet re-classified) count as Silent Call. */}

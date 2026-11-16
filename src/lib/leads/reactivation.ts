@@ -26,6 +26,13 @@ import { markSalesReady } from "@/lib/leads/salesReady";
 import type { TouchpointType } from "@/lib/lifecycle/touchpointTypes";
 import type { LostReason } from "@/lib/lifecycle/transitions";
 
+/** ID 233: a test lead is never reopened automatically. */
+export class TestLeadReopenError extends Error {
+    constructor() {
+        super("A lead closed as 'Test lead' is reopened only by a person, not automatically.");
+    }
+}
+
 export type ReactivationTrigger = "admin" | "upload" | "ai_dialer";
 
 const TRIGGER_TOUCHPOINT: Record<ReactivationTrigger, TouchpointType> = {
@@ -61,6 +68,12 @@ export async function reactivateLead(opts: {
         if (!lead) throw new Error("Lead not found.");
         if (lead.lead_status !== "Lost") {
             throw new Error("Only a Lost lead can be reactivated (BRD §0.9).");
+        }
+        // ID 233: a 'Test lead' comes back only when a person reopens it by hand
+        // (admin trigger with a named actor) — never from an upload, the AI
+        // dialer or a NeoDove event (which runs as trigger admin, no actor).
+        if (lead.lost_reason === "test_lead" && (trigger !== "admin" || !performedBy)) {
+            throw new TestLeadReopenError();
         }
 
         // Owner routing — the originator gets the lead back if still active.

@@ -1,5 +1,8 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
+import { getSessionUser } from "@/lib/nbfc/tenant";
+import { seesFullDealerIds } from "@/lib/kyc/dealerIdMask";
+import { maskPan } from "@/lib/kyc/panMask";
 import {
   nbfc,
   nbfcComplianceDocuments,
@@ -188,6 +191,12 @@ export default async function NbfcReviewPage({
     progress.activeStep === "approval" ||
     progress.activeStep === "activation";
 
+  // ID 119-B (decision 2, 23 Oct): the company PAN in full only for Admin,
+  // CEO and Sales Head; the Business Head gets the last 4.
+  const panShown = seesFullDealerIds((await getSessionUser())?.role)
+    ? row.pan_number
+    : maskPan(row.pan_number);
+
   const masterDetails = {
     nbfcId: row.nbfc_id,
     legalName: row.legal_name,
@@ -195,7 +204,7 @@ export default async function NbfcReviewPage({
     rbiRegistrationNo: row.rbi_registration_no,
     cin: row.cin,
     gstNumber: row.gst_number,
-    panNumber: row.pan_number,
+    panNumber: panShown ?? "",
     nbfcType: row.nbfc_type,
     registeredAddress: row.registered_address,
     activeGeographies: row.active_geographies,
@@ -218,7 +227,7 @@ export default async function NbfcReviewPage({
     rbiRegistrationNo: row.rbi_registration_no ?? "",
     cin: row.cin ?? "",
     gstNumber: row.gst_number ?? "",
-    panNumber: row.pan_number ?? "",
+    panNumber: panShown ?? "",
   };
 
   const signersForOverlay: SignerForOverlay[] = signerRows.map((s) => ({

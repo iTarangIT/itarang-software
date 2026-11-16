@@ -16,6 +16,7 @@ import {
     lastConversation,
     nextWindowOpen,
     planRetry,
+    REATTEMPT_RULES,
     type RetryInput,
     type RetryWindow,
 } from "@/lib/ai-dialer/retryPolicy";
@@ -60,11 +61,16 @@ describe("isAutoRetryable", () => {
     // 13 Nov 2026 — "call every lead except completed and wrong number".
     it.each([
         ["failed", "stopped_by_user"],
-        ["switchboard", null],
         ["failed", "trigger_failed: sip status: 500"],
         ["failed", null],
     ])("retries %s / %s", (status, outcome) => {
         expect(isAutoRetryable(status, outcome)).toBe(true);
+    });
+
+    it("never retries a switchboard / IVR (AI dialer list item 2)", () => {
+        expect(isAutoRetryable("switchboard", null)).toBe(false);
+        expect(REATTEMPT_RULES["IVR / auto-attendant"]).toEqual({ kind: "none" });
+        expect(REATTEMPT_RULES["Tracking number, no voice"]).toEqual({ kind: "none" });
     });
 
     it("never retries a wrong number sent as SIP 404, or a lead never dialable", () => {

@@ -27,7 +27,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-import { requireApiAdmin } from "@/lib/auth/requireApiAdmin";
+import { requireApiAdmin, requireApiExpenseWriter } from "@/lib/auth/requireApiAdmin";
 import { isNextRedirectError, errorMessage } from "@/lib/api-utils";
 import {
   getDriveRun,
@@ -63,7 +63,7 @@ interface StartedResponse {
 
 export async function POST(req: NextRequest) {
   try {
-    const guard = await requireApiAdmin();
+    const guard = await requireApiExpenseWriter(); // ID 166 item 1
     if (!guard.ok) return guard.response;
 
     const body = await req.json().catch(() => ({}));

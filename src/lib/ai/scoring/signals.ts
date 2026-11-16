@@ -138,6 +138,14 @@ export const QualificationSignalsSchema = z.object({
   // Merely naming the financier he already uses is existing_financier_shared.
   emi_finance_interest: yesNo,
 
+  // ── Contact details (signals-2.5.0, AI dialer list item 6) — no band impact.
+  // Digits only, as he said them ("" when not given); validated and stored by
+  // src/lib/ai-dialer/contactCapture.ts, never trusted blindly.
+  owner_name: z.string().catch(""), // the owner's / decision maker's name, if said
+  owner_mobile: z.string().catch(""), // the owner's own mobile, if he gave it
+  alternate_number: z.string().catch(""), // any other number he asked us to call
+  complaint_text: z.string().catch(""), // one line: what is wrong, when a complaint
+
   // ── Hard negative ──
   disqualifier: z.enum(DISQUALIFIERS).catch("none"),
 

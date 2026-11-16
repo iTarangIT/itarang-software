@@ -137,6 +137,16 @@ export function canReactivateLead(role: string | null | undefined): boolean {
 }
 
 /**
+ * ID 233: Mark lost on a lead with NO owner (test rows, broken imports) —
+ * Admin, Sales Head, CEO. A lead with an owner is still closed by its owner.
+ */
+export const UNOWNED_MARK_LOST_ROLES = ["admin", "sales_head", "ceo"] as const;
+
+export function canMarkUnownedLeadLost(role: string | null | undefined): boolean {
+  return (UNOWNED_MARK_LOST_ROLES as readonly string[]).includes(role ?? "");
+}
+
+/**
  * Transfer to ASM (12 Oct): the inside-sales rep who owns the lead, or a
  * manager — Sales Head, Partner, CEO, Admin — on any lead. The ASM gets a bell
  * that opens the lead (transferToAsm.ts notifyAsmOfTransfer).

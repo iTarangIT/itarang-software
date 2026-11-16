@@ -9,7 +9,6 @@ import { LEADS_PAGE_ROLES } from "@/lib/leads/access";
 import {
   findExistingLeadByPhone,
   recordLeadCreated,
-  recordReinquiry,
   stampLeadSource,
 } from "@/lib/leads/leadSource";
 import {
@@ -40,12 +39,14 @@ export async function POST(req: NextRequest, { params }: any) {
       return NextResponse.json({ success: false, error: "Scraper lead not found" }, { status: 404 });
     }
 
-    // 2. ID 81: the SHARED duplicate check (last 10 digits). A known dealer is a
-    //    Re-inquiry on the existing lead, never a second copy.
+    // 2. ID 81: the SHARED duplicate check (last 10 digits). A known dealer is
+    //    never a second copy. ID 249: and not a Re-inquiry either — a scraped
+    //    listing is not the dealer coming back, so nothing is written on the
+    //    existing lead (no line, no Last activity, no bell); the response says
+    //    it is already in CRM.
     const existingId = await findExistingLeadByPhone(scraperLead.phone);
     if (existingId) {
-      await recordReinquiry({ leadId: existingId, door: "scraper", actorId: user.id, note: scraperLead.name ?? null });
-      return NextResponse.json({ success: true, dealerLeadId: existingId, alreadyExisted: true });
+      return NextResponse.json({ success: true, dealerLeadId: existingId, alreadyExisted: true, alreadyInCrm: true });
     }
 
     // 3. Promote — insert into dealer_leads

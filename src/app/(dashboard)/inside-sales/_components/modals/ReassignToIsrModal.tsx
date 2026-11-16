@@ -13,6 +13,7 @@ import { toast } from "sonner";
 import { Modal } from "../Modal";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { NeodoveMoveOption, moveNeodoveCampaign } from "@/components/leads/NeodoveMoveOption";
 import { InfoTip } from "@/components/ui/info-tip";
 import type { UserOption } from "@/lib/admin/types";
 
@@ -31,6 +32,7 @@ export function ReassignToIsrModal({ open, onClose, leadId, currentOwnerId, onSu
     const [targetId, setTargetId] = useState("");
     const [reason, setReason] = useState("");
     const [submitting, setSubmitting] = useState(false);
+    const [moveNeodove, setMoveNeodove] = useState(false);
 
     const usersQuery = useQuery<{ success: true; data: { users: UserOption[] } }>({
         queryKey: ["admin-user-options", "inside_sales_rep"],
@@ -66,6 +68,8 @@ export function ReassignToIsrModal({ open, onClose, leadId, currentOwnerId, onSu
             const json = await res.json().catch(() => null);
             if (!res.ok || !json?.success) throw new Error(json?.error?.message ?? "Reassign failed");
             toast.success("Lead reassigned.");
+            // ID 235: the NeoDove campaign moves with the owner when ticked.
+            if (json.data?.affected > 0 && moveNeodove) await moveNeodoveCampaign(leadId, targetId);
             setTargetId("");
             setReason("");
             onSuccess();
@@ -116,6 +120,7 @@ export function ReassignToIsrModal({ open, onClose, leadId, currentOwnerId, onSu
                         <InfoTip>Same rules as Reassign on the Leads page.</InfoTip>
                     </p>
                 </div>
+                <NeodoveMoveOption leadId={leadId} targetUserId={targetId} checked={moveNeodove} onChange={setMoveNeodove} />
                 <div>
                     <Label>
                         Reason <span className="text-rose-600">*</span>

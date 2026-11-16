@@ -341,8 +341,7 @@ describe("vocabulary invariants", () => {
         expect(NON_CONVERSATION_STATUSES).not.toContain("completed");
         for (const s of NON_CONVERSATION_STATUSES) expect(attempted.has(s)).toBe(true);
         // D2 — a switchboard is never re-queued; every other non-conversation is.
-        // 13 Nov 2026 — every non-conversation is re-queued, switchboard included.
-        expect([...RETRYABLE_STATUSES]).toEqual([...NON_CONVERSATION_STATUSES]);
+        expect([...RETRYABLE_STATUSES]).toEqual(NON_CONVERSATION_STATUSES.filter((s) => s !== "switchboard"));
         expect(TERMINAL_STATUSES).toContain("skipped");
         expect(TERMINAL_STATUSES).not.toContain("pending");
     });

@@ -2,6 +2,7 @@
 // can be tested without a database. Storage and sending: dialerAlerts.ts.
 
 import { DEFAULT_PROBE_NUMBER } from "./carrierPause";
+import { zeroAnswerMinDials } from "./zeroAnswer";
 
 export const DIALER_ALERTS_SETTINGS_KEY = "dialer_alerts";
 export const DEFAULT_ALERT_EMAILS = ["it@itarang.com"];
@@ -19,6 +20,8 @@ export type DialerAlertSettings = {
     agentVersion: string;
     /** "Change tested" line printed on the readout. */
     changeTested: string;
+    /** AI dialer list item 5 — dials today with no human before the zero-answer alert. */
+    zeroAnswerMinDials: number;
     updatedBy: string | null;
     updatedAt: string | null;
 };
@@ -46,6 +49,7 @@ export function parseDialerAlertSettings(
         probeNumber: normaliseProbeNumber(value.probe_number as string) ?? DEFAULT_PROBE_NUMBER,
         agentVersion: typeof value.agent_version === "string" ? value.agent_version.slice(0, 40) : "",
         changeTested: typeof value.change_tested === "string" ? value.change_tested.slice(0, 200) : "",
+        zeroAnswerMinDials: zeroAnswerMinDials(value.zero_answer_min_dials),
         updatedBy: typeof value.updated_by === "string" ? value.updated_by : null,
         updatedAt,
     };

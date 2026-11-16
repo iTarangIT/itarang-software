@@ -64,7 +64,7 @@ export async function sendDealerCorrectionNotificationEmail(
             Open correction form
           </a>
           <p style="margin: 12px 0 0; font-size: 12px; color: #64748b;">
-            This secure link is valid for 14 days. No login required.
+            This secure link is valid for 72 hours. No login required; to see the documents you uploaded earlier, enter the code we send to your registered mobile.
           </p>
         </div>
       `

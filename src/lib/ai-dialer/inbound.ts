@@ -26,6 +26,8 @@ import { classifyCallEnd, dealerSpoke } from "./campaignLeadStatus";
 import { buildCallbackBrief, type CallbackKind } from "./callbackBrief";
 import { callbackDueDetail } from "./callCategory";
 import { parseFlag } from "./dispositionV3";
+import { spokenNameOverride } from "./spokenNameStore";
+import { leadIdsForContactPhone } from "./contactStore";
 import {
     callerKey,
     inboundBranch,
@@ -62,19 +64,34 @@ export async function hasInboundTable(): Promise<boolean> {
  * last ten digits; when several leads share the number, the one Priya dialled
  * last wins, then the most recently updated.
  */
-export async function lookupInbound(callerPhone: string): Promise<InboundMatch> {
+export async function lookupInbound(
+    callerPhone: string,
+    opts: { leadId?: string | null } = {},
+): Promise<InboundMatch> {
     const empty: InboundMatch = { lead: null, openCallback: null, lastOutcome: null };
     const key = callerKey(callerPhone);
-    if (!key) return empty;
+    if (!key && !opts.leadId) return empty;
     try {
         const v3 = await hasDialDispositionTables();
-        const lead = rowsOf<{
+        type LeadRow = {
             id: string;
             shop_name: string | null;
             dealer_name: string | null;
             language: string | null;
             city: string | null;
-        }>(
+        };
+        // AI dialer list item 4 — the lead the init webhook matched wins: when
+        // several leads share a number, re-matching at post-call time could
+        // pick a different one (another was dialled in between).
+        let lead = opts.leadId
+            ? rowsOf<LeadRow>(
+                  await db.execute(sql`
+                      SELECT dl.id, dl.shop_name, dl.dealer_name, dl.language, dl.city
+                        FROM dealer_leads dl WHERE dl.id = ${opts.leadId}
+                  `),
+              )[0]
+            : undefined;
+        if (!lead && key) lead = rowsOf<LeadRow>(
             await db.execute(sql`
                 SELECT dl.id, dl.shop_name, dl.dealer_name, dl.language, dl.city
                   FROM dealer_leads dl
@@ -84,6 +101,19 @@ export async function lookupInbound(callerPhone: string): Promise<InboundMatch> 
                  LIMIT 1
             `),
         )[0];
+        // AI dialer list item 6 — the owner calling back from the mobile he
+        // (or his staff) gave on an AI call (E-379).
+        if (!lead && key) {
+            const viaContact = (await leadIdsForContactPhone(key))[0];
+            if (viaContact) {
+                lead = rowsOf<LeadRow>(
+                    await db.execute(sql`
+                        SELECT dl.id, dl.shop_name, dl.dealer_name, dl.language, dl.city
+                          FROM dealer_leads dl WHERE dl.id = ${viaContact}
+                    `),
+                )[0];
+            }
+        }
         if (!lead) return empty;
         const cb = await openCallbackForLead(lead.id);
         const last = v3
@@ -100,6 +130,7 @@ export async function lookupInbound(callerPhone: string): Promise<InboundMatch> 
             lead: {
                 id: lead.id,
                 shopName: lead.shop_name,
+                spokenNameOverride: await spokenNameOverride(lead.id),
                 dealerName: lead.dealer_name,
                 language: lead.language,
                 city: lead.city,
@@ -192,11 +223,10 @@ export async function handleInboundPostCall(call: InboundPostCall, now: Date = n
     try {
         let row = await findInboundRow(call);
         if (row?.handled_at) return;
-        const match = row?.lead_id
-            ? await lookupInbound(call.callerPhone ?? "")
-            : call.callerPhone
-              ? await lookupInbound(call.callerPhone)
-              : { lead: null, openCallback: null, lastOutcome: null };
+        const match =
+            row?.lead_id || call.callerPhone
+                ? await lookupInbound(call.callerPhone ?? "", { leadId: row?.lead_id ?? null })
+                : { lead: null, openCallback: null, lastOutcome: null };
         const branch = (row?.branch as InboundBranch | undefined) ?? inboundBranch(match, now);
         if (!row && (await hasInboundTable())) {
             // No init webhook (not configured yet): log it now.
@@ -441,18 +471,32 @@ export async function sweepMissedInbound(now: Date = new Date()): Promise<number
     if (!(await hasInboundTable())) return 0;
     let n = 0;
     try {
-        const missed = rowsOf<{ id: string; caller_phone: string; call_sid: string | null }>(
+        // AI dialer list item 4 — a missed / call-now inbound is "returned" when
+        // the callback it opened is done (a person reached the dealer).
+        await db.execute(sql`
+            UPDATE inbound_calls i
+               SET returned_at = cb.completed_at, updated_at = now()
+              FROM lead_callbacks cb
+             WHERE i.callback_id = cb.id
+               AND i.return_due_at IS NOT NULL
+               AND i.returned_at IS NULL
+               AND cb.status = 'done'
+               AND cb.completed_at IS NOT NULL
+               AND cb.completed_at >= i.created_at
+        `).catch((e) => console.warn("[inbound] returned_at not stamped:", e instanceof Error ? e.message : e));
+
+        const missed = rowsOf<{ id: string; caller_phone: string; call_sid: string | null; lead_id: string | null }>(
             await db.execute(sql`
                 UPDATE inbound_calls
                    SET handled_at = now(), answered = false, updated_at = now()
                  WHERE handled_at IS NULL
                    AND created_at < ${new Date(now.getTime() - INBOUND_MISSED_AFTER_MS).toISOString()}::timestamptz
-                RETURNING id, caller_phone, call_sid
+                RETURNING id, caller_phone, call_sid, lead_id
             `),
         );
         for (const m of missed) {
             n++;
-            const match = await lookupInbound(m.caller_phone);
+            const match = await lookupInbound(m.caller_phone, { leadId: m.lead_id });
             const followUp: InboundFollowUp = { kind: "return_call", dueAt: new Date(now.getTime() + INBOUND_RETURN_MS) };
             if (!match.lead) {
                 await alertUnknownCaller(m.caller_phone, false);

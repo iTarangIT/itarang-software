@@ -36,7 +36,7 @@ import {
 } from "@/lib/scraper-enrichment";
 import { normalizeBusinessType } from "@/lib/leads/businessType";
 import { LEAD_ORIGINS, type LeadOrigin } from "@/lib/leads/leadSourceVocab";
-import { recordLeadsCreatedBulk, recordReinquiries, stampLeadSourceBulk } from "@/lib/leads/leadSource";
+import { recordLeadsCreatedBulk, stampLeadSourceBulk } from "@/lib/leads/leadSource";
 import { resolveLeadCampaign } from "@/lib/leads/acquisitionCampaigns";
 
 // Same ceiling the bulk wizard enforces (MAX_UPLOAD_ROWS). Without it this
@@ -86,8 +86,6 @@ export const POST = withErrorHandler(async (req: Request) => {
     return errorResponse("Pick how these dealers were found (Found via).", 400);
   }
   const insertedIds: string[] = [];
-  // ID 81: the dealers this sheet found again — each gets a Re-inquiry.
-  const known: { id: string; note: string | null }[] = [];
   if (leads.length > MAX_IMPORT_ROWS) {
     return errorResponse(
       `Too many rows — ${leads.length} received, limit is ${MAX_IMPORT_ROWS}. Use Bulk Lead Upload for larger sheets.`,
@@ -168,8 +166,6 @@ export const POST = withErrorHandler(async (req: Request) => {
       canonicalCity ?? "",
       existingByPhone.get(phone),
     );
-
-    if (duplicateLeadId) known.push({ id: duplicateLeadId, note: str(lead.dealer_name) || null });
 
     try {
       switch (outcome) {
@@ -260,19 +256,19 @@ export const POST = withErrorHandler(async (req: Request) => {
   }
 
   // ID 81: Entered via = Bulk upload, Found via = what the uploader picked,
-  // the campaign when one was picked, and "Lead created" on each new lead;
-  // a Re-inquiry on each dealer the sheet found again. Best-effort (E-314
-  // columns) — the E-317 lock keeps any value already there.
+  // the campaign when one was picked, and "Lead created" on each new lead.
+  // Best-effort (E-314 columns) — the E-317 lock keeps any value already there.
+  // ID 249: a dealer the sheet found again gets NO Re-inquiry (an upload is not
+  // the dealer coming back) — it is counted in duplicate_skipped, which the
+  // modal shows as "already in CRM".
   await stampLeadSourceBulk(insertedIds, { door: "bulk_upload", origin: origin as LeadOrigin, campaignId });
   await recordLeadsCreatedBulk(insertedIds, { door: "bulk_upload", actorId: user.id });
-  const reinquiries = await recordReinquiries(known, { door: "bulk_upload", actorId: user.id });
 
   return NextResponse.json({
     success: true,
     ...result,
     business_type_unrecognised: businessTypeUnrecognised,
     business_type_saved: !businessTypeColumnMissing,
-    reinquiries,
     // Back-compat: the modal reads `skipped`. Everything that didn't insert.
     skipped:
       result.duplicate_skipped +

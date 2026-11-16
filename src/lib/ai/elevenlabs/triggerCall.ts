@@ -9,6 +9,7 @@ import { openingLanguageOverride } from "@/lib/ai-dialer/callLanguage";
 import { ElevenLabsCallPayload, ElevenLabsCallResponse } from "./types";
 import { redialHints } from "@/lib/ai-dialer/dispositionV3";
 import { lastDispositionRuleFor } from "@/lib/ai/storage/dialDisposition";
+import { spokenNameFor } from "@/lib/ai-dialer/spokenNameStore";
 
 // One ElevenLabs call per (lead, phone, day). Same rationale as Bolna —
 // stops QStash retries from billing 3x for the same daily outreach attempt.
@@ -156,9 +157,15 @@ export async function triggerElevenLabsCall(
     // Look up by every storage variant of the input phone so a +91 caller
     // can find a 10-digit row and vice-versa during the format transition.
     const lookupVariants = phoneLookupVariants(payload.phone);
-    let lead = await db.query.dealerLeads.findFirst({
-      where: (l, { inArray }) => inArray(l.phone, lookupVariants),
-    });
+    // Dialling a captured owner / alternate number: the lead is the one asked
+    // for, not whoever owns that number.
+    let lead = payload.dialPhone && payload.leadId
+      ? await db.query.dealerLeads.findFirst({
+          where: (l, { eq }) => eq(l.id, payload.leadId),
+        })
+      : await db.query.dealerLeads.findFirst({
+          where: (l, { inArray }) => inArray(l.phone, lookupVariants),
+        });
 
     if (!lead) {
       console.log(
@@ -207,7 +214,7 @@ export async function triggerElevenLabsCall(
     const isFollowup = followUpHistory.length > 0;
     const persistentMemory = lead.memory ? JSON.stringify(lead.memory) : "";
 
-    const recipientPhone = normalizeIndianPhone(lead.phone ?? payload.phone);
+    const recipientPhone = normalizeIndianPhone(payload.dialPhone ?? lead.phone ?? payload.phone);
     if (!recipientPhone) {
       console.error(
         "[ELEVENLABS] Invalid phone (cannot normalize to E.164):",
@@ -249,6 +256,9 @@ export async function triggerElevenLabsCall(
       owner_name: ownerName,
       location,
       shop_name: shopName,
+      // AI dialer list item 3 — the short name the agent says ("Bansal Battery
+      // House", not the full Maps title). A rep's override wins (E-378).
+      shop_name_spoken: await spokenNameFor({ id: lead.id, shop_name: lead.shop_name }),
       language,
       interest,
       status,

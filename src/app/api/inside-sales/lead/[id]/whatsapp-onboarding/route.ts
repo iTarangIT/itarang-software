@@ -14,14 +14,28 @@
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { prepareOnboardingInvite, sendOnboardingInvite } from "@/lib/leads/onboardingInvite";
+import { assertOwner, ForbiddenLeadAccessError } from "@/lib/leads/ownership";
 
-const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
+// ID 252 (decided 12 Nov): the Sales Head works the leads HE OWNS like an ASM.
+// This route has no owner check for the other roles (unchanged); the Sales Head
+// gets one below, so anyone else's lead stays view-only for him.
+const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin", "partner", "sales_head"];
 
 export const POST = withErrorHandler(
     async (_req: Request, ctx: { params: Promise<{ id: string }> }) => {
-        await requireRole(MUTATE_ROLES);
+        const user = await requireRole(MUTATE_ROLES);
         const { id } = await ctx.params;
         if (!id) return errorResponse("Lead id required", 400);
+        if (user.role === "sales_head") {
+            try {
+                await assertOwner(id, user.id);
+            } catch (err) {
+                if (err instanceof ForbiddenLeadAccessError) {
+                    return errorResponse("Only the lead's owner can send the onboarding invite.", 403);
+                }
+                throw err;
+            }
+        }
 
         const prep = await prepareOnboardingInvite(id);
         if (!prep.ok) {

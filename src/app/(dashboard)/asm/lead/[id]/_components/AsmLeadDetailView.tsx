@@ -3,8 +3,9 @@
 import { isOpen, type LeadStatus, type LostReason } from "@/lib/lifecycle/transitions";
 import { useCallback, useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, AlertTriangle, ArrowLeft } from "lucide-react";
-import Link from "next/link";
+import { Loader2, AlertTriangle } from "lucide-react";
+import { BackToPrevious } from "@/components/layout/BackToPrevious";
+import { roleHome } from "@/lib/nav/backTarget";
 import { hasApprovedQuote, type LeadDetailBundle, type LeadDetailCommercials } from "@/lib/inside-sales/types";
 import { LeadDetailHeader } from "@/app/(dashboard)/inside-sales/lead/[id]/_components/LeadDetailHeader";
 import { LeadActivityPanes } from "@/app/(dashboard)/inside-sales/lead/[id]/_components/LeadActivityPanes";
@@ -39,7 +40,7 @@ type Props = {
 };
 
 /** The roles GET/POST /api/inside-sales/lead/[id]/reassign accept (its MUTATE_ROLES). */
-const REASSIGN_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
+const REASSIGN_ROLES = ["inside_sales_rep", "asm", "admin", "partner", "sales_head"];
 
 export function AsmLeadDetailView({ leadId, viewerId, viewerRole }: Props) {
     const qc = useQueryClient();
@@ -145,10 +146,11 @@ export function AsmLeadDetailView({ leadId, viewerId, viewerRole }: Props) {
                         {(query.error as Error | undefined)?.message ?? "Lead not found or no longer accessible."}
                     </div>
                 </div>
-                <Link href="/asm" className="mt-4 inline-flex items-center gap-1 text-sm text-emerald-700 hover:underline">
-                    <ArrowLeft className="h-4 w-4" />
-                    Back to queue
-                </Link>
+                <BackToPrevious
+                    homeHref={roleHome(viewerRole)}
+                    className="mt-4 inline-flex items-center gap-1 text-sm text-emerald-700 hover:underline"
+                    iconClassName="h-4 w-4"
+                />
             </div>
         );
     }
@@ -164,6 +166,8 @@ export function AsmLeadDetailView({ leadId, viewerId, viewerRole }: Props) {
                 bundle={bundle}
                 viewerId={viewerId}
                 viewerRole={viewerRole}
+                // ID 232: Back → the page this lead was opened from; else own home queue.
+                backHref={roleHome(viewerRole)}
                 onUpdated={invalidate}
                 statusModalActions={["mark_converted", "mark_lost"]}
                 onStatusModal={(a) => {

@@ -3,8 +3,8 @@
 import type { LostReason } from "@/lib/lifecycle/transitions";
 import { useState, useCallback, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, AlertTriangle, ArrowLeft } from "lucide-react";
-import Link from "next/link";
+import { Loader2, AlertTriangle } from "lucide-react";
+import { BackToPrevious } from "@/components/layout/BackToPrevious";
 import { hasApprovedQuote, type LeadDetailBundle, type LeadDetailCommercials } from "@/lib/inside-sales/types";
 import { LeadDetailHeader } from "./LeadDetailHeader";
 import { LeadActivityPanes } from "./LeadActivityPanes";
@@ -22,6 +22,7 @@ import { EscalateModal } from "../../../_components/modals/EscalateModal";
 import { ClaimLeadConfirm } from "../../../_components/modals/ClaimLeadConfirm";
 import { canExportLeadHistory } from "@/lib/leads/access";
 import { CallbackBriefCard } from "@/components/leads/callback-brief-card";
+import { AiCallProfileCard } from "@/components/leads/ai-call-profile-card";
 import { InfoTip } from "@/components/ui/info-tip";
 
 export const LEAD_NOT_ACCESSIBLE =
@@ -41,7 +42,7 @@ export type ActiveModal =
     | "claim";
 
 /** ID 155: the roles POST/GET /api/inside-sales/lead/[id]/reassign accept (its MUTATE_ROLES). */
-const TEAM_REASSIGN_ROLES = ["inside_sales_rep", "asm", "admin", "partner"];
+const TEAM_REASSIGN_ROLES = ["inside_sales_rep", "asm", "admin", "partner", "sales_head"];
 
 type Props = {
     leadId: string;
@@ -140,10 +141,11 @@ export function LeadDetailView({ leadId, viewerId, viewerRole, backHref = "/insi
                         )}
                     </div>
                 </div>
-                <Link href={backHref} className="mt-4 inline-flex items-center gap-1 text-sm text-blue-700 hover:underline">
-                    <ArrowLeft className="h-4 w-4" />
-                    Back
-                </Link>
+                <BackToPrevious
+                    homeHref={backHref}
+                    className="mt-4 inline-flex items-center gap-1 text-sm text-blue-700 hover:underline"
+                    iconClassName="h-4 w-4"
+                />
             </div>
         );
     }
@@ -167,6 +169,7 @@ export function LeadDetailView({ leadId, viewerId, viewerRole, backHref = "/insi
 
             {/* D8 — the promised callback and its brief, before anything else. */}
             <CallbackBriefCard leadId={leadId} className="mx-6 mt-3" />
+            <AiCallProfileCard leadId={leadId} className="mx-6 mt-3" />
 
             {staleInfo && (
                 <div className="px-6 pt-3">

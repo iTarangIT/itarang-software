@@ -32,6 +32,7 @@ import { SalesScanAttentionPanel } from "./SalesScanAttentionPanel";
 import { NeedsAttentionPanel } from "./NeedsAttentionPanel";
 
 import { onFreshFileClick } from "@/lib/storage/freshFileLink";
+import type { ExpenseAccess } from "@/lib/auth/requireApiAdmin";
 interface ExtractedInvoice {
   vendor: string | null;
   amount: number | null;
@@ -98,8 +99,11 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out;
 }
 
-export function ExpenseTrackerView() {
+export function ExpenseTrackerView({ access }: { access: ExpenseAccess }) {
   const qc = useQueryClient();
+  // ID 166 item 1: only Admin / Sales Head add or edit; Finance clears flags
+  // and sets folder doc_kind; the CEO views. The server enforces the same.
+  const canWrite = access === "write";
 
   // Upload / extract state
   // C29: ?tab=settings opens the Drive folders; the list is the default.
@@ -402,23 +406,23 @@ export function ExpenseTrackerView() {
           {/* E-216 — automated Drive ingestion. Above the manual uploader because
               it is now the main way invoices arrive; the uploader is the exception
               for a bill that never made it into a folder. */}
-          <DriveFoldersPanel />
+          <DriveFoldersPanel access={access} />
 
           {/* E-280 — the revenue half of the same accounts folder. Registered
               separately with the include/exclude filters inverted, so the purchase
               scanner and this one can never read each other's side. */}
-          <DriveFoldersPanel config={SALES_PANEL} />
+          <DriveFoldersPanel config={SALES_PANEL} access={access} />
 
           {/* E-280 — sales files that never became an invoice (missing from
               revenue) and invoices that imported but look wrong. Renders nothing
               when both are empty. */}
-          <SalesScanAttentionPanel />
+          <SalesScanAttentionPanel access={access} />
         </div>
       ) : (
         <div className="space-y-8">
           {/* E-216 — anything imported that a human still needs to look at. Renders
               nothing at all when the queue is empty. */}
-          <NeedsAttentionPanel />
+          <NeedsAttentionPanel access={access} />
           {/* Recorded expenses */}
           <div className="p-6 rounded-2xl bg-white border border-gray-100 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
@@ -519,7 +523,7 @@ export function ExpenseTrackerView() {
                   </thead>
                   <tbody>
                     {recordedSorted.map((row) => (
-                      <RecordedRow key={row.id} row={row} />
+                      <RecordedRow key={row.id} row={row} canEdit={canWrite} />
                     ))}
                   </tbody>
                 </table>
@@ -535,7 +539,8 @@ export function ExpenseTrackerView() {
             )}
           </div>
 
-          {/* Upload + extract */}
+          {/* Upload + extract (Admin / Sales Head only — ID 166 item 1) */}
+          {canWrite && (
           <div className="p-6 rounded-2xl bg-white border border-gray-100 shadow-sm space-y-5">
             <div className="flex flex-wrap items-center gap-3">
               <label className="cursor-pointer inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-dashed border-gray-300 bg-gray-50 hover:bg-gray-100 text-sm font-medium text-gray-700">
@@ -729,6 +734,7 @@ export function ExpenseTrackerView() {
               </div>
             )}
           </div>
+          )}
         </div>
       )}
     </div>
@@ -794,7 +800,7 @@ function BulkSummaryPanel({ summary }: { summary: BulkSummary }) {
   );
 }
 
-function RecordedRow({ row }: { row: RecordedExpense }) {
+function RecordedRow({ row, canEdit }: { row: RecordedExpense; canEdit: boolean }) {
   const qc = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [dept, setDept] = useState(row.department ?? EXPENSE_DEPARTMENTS[0].value);
@@ -944,7 +950,7 @@ function RecordedRow({ row }: { row: RecordedExpense }) {
               <X className="w-4 h-4" />
             </button>
           </div>
-        ) : (
+        ) : canEdit ? (
           <button
             onClick={() => setEditing(true)}
             className="text-gray-400 hover:text-brand-600 inline-flex items-center gap-1"
@@ -952,7 +958,7 @@ function RecordedRow({ row }: { row: RecordedExpense }) {
           >
             <Pencil className="w-3.5 h-3.5" />
           </button>
-        )}
+        ) : null}
       </td>
     </tr>
   );

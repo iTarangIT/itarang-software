@@ -6,17 +6,21 @@
 //   campaign  an ACQUISITION campaign (acquisition_campaigns, E-314) — separate
 //             from dialler campaigns (dialer_campaigns / neodove_campaigns).
 //
-// Every creation path also logs a "Lead created" event, and a known dealer
-// arriving again (the shared duplicate check, dedupe.ts) logs a "Re-inquiry"
-// on the existing lead instead of a second copy.
+// Every creation path also logs a "Lead created" event. A known dealer
+// arriving again (the shared duplicate check, dedupe.ts) is never a second
+// copy. ID 249 (12 Nov): a "Re-inquiry" is written ONLY when a PERSON brings
+// the dealer in again — a rep / ISR creating a lead (dealer-leads POST,
+// inside-sales createLead) or the WhatsApp Assistant (record_reinquiry), plus
+// NeoDove (inbound.ts, pending Kartik). Scraper runs and promotes, bulk
+// uploads, /leads Import and AI-dialer lists write nothing on the existing
+// lead; they only count it as "already in CRM" in their summary.
 //
 // The columns are E-314 and not in schema.ts: writes run under a SAVEPOINT in
 // a caller's transaction, so a DB without E-314 loses the stamp and nothing else.
 //
 // Paths that bring in many leads at once (bulk upload, /leads Import, the
-// scraper, AI-dialer lists) use the *Bulk / recordReinquiries helpers: one
-// statement for the batch instead of a transaction per lead, and one summary
-// notification instead of one per dealer.
+// scraper, AI-dialer lists) use the *Bulk helpers: one statement for the batch
+// instead of a transaction per lead.
 
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
@@ -80,7 +84,8 @@ export async function stampLeadSource(
 /** "Lead created" — with the ownership hop when the creator keeps the lead (ID 83). */
 export async function recordLeadCreated(
     exec: Tx | typeof db,
-    input: { leadId: string; actorId: string | null; door: LeadDoor; ownerId: string | null },
+    /** ID 224: when the lead really came in (NeoDove: the call), default now. */
+    input: { leadId: string; actorId: string | null; door: LeadDoor; ownerId: string | null; at?: Date },
 ): Promise<void> {
     const write = (tx: Tx) =>
         writeTouchpoint(
@@ -88,6 +93,7 @@ export async function recordLeadCreated(
                 dealerLeadId: input.leadId,
                 touchpointType: "lead_created",
                 performedBy: input.actorId,
+                ...(input.at ? { performedAt: input.at } : {}),
                 remarks: `Lead created (${input.door.replace(/_/g, " ")})${input.ownerId ? " — kept by the creator" : ""}.`,
                 syncMethod: input.actorId ? "manual" : "system",
                 ...(input.ownerId ? { fromOwnerId: null, toOwnerId: input.ownerId } : {}),
@@ -237,6 +243,11 @@ export async function notifyReinquiry(input: ReinquiryInput): Promise<void> {
  * summary each, not a notification per dealer.
  *
  * Returns how many lines were written. Never throws.
+ *
+ * ID 249: NO caller since 12 Nov — every bulk path (scraper, uploads, /leads
+ * Import, AI-dialer lists) was an automated arrival and stopped writing
+ * Re-inquiries. Kept for a future person-driven batch; do not wire an
+ * automated path back to it.
  */
 export async function recordReinquiries(
     known: { id: string; note?: string | null }[],
