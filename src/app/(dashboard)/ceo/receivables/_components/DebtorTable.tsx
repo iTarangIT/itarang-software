@@ -9,6 +9,7 @@ import Link from "next/link";
 import { ChevronDown, ChevronRight, FileText } from "lucide-react";
 
 import FreshFileLink from "@/components/shared/FreshFileLink";
+import { SortableTh, sortRows, useUrlTableSort, type SortSpec } from "@/components/shared/TableSort";
 import type { ReceivableRow } from "@/lib/dashboard/receivables";
 import { receivableFileNote, receivableSourceLabel } from "@/lib/dashboard/receivablesAgeing";
 import { invoiceStatusLabel } from "@/lib/sales/invoiceStatusLabel";
@@ -54,7 +55,18 @@ function DealerName({ name, accountId, leadId }: { name: string; accountId: stri
     );
 }
 
-export default function DebtorTable({ debtors, owed }: { debtors: Debtor[]; owed: number }) {
+// ID 243 — header sort, kept in the link as ?debtor_sort=&debtor_dir=. Share orders as Receivable.
+const DEBTOR_SORT: SortSpec<Debtor>[] = [
+    { key: "name", type: "text" },
+    { key: "invoices", type: "number", value: (d) => d.rows.length },
+    { key: "oldest", type: "number" },
+    { key: "owed", type: "number" },
+    { key: "share", type: "number", value: (d) => d.owed },
+];
+
+export default function DebtorTable({ debtors: unsorted, owed }: { debtors: Debtor[]; owed: number }) {
+    const { sort, toggle: toggleSort, comparator } = useUrlTableSort(DEBTOR_SORT, { prefix: "debtor_" });
+    const debtors = sortRows(unsorted, comparator);
     const [open, setOpen] = useState<Set<string>>(new Set());
     const toggle = (k: string) =>
         setOpen((prev) => {
@@ -69,11 +81,11 @@ export default function DebtorTable({ debtors, owed }: { debtors: Debtor[]; owed
             <table className="min-w-full text-sm">
                 <thead className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                     <tr>
-                        <th className="px-4 py-3">Dealer / customer</th>
-                        <th className="px-4 py-3 text-right">Invoices</th>
-                        <th className="px-4 py-3 text-right">Oldest (days)</th>
-                        <th className="px-4 py-3 text-right">Receivable</th>
-                        <th className="px-4 py-3 text-right">Share</th>
+                        <SortableTh label="Dealer / customer" sortKey="name" sort={sort} onToggle={toggleSort} className="px-4 py-3" />
+                        <SortableTh label="Invoices" sortKey="invoices" sort={sort} onToggle={toggleSort} className="px-4 py-3" align="right" />
+                        <SortableTh label="Oldest (days)" sortKey="oldest" sort={sort} onToggle={toggleSort} className="px-4 py-3" align="right" />
+                        <SortableTh label="Receivable" sortKey="owed" sort={sort} onToggle={toggleSort} className="px-4 py-3" align="right" />
+                        <SortableTh label="Share" sortKey="share" sort={sort} onToggle={toggleSort} className="px-4 py-3" align="right" />
                     </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">

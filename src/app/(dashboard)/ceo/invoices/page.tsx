@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { SortableTh, useUrlTableSort, type SortSpec } from "@/components/shared/TableSort";
 import { ActionsMenu } from "@/components/ui/actions-menu";
 import { cn } from "@/lib/utils";
 import {
@@ -358,6 +359,20 @@ function SourceBadge({ source }: { source: "zoho" | "drive" | "credit" }) {
   );
 }
 
+// ID 243 — header sort, kept in the page link and done by the API (the list is paged).
+// Keys match INVOICE_SORT_KEYS in lib/dashboard/revenueSource.ts.
+const INVOICE_SORT_SPECS: SortSpec<unknown>[] = [
+  { key: "number", type: "text" },
+  { key: "source", type: "text" },
+  { key: "date", type: "date" },
+  { key: "customer", type: "text" },
+  { key: "status", type: "text" },
+  { key: "match", type: "text" },
+  { key: "reference", type: "text" },
+  { key: "total", type: "number" },
+  { key: "balance", type: "number" },
+];
+
 export default function CEOInvoicesPage() {
   const [from, setFrom] = useState(startOfMonthISO());
   const [to, setTo] = useState(todayISO());
@@ -368,6 +383,13 @@ export default function CEOInvoicesPage() {
   const [matchFilter, setMatchFilter] = useState<UnmatchedStatus[]>(UNMATCHED_STATUSES);
   const [linking, setLinking] = useState<InvoiceRow | null>(null);
   const [page, setPage] = useState(0);
+  const { sort, toggle: toggleSort, query: sortQuery } = useUrlTableSort(INVOICE_SORT_SPECS, { mode: "server" });
+  // A new order starts from the first page.
+  const [pagedFor, setPagedFor] = useState(sortQuery);
+  if (pagedFor !== sortQuery) {
+    setPagedFor(sortQuery);
+    setPage(0);
+  }
   const PAGE_SIZE = 50;
 
   const queryString = useMemo(() => {
@@ -380,8 +402,12 @@ export default function CEOInvoicesPage() {
     if (view === "unmatched") p.set("match_status", matchFilter.join(","));
     p.set("limit", String(PAGE_SIZE));
     p.set("offset", String(page * PAGE_SIZE));
+    if (sort) {
+      p.set("sort", sort.key);
+      p.set("dir", sort.dir);
+    }
     return p.toString();
-  }, [from, to, selectedStatuses, customer, dealerMatch, view, matchFilter, page]);
+  }, [from, to, selectedStatuses, customer, dealerMatch, view, matchFilter, page, sort]);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["ceo-invoices", queryString],
@@ -920,15 +946,15 @@ export default function CEOInvoicesPage() {
               <table data-testid="invoice-table" className="w-full text-sm">
                 <thead>
                   <tr className="text-left text-[10px] text-gray-500 border-b border-gray-100">
-                    <th className="py-2 font-semibold">Invoice #</th>
-                    <th className="py-2 font-semibold">Source</th>
-                    <th className="py-2 font-semibold">Date</th>
-                    <th className="py-2 font-semibold">Customer</th>
-                    <th className="py-2 font-semibold">Status</th>
-                    {unmatchedView && <th className="py-2 font-semibold">Match</th>}
-                    <th className="py-2 font-semibold">Transaction ID</th>
-                    <th className="py-2 font-semibold text-right">Total</th>
-                    <th className="py-2 font-semibold text-right">Balance</th>
+                    <SortableTh label="Invoice #" sortKey="number" sort={sort} onToggle={toggleSort} className="px-0" />
+                    <SortableTh label="Source" sortKey="source" sort={sort} onToggle={toggleSort} className="px-0" />
+                    <SortableTh label="Date" sortKey="date" sort={sort} onToggle={toggleSort} className="px-0" />
+                    <SortableTh label="Customer" sortKey="customer" sort={sort} onToggle={toggleSort} className="px-0" />
+                    <SortableTh label="Status" sortKey="status" sort={sort} onToggle={toggleSort} className="px-0" />
+                    {unmatchedView && <SortableTh label="Match" sortKey="match" sort={sort} onToggle={toggleSort} className="px-0" />}
+                    <SortableTh label="Transaction ID" sortKey="reference" sort={sort} onToggle={toggleSort} className="px-0" />
+                    <SortableTh label="Total" sortKey="total" sort={sort} onToggle={toggleSort} className="px-0" align="right" />
+                    <SortableTh label="Balance" sortKey="balance" sort={sort} onToggle={toggleSort} className="px-0" align="right" />
                     <th className="py-2 font-semibold text-right"></th>
                   </tr>
                 </thead>

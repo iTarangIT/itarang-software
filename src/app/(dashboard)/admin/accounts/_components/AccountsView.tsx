@@ -16,6 +16,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Loader2, Search, Sparkles, UserMinus, UserPlus } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { SortableTh, useUrlTableSort, type SortSpec } from "@/components/shared/TableSort";
 import { LeaverMoveDialog } from "./LeaverMoveDialog";
 import { AssignOwnerDialog, api, fmtDate, inputCls, OwnerSelect, useOwners } from "./shared";
 
@@ -59,6 +60,18 @@ const PAGE = 100;
 // Page 1 of the default tab — what the page fetches on the server (ID 203).
 const DEFAULT_PARAMS = `limit=${PAGE}&offset=0`;
 
+// ID 243 — header sort, kept in the page link and done by the API (the list is paged).
+// Keys match ACCOUNTS_SORT_KEYS in lib/accounts/accountsScreen.ts.
+const SORT_SPECS: SortSpec<unknown>[] = [
+    { key: "name", type: "text" },
+    { key: "gstin", type: "text" },
+    { key: "owner", type: "text" },
+    { key: "came_through", type: "text" },
+    { key: "onboarded_by", type: "text" },
+    { key: "location", type: "text" },
+    { key: "created", type: "date" },
+];
+
 // C10 (wording audit, 2 Nov): short labels so the pill stays on one line.
 export function CameThroughBadge({ value }: { value: string | null }) {
     if (value === "lead")
@@ -91,6 +104,13 @@ export function AccountsView({ initialPage = null }: { initialPage?: ListRespons
     const [ownerFilter, setOwnerFilter] = useState("");
     const [cameThrough, setCameThrough] = useState("");
     const [page, setPage] = useState(0);
+    const { sort, toggle: toggleSort, query: sortQuery } = useUrlTableSort(SORT_SPECS, { mode: "server" });
+    // A new order starts from the first page.
+    const [pagedFor, setPagedFor] = useState(sortQuery);
+    if (pagedFor !== sortQuery) {
+      setPagedFor(sortQuery);
+      setPage(0);
+    }
     const [selected, setSelected] = useState<Set<string>>(new Set());
     const [dialog, setDialog] = useState<null | "assign" | "suggested" | "leaver">(null);
     const [flash, setFlash] = useState<string | null>(null);
@@ -115,8 +135,12 @@ export function AccountsView({ initialPage = null }: { initialPage?: ListRespons
         if (cameThrough) p.set("came_through", cameThrough);
         p.set("limit", String(PAGE));
         p.set("offset", String(page * PAGE));
+        if (sort) {
+            p.set("sort", sort.key);
+            p.set("dir", sort.dir);
+        }
         return p.toString();
-    }, [debouncedQ, tab, ownerFilter, cameThrough, page]);
+    }, [debouncedQ, tab, ownerFilter, cameThrough, page, sort]);
 
     const { data, isLoading, isFetching, error } = useQuery<ListResponse>({
         queryKey: ["admin-accounts", "list", params],
@@ -313,13 +337,13 @@ export function AccountsView({ initialPage = null }: { initialPage?: ListRespons
                                 <th className="w-8 px-3 py-2">
                                     <input type="checkbox" checked={allOnPageSelected} onChange={toggleAll} aria-label="Select all on page" />
                                 </th>
-                                <th className="px-3 py-2 text-left font-semibold">Account</th>
-                                <th className="px-3 py-2 text-left font-semibold">GSTIN</th>
-                                <th className="px-3 py-2 text-left font-semibold">Owner</th>
-                                <th className="px-3 py-2 text-left font-semibold">Came through</th>
-                                <th className="px-3 py-2 text-left font-semibold" title="Named on the onboarding form — information, not credit">Onboarded by</th>
-                                <th className="px-3 py-2 text-left font-semibold">Location</th>
-                                <th className="px-3 py-2 text-left font-semibold">Created</th>
+                                <SortableTh label="Account" sortKey="name" sort={sort} onToggle={toggleSort} className="px-3 text-left" />
+                                <SortableTh label="GSTIN" sortKey="gstin" sort={sort} onToggle={toggleSort} className="px-3 text-left" />
+                                <SortableTh label="Owner" sortKey="owner" sort={sort} onToggle={toggleSort} className="px-3 text-left" />
+                                <SortableTh label="Came through" sortKey="came_through" sort={sort} onToggle={toggleSort} className="px-3 text-left" />
+                                <SortableTh label="Onboarded by" sortKey="onboarded_by" sort={sort} onToggle={toggleSort} className="px-3 text-left" title="Named on the onboarding form — information, not credit" />
+                                <SortableTh label="Location" sortKey="location" sort={sort} onToggle={toggleSort} className="px-3 text-left" />
+                                <SortableTh label="Created" sortKey="created" sort={sort} onToggle={toggleSort} className="px-3 text-left" />
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-border">

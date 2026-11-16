@@ -3,11 +3,12 @@
 // carries a snapshot of the question and answer, because a thread only opens for its owner.
 
 import Link from "next/link";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronUp } from "lucide-react";
 
 import { FeedbackReviewRow } from "@/components/analyst/FeedbackReviewRow";
 import { requireRole } from "@/lib/auth-utils";
-import { hasFeedbackTable, listFeedback, queueCounts, type QueueFilter } from "@/lib/analyst/feedbackStore";
+import { makeComparator, nextSortState, sortRows, type SortSpec, type SortState } from "@/components/shared/tableSortCore";
+import { hasFeedbackTable, listFeedback, queueCounts, type FeedbackRow, type QueueFilter } from "@/lib/analyst/feedbackStore";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "AI Analyst feedback" };
@@ -18,19 +19,43 @@ const FILTERS: { key: QueueFilter; label: string }[] = [
     { key: "all", label: "All" },
 ];
 
+// ID 243 — the review list is cards, not a table, so the shared sort shows as a
+// "Sort by" row of links: same click cycle (sort, reverse, back to the default
+// order: wrong answers first, newest first), kept in the link as ?sort=&dir=.
+const FEEDBACK_SORT: (SortSpec<FeedbackRow> & { label: string })[] = [
+    { key: "date", label: "Date", type: "date", value: (r) => r.updated_at },
+    { key: "rating", label: "Rating", type: "number", value: (r) => (r.rating === "down" ? 0 : 1) },
+    { key: "person", label: "Asked by", type: "text", value: (r) => r.user_name },
+    { key: "status", label: "Status", type: "text" },
+];
+
+function sortHref(show: QueueFilter, next: SortState | null): string {
+    const p = new URLSearchParams();
+    if (show !== "new") p.set("show", show);
+    if (next) {
+        p.set("sort", next.key);
+        p.set("dir", next.dir);
+    }
+    const qs = p.toString();
+    return qs ? `/ceo/analyst/feedback?${qs}` : "/ceo/analyst/feedback";
+}
+
 export default async function AnalystFeedbackPage({
     searchParams,
 }: {
     searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
     const me = await requireRole(["ceo", "admin"]);
-    const { show } = await searchParams;
+    const { show, sort: sortParam, dir: dirParam } = await searchParams;
     const filter: QueueFilter = show === "reviewed" || show === "all" ? show : "new";
+    const sortSpec = FEEDBACK_SORT.find((s) => s.key === sortParam);
+    const sort: SortState | null = sortSpec ? { key: sortSpec.key, dir: dirParam === "desc" ? "desc" : "asc" } : null;
 
     const ready = await hasFeedbackTable();
     const [rows, counts] = ready
         ? await Promise.all([listFeedback(filter), queueCounts()])
         : [[], { new_down: 0, new_up: 0, reviewed: 0 }];
+    const shown = sortSpec && sort ? sortRows(rows, makeComparator(sortSpec, sort.dir)) : rows;
 
     return (
         <div className="space-y-6 pb-12">
@@ -72,12 +97,34 @@ export default async function AnalystFeedbackPage({
                         </span>
                     </div>
 
+                    {rows.length > 1 && (
+                        <div className="flex flex-wrap items-center gap-1.5 text-xs text-gray-500">
+                            <span>Sort by</span>
+                            {FEEDBACK_SORT.map((s) => {
+                                const active = sort?.key === s.key;
+                                return (
+                                    <Link
+                                        key={s.key}
+                                        href={sortHref(filter, nextSortState(sort, s.key, s.type))}
+                                        aria-current={active ? "true" : undefined}
+                                        className={`inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 font-semibold ${
+                                            active ? "bg-brand-50 text-brand-700" : "text-gray-600 hover:bg-gray-100"
+                                        }`}
+                                    >
+                                        {s.label}
+                                        {active && (sort?.dir === "asc" ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />)}
+                                    </Link>
+                                );
+                            })}
+                        </div>
+                    )}
+
                     {rows.length === 0 ? (
                         <p className="rounded-lg border border-gray-200 bg-white p-6 text-sm text-gray-500">
                             {filter === "new" ? "Nothing to review. Every rated answer has been checked." : "No feedback here yet."}
                         </p>
                     ) : (
-                        rows.map((r) => <FeedbackReviewRow key={r.id} row={r} ownerView={r.user_id === me.id} />)
+                        shown.map((r) => <FeedbackReviewRow key={r.id} row={r} ownerView={r.user_id === me.id} />)
                     )}
                 </div>
             )}

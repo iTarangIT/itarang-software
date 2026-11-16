@@ -1,5 +1,7 @@
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import UrlSortTh from "@/components/shared/UrlSortTh";
+import { makeComparator, sortRows, type SortSpec } from "@/components/shared/tableSortCore";
 import { formatIst, formatMinutesAgo, minutesSince } from "@/lib/operations/format";
 import type { JobHealth } from "@/lib/operations/scheduledJobs";
 import type { ScheduledJobsReport, ScheduledJobStatus } from "@/lib/operations/scheduledJobsStatus";
@@ -19,6 +21,15 @@ const HEALTH: Record<JobHealth, { label: string; variant: "success" | "warning" 
   off: { label: "Held", variant: "muted" },
   covered: { label: "Covered", variant: "info" },
 };
+
+// ID 243 — header sort, kept in the link as ?sched_sort=&sched_dir=. Status orders worst first.
+const HEALTH_RANK: Record<JobHealth, number> = { failed: 0, late: 1, never: 2, pending: 3, off: 4, covered: 5, ok: 6 };
+const JOB_SORT: SortSpec<ScheduledJobStatus>[] = [
+  { key: "job", type: "text", value: (j) => j.title },
+  { key: "status", type: "number", value: (j) => HEALTH_RANK[j.health] },
+  { key: "runs", type: "text", value: (j) => j.schedule },
+  { key: "last", type: "date", value: (j) => j.lastStartedAt ?? j.lastFinishedAt },
+];
 
 function istToday(now: Date): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(now);
@@ -53,7 +64,16 @@ function LastRun({ job, today }: { job: ScheduledJobStatus; today: string }) {
   );
 }
 
-export function ScheduledJobsCard({ report }: { report: ScheduledJobsReport }) {
+export function ScheduledJobsCard({
+  report,
+  sort,
+}: {
+  report: ScheduledJobsReport;
+  /** ID 243 — ?sched_sort / ?sched_dir from the page link. */
+  sort?: { key?: string; dir?: string };
+}) {
+  const sortSpec = JOB_SORT.find((s) => s.key === sort?.key);
+  const jobs = sortSpec ? sortRows(report.jobs, makeComparator(sortSpec, sort?.dir === "desc" ? "desc" : "asc")) : report.jobs;
   const now = new Date(report.generatedAt);
   const today = istToday(now);
   const count = (h: JobHealth) => report.jobs.filter((j) => j.health === h).length;
@@ -92,15 +112,15 @@ export function ScheduledJobsCard({ report }: { report: ScheduledJobsReport }) {
           <table className="w-full min-w-[56rem] text-sm">
             <thead>
               <tr className="border-b border-border text-left text-[11px] font-semibold uppercase tracking-wide text-ink-muted">
-                <th className="py-2 pr-3">Job</th>
-                <th className="py-2 pr-3">Status</th>
-                <th className="py-2 pr-3">Runs</th>
-                <th className="py-2 pr-3">Last run</th>
+                <UrlSortTh label="Job" sortKey="job" type="text" prefix="sched_" className="py-2 pl-0 pr-3" />
+                <UrlSortTh label="Status" sortKey="status" type="number" prefix="sched_" className="py-2 pl-0 pr-3" />
+                <UrlSortTh label="Runs" sortKey="runs" type="text" prefix="sched_" className="py-2 pl-0 pr-3" />
+                <UrlSortTh label="Last run" sortKey="last" type="date" prefix="sched_" className="py-2 pl-0 pr-3" />
                 <th className="py-2 pl-3">Notes</th>
               </tr>
             </thead>
             <tbody>
-              {report.jobs.map((job) => {
+              {jobs.map((job) => {
                 const h = HEALTH[job.health];
                 return (
                   <tr key={job.id} className="border-b border-border/60 align-top last:border-0">
