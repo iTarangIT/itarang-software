@@ -84,7 +84,8 @@ export async function stampLeadSource(
 /** "Lead created" — with the ownership hop when the creator keeps the lead (ID 83). */
 export async function recordLeadCreated(
     exec: Tx | typeof db,
-    input: { leadId: string; actorId: string | null; door: LeadDoor; ownerId: string | null },
+    /** ID 224: when the lead really came in (NeoDove: the call), default now. */
+    input: { leadId: string; actorId: string | null; door: LeadDoor; ownerId: string | null; at?: Date },
 ): Promise<void> {
     const write = (tx: Tx) =>
         writeTouchpoint(
@@ -92,6 +93,7 @@ export async function recordLeadCreated(
                 dealerLeadId: input.leadId,
                 touchpointType: "lead_created",
                 performedBy: input.actorId,
+                ...(input.at ? { performedAt: input.at } : {}),
                 remarks: `Lead created (${input.door.replace(/_/g, " ")})${input.ownerId ? " — kept by the creator" : ""}.`,
                 syncMethod: input.actorId ? "manual" : "system",
                 ...(input.ownerId ? { fromOwnerId: null, toOwnerId: input.ownerId } : {}),

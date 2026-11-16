@@ -20,6 +20,7 @@ import crypto from "crypto";
 import { db } from "@/lib/db";
 import { isEngagedCall } from "@/lib/lifecycle/touchpointTypes";
 import { dealerLeads } from "@/lib/db/schema";
+import { neodoveBornAt } from "./bornAt";
 import { errorMessage } from "@/lib/api-utils";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 import { reactivateLead } from "@/lib/leads/reactivation";
@@ -266,6 +267,9 @@ async function handleDisposition(
     };
     const { touchpointId, statusRefused } = await writeTouchpoint(callTouchpoint);
     if (statusRefused) await recordStatusRefused(event, statusRefused);
+    // ID 224: a NeoDove-born lead never starts after its own call (a call
+    // event can arrive after the LEAD_CREATE that made the lead).
+    await pullNeodoveBirthBack(dealerLeadId, callAt);
 
     await attachCallEvidence(touchpointId, event, dealerLeadId);
     // ID 224: a CALL_RECORDING that arrived before this disposition waits on
@@ -364,6 +368,7 @@ async function ensureDealerLead(
     if (duplicateLeadId) return { id: duplicateLeadId, created: false };
 
     const id = `DL-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
+    const bornAt = neodoveBornAt(event.occurredAt);
     try {
         await db.insert(dealerLeads).values({
             id,
@@ -374,6 +379,8 @@ async function ensureDealerLead(
             source: "neodove",
             current_status: "new",
             total_attempts: 0,
+            // ID 224: dated at the call, not at the event's arrival (~1 h later).
+            created_at: bornAt,
         });
     } catch (err) {
         // dealer_leads.phone is UNIQUE on the RAW text. The two lookups above
@@ -392,7 +399,7 @@ async function ensureDealerLead(
     }
 
     await markSynced(id, "inbound");
-    await recordNeodoveBorn(id);
+    await recordNeodoveBorn(id, bornAt);
     return { id, created: true };
 }
 
@@ -461,6 +468,8 @@ async function handleLeadCreated(
 
         case "valid": {
             const id = `DL-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
+            // ID 224: dated at NeoDove's own event time, not at its arrival.
+            const bornAt = neodoveBornAt(event.occurredAt);
             await db.insert(dealerLeads).values({
                 id,
                 dealer_name: event.name ?? null,
@@ -470,16 +479,46 @@ async function handleLeadCreated(
                 source: "neodove",
                 current_status: "new",
                 total_attempts: 0,
+                created_at: bornAt,
             });
             // The two neodove_* columns are set separately by raw SQL rather
             // than named here: they are intentionally absent from the Drizzle
             // schema object so that ~20 unrelated bare selects on dealer_leads
             // don't hard-depend on E-224 having been applied. See schema.ts.
             await markSynced(id, "inbound");
-            await recordNeodoveBorn(id);
+            await recordNeodoveBorn(id, bornAt);
             await linkLead(id, event);
             return { handled: true, dealerLeadId: id, action: "lead_created" };
         }
+    }
+}
+
+// ── Created time on a NeoDove lead (ID 224) ──────────────────────────────
+
+/**
+ * A lead NeoDove created is moved back to its first call when the call is
+ * earlier: the lead row and its "Lead created" line. Only leads born in
+ * NeoDove (source 'neodove'); a lead we made keeps its own created time.
+ * Best-effort — never loses the call it follows.
+ */
+async function pullNeodoveBirthBack(dealerLeadId: string, callAt: Date): Promise<void> {
+    const at = neodoveBornAt(callAt);
+    try {
+        const moved = (await db.execute<{ id: string }>(sql`
+            UPDATE dealer_leads SET created_at = ${at.toISOString()}::timestamptz
+             WHERE id = ${dealerLeadId} AND source = 'neodove'
+               AND created_at > ${at.toISOString()}::timestamptz
+            RETURNING id
+        `)) as unknown as { id: string }[];
+        if (moved.length > 0) {
+            await db.execute(sql`
+                UPDATE lead_touchpoints SET performed_at = ${at.toISOString()}::timestamptz
+                 WHERE dealer_lead_id = ${dealerLeadId} AND touchpoint_type = 'lead_created'
+                   AND performed_at > ${at.toISOString()}::timestamptz
+            `);
+        }
+    } catch (err) {
+        console.warn("[NeoDove/inbound] created time not moved back:", errorMessage(err));
     }
 }
 
@@ -491,10 +530,10 @@ async function handleLeadCreated(
  * to ask — and the "Lead created" line. Best-effort, after the insert: an
  * inbound event must never be lost to its own bookkeeping.
  */
-async function recordNeodoveBorn(dealerLeadId: string): Promise<void> {
+async function recordNeodoveBorn(dealerLeadId: string, at?: Date): Promise<void> {
     try {
         await stampLeadSource(db, dealerLeadId, { door: "neodove", origin: LIST_DEFAULT_ORIGIN });
-        await recordLeadCreated(db, { leadId: dealerLeadId, actorId: null, door: "neodove", ownerId: null });
+        await recordLeadCreated(db, { leadId: dealerLeadId, actorId: null, door: "neodove", ownerId: null, at });
     } catch (err) {
         console.warn("[NeoDove/inbound] lead source not recorded:", errorMessage(err));
     }
