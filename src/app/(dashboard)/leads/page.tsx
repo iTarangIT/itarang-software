@@ -4,7 +4,14 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { BackToPrevious } from "@/components/layout/BackToPrevious";
-import { roleHome } from "@/lib/nav/backTarget";
+import {
+  popFilterStep,
+  pushFilterStep,
+  readFilterSteps,
+  resumeFilterSteps,
+  roleHome,
+  writeFilterSteps,
+} from "@/lib/nav/backTarget";
 import {
   Plus,
   Phone,
@@ -1317,6 +1324,12 @@ export default function LeadsUnifiedPage() {
   // ID 232: the tab and the applied filters live in the URL, so '← Back' from
   // a lead page (which returns to this exact URL) lands on the same filtered
   // list. replaceState: a filter click is not a new history entry.
+  //
+  // Each applied state is also a step for the page's own Back button: Back
+  // undoes the newest filter first (Hot, then Hot + city → Back → Hot), and
+  // leaves the page only when no filter step is left.
+  const filterSteps = useRef<string[] | null>(null);
+  const restoringStep = useRef(false);
   useEffect(() => {
     const p = toSearchParams(applied, 1, 1);
     p.delete("page");
@@ -1327,7 +1340,38 @@ export default function LeadsUnifiedPage() {
     if (want !== `${window.location.pathname}${window.location.search}`) {
       window.history.replaceState(window.history.state, "", want);
     }
+    if (filterSteps.current === null) {
+      // First render of this visit: keep the saved steps only when returning
+      // to the same state (back from a lead); a fresh visit starts over.
+      filterSteps.current = resumeFilterSteps(readFilterSteps(), qs);
+    } else if (restoringStep.current) {
+      restoringStep.current = false; // Back itself is not a new step
+    } else {
+      filterSteps.current = pushFilterStep(filterSteps.current, qs);
+    }
+    writeFilterSteps(filterSteps.current);
   }, [applied, tab]);
+
+  /** Back: undo the newest filter step; false when none is left (leave the page). */
+  const undoLastFilter = useCallback((): boolean => {
+    const { steps, restore } = popFilterStep(filterSteps.current ?? []);
+    if (restore === null) return false;
+    filterSteps.current = steps;
+    writeFilterSteps(steps);
+    const sp = new URLSearchParams(restore);
+    const f = fromSearchParams(sp);
+    const t = sp.get("tab");
+    restoringStep.current = true;
+    setDraft(f);
+    setApplied(f);
+    setTab(
+      t === "scraper" || t === "converted" || t === "campaigns" || t === "cost-analytics" || t === "call-timing"
+        ? t
+        : "leads",
+    );
+    setLeadsPage(1);
+    return true;
+  }, []);
 
   const setFilter = useCallback((key: keyof LeadFilters, value: string) => {
     setDraft((d) => ({ ...d, [key]: value }));
@@ -2073,10 +2117,11 @@ export default function LeadsUnifiedPage() {
       {/* HEADER */}
       <div className="flex justify-between items-start mb-6">
         <div className="flex items-start gap-4">
-          {/* ID 232: one step back — the page this tab was on before Leads
-              (its tab and filters kept); none → the person's own home page. */}
+          {/* ID 232: one step back — first the last filter applied here; with
+              none left, the page this tab was on before Leads; none → home. */}
           <BackToPrevious
             homeHref={roleHome(viewerRole)}
+            onBack={undoLastFilter}
             label="Back"
             iconClassName="h-4 w-4"
             className="mt-0.5 inline-flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 shadow-sm transition-all hover:border-gray-300 hover:bg-gray-50"
