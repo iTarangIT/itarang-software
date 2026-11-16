@@ -113,6 +113,8 @@ type DealerVerificationItem = {
   // E-167: where the application was collected, and how many bot checks flagged.
   source?: string | null;
   warningCount?: number | null;
+  /** ID 238: documents the dealer tapped Skip on in the WhatsApp chat. */
+  skippedDocuments?: string[];
 };
 
 // E-167: badge dealers collected over the WhatsApp bot so admins know the data
@@ -832,6 +834,14 @@ export default function DealerVerificationPage() {
                           <AlertTriangle className="h-3 w-3" />
                           {item.warningCount} verification warning
                           {item.warningCount !== 1 ? "s" : ""}
+                        </p>
+                      )}
+                      {item.skippedDocuments && item.skippedDocuments.length > 0 && (
+                        <p
+                          title="The dealer tapped Skip on these in the WhatsApp chat. They do not block approval; follow up with the dealer."
+                          className="mt-1 text-xs font-medium text-amber-700"
+                        >
+                          Skipped by dealer: {item.skippedDocuments.join(", ")}
                         </p>
                       )}
                       {item.submittedAt && (

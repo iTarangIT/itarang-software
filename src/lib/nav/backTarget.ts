@@ -65,3 +65,50 @@ export function writeNavStack(stack: string[]): void {
         /* private mode / blocked storage: Back falls back to the home queue */
     }
 }
+
+// ── Leads page: Back undoes the last filter first ─────────────────────────
+// Each applied filter state (its query string) is a step. Back drops the
+// newest step and restores the one before; with one step left, Back leaves
+// the page (previousPage / roleHome). Kept per tab in sessionStorage so the
+// steps survive opening a lead and coming back.
+
+export const FILTER_STEPS_KEY = "itarang.leadsFilterSteps";
+const MAX_FILTER_STEPS = 50;
+
+/** Add the newly applied state; the same state twice in a row is one step. */
+export function pushFilterStep(steps: string[], qs: string): string[] {
+    if (steps[steps.length - 1] === qs) return steps;
+    return [...steps, qs].slice(-MAX_FILTER_STEPS);
+}
+
+/** Undo the newest filter: the state to restore, or null when none is left. */
+export function popFilterStep(steps: string[]): { steps: string[]; restore: string | null } {
+    if (steps.length < 2) return { steps, restore: null };
+    const next = steps.slice(0, -1);
+    return { steps: next, restore: next[next.length - 1] };
+}
+
+/**
+ * The saved steps belong to this visit only when they end at the state the
+ * page opened on (coming back from a lead); a fresh visit starts over.
+ */
+export function resumeFilterSteps(saved: string[], openedOn: string): string[] {
+    return saved.length > 0 && saved[saved.length - 1] === openedOn ? saved : [openedOn];
+}
+
+export function readFilterSteps(): string[] {
+    try {
+        const v = JSON.parse(window.sessionStorage.getItem(FILTER_STEPS_KEY) ?? "[]");
+        return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+    } catch {
+        return [];
+    }
+}
+
+export function writeFilterSteps(steps: string[]): void {
+    try {
+        window.sessionStorage.setItem(FILTER_STEPS_KEY, JSON.stringify(steps));
+    } catch {
+        /* storage blocked: steps live only while the page is open */
+    }
+}

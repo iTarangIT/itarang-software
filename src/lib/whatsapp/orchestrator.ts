@@ -1953,7 +1953,14 @@ async function advanceDocument(session: SessionRow): Promise<void> {
   // the documents; any document-absent detail the admin needs is requested via
   // the correction loop (ASK_FIELD / onField stay in place for that admin flow).
   await setSession(session.id, { expected_document_type: null });
-  await reply(session, "Thank you! I've received all your documents. ✅");
+  // ID 238: a dealer who skipped documents is not told "all received".
+  const skippedNow = (ctx.skipped ?? []).filter((t) => !collected[t]);
+  await reply(
+    session,
+    skippedNow.length > 0
+      ? `Thank you! ✅ We'll continue without: ${skippedNow.map((t) => `*${docTypeLabel(t)}*`).join(", ")}. Our team will follow up — you can send ${skippedNow.length > 1 ? "them" : "it"} here any time.`
+      : "Thank you! I've received all your documents. ✅",
+  );
   await askFinance(await loadSession(session.id));
 }
 

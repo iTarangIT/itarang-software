@@ -21,3 +21,26 @@ describe("ID 232 back target", () => {
         expect(roleHome("weird")).toBe("/");
     });
 });
+
+import { popFilterStep, pushFilterStep, resumeFilterSteps } from "../backTarget";
+
+describe("ID 232 Leads Back undoes the last filter", () => {
+    it("Hot, then Hot + Indore: Back removes Indore, then Hot, then leaves", () => {
+        let s = resumeFilterSteps([], "");
+        s = pushFilterStep(s, "intent=hot");
+        s = pushFilterStep(s, "intent=hot&city=Indore");
+        let r = popFilterStep(s);
+        expect(r.restore).toBe("intent=hot");
+        r = popFilterStep(r.steps);
+        expect(r.restore).toBe("");
+        r = popFilterStep(r.steps);
+        expect(r.restore).toBeNull(); // nothing left → leave the page
+    });
+    it("the same state twice is one step", () => {
+        expect(pushFilterStep(["intent=hot"], "intent=hot")).toEqual(["intent=hot"]);
+    });
+    it("keeps the steps when coming back from a lead, starts over on a fresh visit", () => {
+        expect(resumeFilterSteps(["", "intent=hot"], "intent=hot")).toEqual(["", "intent=hot"]);
+        expect(resumeFilterSteps(["", "intent=hot"], "")).toEqual([""]);
+    });
+});

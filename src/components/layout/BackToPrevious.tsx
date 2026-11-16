@@ -13,8 +13,11 @@ export function BackToPrevious({
     className,
     iconClassName = "h-3 w-3",
     label = "Back",
+    onBack,
 }: {
     homeHref: string;
+    /** Handle Back inside the page first (e.g. undo the last filter); true = handled. */
+    onBack?: () => boolean;
     className?: string;
     iconClassName?: string;
     label?: string;
@@ -28,6 +31,7 @@ export function BackToPrevious({
             onClick={(e) => {
                 if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
                 e.preventDefault();
+                if (onBack?.()) return;
                 router.push(previousPage(readNavStack(), pathname) ?? homeHref);
             }}
         >
