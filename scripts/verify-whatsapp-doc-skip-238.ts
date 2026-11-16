@@ -14,6 +14,11 @@
  * Prints the application id to open in Dealer Validation.
  */
 
+// A module, not a global script: with only dynamic imports below, tsc would
+// otherwise put `check` in the global scope and clash with other scripts'
+// `check` (TS2393 broke the sandbox type-check gate on 16 Nov).
+export {};
+
 process.env.WA_DRY_RUN = "1";
 
 let failed = 0;
