@@ -8,7 +8,7 @@ import {
 import { and, desc, inArray, isNotNull, ne, notInArray, or, sql } from "drizzle-orm";
 import { requireDealerValidationReader } from "@/lib/auth/requireSalesHead";
 import { classifyApplicationsBatch } from "@/lib/dealer/duplicate-check";
-import { type CompanyType, requiredDocuments } from "@/lib/whatsapp/checklist";
+import { type CompanyType, docTypeLabel, requiredDocuments } from "@/lib/whatsapp/checklist";
 import { buildLocationHaystack } from "@/lib/dealer/location-haystack";
 import { approvalTagsFor } from "@/lib/dealer/approval-tag";
 
@@ -71,6 +71,7 @@ export async function GET() {
         // queue can badge WhatsApp-collected applications and flag failed checks.
         source: dealerOnboardingApplications.source,
         verificationWarnings: dealerOnboardingApplications.verification_warnings,
+        waSessionId: dealerOnboardingApplications.wa_session_id,
       })
       .from(dealerOnboardingApplications)
       // Hide rows the dealer never finished. A pure draft (status = "draft"
@@ -165,6 +166,28 @@ export async function GET() {
       .groupBy(dealerCorrectionRounds.application_id);
     const roundCountMap = new Map<string, number>();
     for (const r of roundRows) roundCountMap.set(r.applicationId, Number(r.count) || 0);
+
+    // ID 238: documents the dealer tapped Skip on in the WhatsApp chat, from
+    // each dealer's own session (one query for the page).
+    const skippedBySession = new Map<string, string[]>();
+    const sessionIds = applications.map((a) => a.waSessionId).filter((v): v is string => !!v);
+    if (sessionIds.length > 0) {
+      try {
+        const rows = (await db.execute(sql`
+          SELECT id::text AS id, context -> 'skipped' AS skipped
+            FROM whatsapp_onboarding_sessions
+           WHERE id IN (${sql.join(sessionIds.map((id) => sql`${id}::uuid`), sql`, `)})
+             AND jsonb_typeof(context -> 'skipped') = 'array'
+        `)) as unknown as Array<{ id: string; skipped: unknown }>;
+        for (const r of rows) {
+          if (Array.isArray(r.skipped)) {
+            skippedBySession.set(r.id, r.skipped.filter((t): t is string => typeof t === "string"));
+          }
+        }
+      } catch (e) {
+        console.warn("[dealer-verifications] skipped documents unavailable:", (e as Error)?.message);
+      }
+    }
 
     // Build a quick lookup map: applicationId → document count
     const docCountMap = new Map<string, number>();
@@ -294,6 +317,10 @@ export async function GET() {
         warningCount: Array.isArray(item.verificationWarnings)
           ? item.verificationWarnings.length
           : 0,
+        // ID 238: skipped in the chat and still not uploaded.
+        skippedDocuments: (item.waSessionId ? skippedBySession.get(item.waSessionId) ?? [] : [])
+          .filter((t) => !uploadedTypes.has(t))
+          .map((t) => docTypeLabel(t)),
       };
     });
 
