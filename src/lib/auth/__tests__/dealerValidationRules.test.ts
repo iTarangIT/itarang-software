@@ -38,10 +38,20 @@ describe("Dealer Validation readers (ID 166 item 11, 18 Oct)", () => {
         }
     });
 
-    it("the owner roles are every role an account can be owned by (sales_head reads all anyway)", () => {
+    it("the owner roles are the account-owner roles except the ASM and ISR (17 Nov; sales_head reads all anyway)", () => {
         expect([...DEALER_VALIDATION_OWNER_ROLES].sort()).toEqual(
-            ASSIGNABLE_OWNER_ROLES.filter((r) => r !== "sales_head").sort(),
+            ASSIGNABLE_OWNER_ROLES.filter((r) => !["sales_head", "asm", "inside_sales_rep"].includes(r)).sort(),
         );
+    });
+
+    it("17 Nov: the ASM and ISR never open Dealer Validation, not even their own application", () => {
+        for (const role of ["asm", "inside_sales_rep"]) {
+            expect(dealerValidationScope(role)).toBe("none");
+            expect(DEALER_VALIDATION_PAGE_ROLES as readonly string[]).not.toContain(role);
+            expect(
+                mayReadDealerApplication({ role, userId: "u-1", accountOwnerId: "u-1", salespersonUserId: "u-1", ownerId: "u-1" }),
+            ).toBe(false);
+        }
     });
 
     it("dealers, NBFCs and unknown roles never read the page", () => {

@@ -28,6 +28,8 @@
 // decision once the facts about that file are known. fileAuthz.ts loads the
 // facts from the database. No db or env imports here, so it unit-tests alone.
 
+import { NO_CUSTOMER_KYC_ROLES } from "@/lib/auth/leadAccessRules";
+
 export type FileKind =
     /** Customer lead (leads.id) KYC, consent, pre-sanction docs, product photos. */
     | {
@@ -419,6 +421,10 @@ export function mayOpenFile(viewer: FileViewer, file: FileKind, facts: FileFacts
     const role = (viewer.role ?? "").toLowerCase();
     const top = has(FILE_TOP_ROLES, role);
     const ownsAccount = !!facts.accountOwnerId && facts.accountOwnerId === viewer.id;
+    // 17 Nov (user): the ASM and the ISR never open a customer's KYC files —
+    // owning the dealer's account no longer lets them in (customer KYC,
+    // consent, Aadhaar scans, the NBFC store's per-lead and FI / video KYC files).
+    const ownsAccountForKyc = ownsAccount && !(NO_CUSTOMER_KYC_ROLES as readonly string[]).includes(role);
 
     switch (file.kind) {
         case "dealer_lead_attachment":
@@ -438,10 +444,10 @@ export function mayOpenFile(viewer: FileViewer, file: FileKind, facts: FileFacts
         case "recovery_visit":
             return top || inTenant(viewer, facts.ownerTenantIds);
         case "nbfc_lead":
-            if (top || ownsAccount || inTenant(viewer, facts.sharedTenantIds)) return true;
+            if (top || ownsAccountForKyc || inTenant(viewer, facts.sharedTenantIds)) return true;
             return file.dealerMay && role === "dealer" && sameDealer(viewer, facts.leadDealerId);
         case "nbfc_case":
-            return top || ownsAccount || inTenant(viewer, facts.ownerTenantIds);
+            return top || ownsAccountForKyc || inTenant(viewer, facts.ownerTenantIds);
         case "nbfc_tenant":
             return top || inTenant(viewer, [file.tenantRef]);
         case "nbfc_partner_doc":
@@ -453,7 +459,7 @@ export function mayOpenFile(viewer: FileViewer, file: FileKind, facts: FileFacts
         case "agreement_template":
             return !INTERNAL_EXCLUDED.has(role);
         case "autofill_scan": {
-            if (top || ownsAccount) return true;
+            if (top || ownsAccountForKyc) return true;
             // The dealer that scanned it (the key carries the uploader's code).
             if (role === "dealer") return sameDealer(viewer, file.dealerCode);
             // The lead's iTarang owner (ID 119 owners), when the scan names a lead.
@@ -465,7 +471,7 @@ export function mayOpenFile(viewer: FileViewer, file: FileKind, facts: FileFacts
         case "assistant_media":
             return top || file.userId === viewer.id;
         case "customer_lead": {
-            if (top || ownsAccount) return true;
+            if (top || ownsAccountForKyc) return true;
             const ownsLead = [facts.leadUploaderId, facts.leadAssignedTo, facts.leadSmAssignedTo].some(
                 (o) => !!o && o === viewer.id,
             );

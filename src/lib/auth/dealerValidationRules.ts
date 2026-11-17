@@ -14,13 +14,13 @@
 export const DEALER_VALIDATION_ALL_ROLES = ["sales_head", "ceo", "admin"] as const;
 
 /**
- * Roles that read an application only when they own it. The same roles an
- * account can be owned by (ASSIGNABLE_OWNER_ROLES in
- * src/app/api/admin/accounts/_lib.ts, minus sales_head which reads all).
+ * Roles that read an application only when they own it. The roles an account
+ * can be owned by (ASSIGNABLE_OWNER_ROLES in src/app/api/admin/accounts/_lib.ts,
+ * minus sales_head which reads all) — except the ASM and the ISR: 17 Nov
+ * (user) they do not open Dealer Validation at all, not even their own
+ * applications (page and every API refuse them).
  */
 export const DEALER_VALIDATION_OWNER_ROLES = [
-    "inside_sales_rep",
-    "asm",
     "sales_executive",
     "sales_manager",
     "business_head",

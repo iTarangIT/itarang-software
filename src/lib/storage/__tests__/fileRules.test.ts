@@ -84,7 +84,11 @@ describe("mayOpenFile (ID 166)", () => {
         for (const role of ["business_head", "sales_manager", "sales_executive", "finance_controller", "inside_sales_rep", "asm"]) {
             expect(mayOpenFile(viewer(role), kyc, { accountOwnerId: "someone-else" })).toBe(false);
         }
-        expect(mayOpenFile(viewer("asm"), kyc, { accountOwnerId: "u-1" })).toBe(true);
+        // 17 Nov: owning the dealer's account no longer opens customer KYC for the ASM / ISR.
+        expect(mayOpenFile(viewer("asm"), kyc, { accountOwnerId: "u-1" })).toBe(false);
+        expect(mayOpenFile(viewer("inside_sales_rep"), kyc, { accountOwnerId: "u-1" })).toBe(false);
+        // other account-owner roles keep it
+        expect(mayOpenFile(viewer("sales_manager"), kyc, { accountOwnerId: "u-1" })).toBe(true);
     });
 
     it("opens KYC for the lead's assignee and sales manager, like the KYC screens (ID 119)", () => {
@@ -238,7 +242,10 @@ describe("mayOpenFile — the NBFC store (16 Oct)", () => {
         expect(mayOpenFile(partner(["T2"]), fi, { ownerTenantIds: ["T1"] })).toBe(false);
         expect(mayOpenFile(viewer("dealer", { dealerCode: "D1" }), fi, { ownerTenantIds: ["T1"] })).toBe(false);
         expect(mayOpenFile(viewer("sales_manager"), fi, { ownerTenantIds: ["T1"] })).toBe(false);
-        expect(mayOpenFile(viewer("asm"), fi, { ownerTenantIds: ["T1"], accountOwnerId: "u-1" })).toBe(true);
+        // 17 Nov: not the ASM / ISR even as the account owner; another account-owner role still opens it
+        expect(mayOpenFile(viewer("asm"), fi, { ownerTenantIds: ["T1"], accountOwnerId: "u-1" })).toBe(false);
+        expect(mayOpenFile(viewer("inside_sales_rep"), fi, { ownerTenantIds: ["T1"], accountOwnerId: "u-1" })).toBe(false);
+        expect(mayOpenFile(viewer("sales_manager"), fi, { ownerTenantIds: ["T1"], accountOwnerId: "u-1" })).toBe(true);
         for (const role of ["admin", "ceo", "sales_head"]) expect(mayOpenFile(viewer(role), fi)).toBe(true);
         // a missing fact is a refusal
         expect(mayOpenFile(partner(["T1"]), fi)).toBe(false);
