@@ -93,3 +93,49 @@ export function callFeedAlertEmail(
             `\n\nOps Console: https://crm.itarang.com/operations/alerts`,
     };
 }
+
+/**
+ * 17 Nov (tracker test 2 "the bell fires once"): a call-feed alarm notifies
+ * once when it opens and once when it clears — never again on the rule's
+ * cooldown. Before this an alarm left open over a weekend rang the CEO and the
+ * Sales Head every cooldown window (364 bells each on live, 6–14 Nov). Pure.
+ */
+export function renotifiesOnCooldown(metricKey: string): boolean {
+    return metricKey !== CALL_FEED_METRIC;
+}
+
+const FEED_PLAIN: Record<string, string> = { neodove: "NeoDove", ai_dialer: "AI dialer" };
+
+/** Plain-words bell title and text for a call-feed alarm (not "calls.feed_gap"). Pure. */
+export function callFeedBell(
+    severity: "warn" | "crit" | "resolved",
+    source: string,
+    gapWorkingMinutes: number | null,
+): { title: string; message: string } {
+    const name = FEED_PLAIN[source] ?? source;
+    if (severity === "resolved") {
+        return {
+            title: `Calls reaching live again: ${name}`,
+            message:
+                source === "neodove"
+                    ? "NeoDove calls are reaching the CRM again."
+                    : "AI dialer results are reaching the CRM again.",
+        };
+    }
+    const gap = workingGapText(gapWorkingMinutes);
+    return {
+        title: `${severity === "crit" ? "Urgent" : "Warning"} — calls not reaching live: ${name}`,
+        message:
+            source === "neodove"
+                ? `Leads pushed to NeoDove have had no call back for ${gap} of working time. Check NeoDove's webhook points at crm.itarang.com.`
+                : `No AI dialer result for ${gap} of working time. Check that the AI dialer is running.`,
+    };
+}
+
+/** Tile colour for a feed on the Ops Console board: past 4 h red, past 2 h amber. Pure. */
+export function callFeedTone(gapWorkingMinutes: number | null): "crit" | "warn" | "ok" | "unknown" {
+    if (gapWorkingMinutes == null) return "unknown";
+    if (gapWorkingMinutes >= 2 * CALL_FEED_ALARM_WORKING_MINUTES) return "crit";
+    if (gapWorkingMinutes >= CALL_FEED_ALARM_WORKING_MINUTES) return "warn";
+    return "ok";
+}

@@ -8,10 +8,10 @@ const ROOT = path.resolve(__dirname, "../../../..");
 const read = (p: string) => readFileSync(path.join(ROOT, p), "utf8");
 
 describe("ID 166: the dealer account's owner reads its customers' KYC tabs", () => {
-    it("an ISR or ASM who owns the account reads; anyone else does not", () => {
-        expect([...ACCOUNT_OWNER_READ_ROLES]).toEqual(["inside_sales_rep", "asm"]);
-        expect(mayReadAsAccountOwner({ role: "asm", userId: "u1", accountOwnerId: "u1" })).toBe(true);
-        expect(mayReadAsAccountOwner({ role: "inside_sales_rep", userId: "u1", accountOwnerId: "u1" })).toBe(true);
+    it("17 Nov: nobody reads a customer's KYC as the account's owner — not the ISR or ASM either", () => {
+        expect([...ACCOUNT_OWNER_READ_ROLES]).toEqual([]);
+        expect(mayReadAsAccountOwner({ role: "asm", userId: "u1", accountOwnerId: "u1" })).toBe(false);
+        expect(mayReadAsAccountOwner({ role: "inside_sales_rep", userId: "u1", accountOwnerId: "u1" })).toBe(false);
         expect(mayReadAsAccountOwner({ role: "asm", userId: "u1", accountOwnerId: "u2" })).toBe(false);
         expect(mayReadAsAccountOwner({ role: "asm", userId: "u1", accountOwnerId: null })).toBe(false);
         expect(mayReadAsAccountOwner({ role: "asm", userId: "", accountOwnerId: "" })).toBe(false);

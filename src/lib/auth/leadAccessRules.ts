@@ -36,13 +36,16 @@ export const ALL_LEADS_KYC_ROLES = FULL_ID_ROLES;
 export const OWN_LEADS_KYC_ROLES = ["business_head", "sales_manager", "sales_executive", "finance_controller"] as const;
 
 /**
- * ID 166 (18 Oct check, place "customer lead KYC tabs"): the iTarang owner of
- * the dealer's account — an ISR or ASM — READS that dealer's customer files
- * (KYC documents, co-borrower documents, requested documents). Read only: the
- * upload / submit / payment routes still refuse them (requireLeadAccess
- * without `read`).
+ * ID 166 (18 Oct check, place "customer lead KYC tabs") let the iTarang owner
+ * of the dealer's account — an ISR or ASM — READ that dealer's customer files.
+ * 17 Nov (user): the ASM and the ISR do not open customer KYC at all, so no
+ * role reads a customer's KYC as the account's owner any more. Kept as an
+ * (empty) list so the one place that grants it stays visible.
  */
-export const ACCOUNT_OWNER_READ_ROLES = ["inside_sales_rep", "asm"] as const;
+export const ACCOUNT_OWNER_READ_ROLES: readonly string[] = [];
+
+/** Roles that never open a customer's KYC files, even as the dealer account's owner (17 Nov). */
+export const NO_CUSTOMER_KYC_ROLES = ["inside_sales_rep", "asm"] as const;
 
 /** May this ISR / ASM read the lead's files as the dealer account's owner? A missing fact is a refusal. */
 export function mayReadAsAccountOwner(input: {

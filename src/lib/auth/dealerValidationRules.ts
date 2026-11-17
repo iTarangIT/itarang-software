@@ -14,13 +14,13 @@
 export const DEALER_VALIDATION_ALL_ROLES = ["sales_head", "ceo", "admin"] as const;
 
 /**
- * Roles that read an application only when they own it. The same roles an
- * account can be owned by (ASSIGNABLE_OWNER_ROLES in
- * src/app/api/admin/accounts/_lib.ts, minus sales_head which reads all).
+ * Roles that read an application only when they own it. The roles an account
+ * can be owned by (ASSIGNABLE_OWNER_ROLES in src/app/api/admin/accounts/_lib.ts,
+ * minus sales_head which reads all) — except the ASM and the ISR: 17 Nov
+ * (user) they do not open Dealer Validation at all, not even their own
+ * applications (page and every API refuse them).
  */
 export const DEALER_VALIDATION_OWNER_ROLES = [
-    "inside_sales_rep",
-    "asm",
     "sales_executive",
     "sales_manager",
     "business_head",
@@ -65,4 +65,34 @@ export function mayReadDealerApplication(input: {
     if (scope === "all") return true;
     if (scope === "none") return false;
     return ownsDealerApplication(input.userId, input);
+}
+
+/**
+ * May this user open an application in the onboarding wizard
+ * (/dealer-onboarding?applicationId=… → GET /api/dealer-onboarding/[id], which
+ * returns the application and every uploaded document)?
+ *
+ * - Admin, Sales Head, CEO: any application.
+ * - ASM / ISR: only while it is still a draft they are filling in (any draft,
+ *   so a converted lead's form can be continued by its owner). 17 Nov (user):
+ *   once submitted it is a Dealer Validation file, which they do not open —
+ *   not even one they created.
+ * - Anyone else (the dealer, the onboarding role): only their own application.
+ */
+export const ONBOARDING_WIZARD_ALL_ROLES = ["admin", "sales_head", "ceo"] as const;
+export const ONBOARDING_WIZARD_DRAFT_ROLES = ["asm", "inside_sales_rep"] as const;
+
+export function mayOpenOnboardingApplication(input: {
+    role: string | null | undefined;
+    userId: string | null | undefined;
+    dealerUserId?: string | null;
+    onboardingStatus?: string | null;
+}): boolean {
+    const r = (input.role ?? "").toLowerCase();
+    if ((ONBOARDING_WIZARD_ALL_ROLES as readonly string[]).includes(r)) return true;
+    if ((ONBOARDING_WIZARD_DRAFT_ROLES as readonly string[]).includes(r)) {
+        return (input.onboardingStatus ?? "").toLowerCase() === "draft";
+    }
+    const me = (input.userId ?? "").trim();
+    return !!me && input.dealerUserId === me;
 }
