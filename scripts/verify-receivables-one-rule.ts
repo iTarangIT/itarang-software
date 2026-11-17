@@ -9,6 +9,11 @@
 //   - netOwed(listReceivables()) — the /ceo/receivables page header;
 //   - outstandingTotal() — the old SQL sum the card used to read (reference:
 //     a difference here means the two rules drifted).
+//
+// Then the parts the figure is made of (17 Nov, the old ₹2 lakh gap): invoices still owed
+// by source (Zoho / Drive), credit notes, and what netting a customer's credit notes
+// against their invoices (and never below zero) takes off. A gap between the old SQL sum
+// and the card is one of these lines.
 
 import { outstandingTotal } from "@/lib/dashboard/revenueSource";
 import { listReceivables, netOwed, receivablesSummary } from "@/lib/dashboard/receivables";
@@ -31,6 +36,22 @@ async function main() {
     check("card / strip total = sum of age buckets", summary.owed, buckets);
     check("card = Accounts Receivable page header", summary.owed, netOwed(rows));
     check("card = old SQL sum (outstandingTotal)", summary.owed, sqlSum);
+
+    // What the figure is made of.
+    const sumOf = (xs: typeof rows) => xs.reduce((a, r) => a + r.balance, 0);
+    const invoices = rows.filter((r) => r.source !== "credit");
+    const credits = rows.filter((r) => r.source === "credit");
+    const bySource = new Map<string, typeof rows>();
+    for (const r of invoices) bySource.set(r.source, [...(bySource.get(r.source) ?? []), r]);
+    console.log("\nMade of:");
+    for (const [source, xs] of bySource) console.log(`  invoices from ${source.padEnd(6)} ${inr(sumOf(xs)).padStart(16)}  ${xs.length}`);
+    console.log(`  credit notes        ${inr(sumOf(credits)).padStart(16)}  ${credits.length}`);
+    const plain = sumOf(rows);
+    console.log(`  invoices + credits  ${inr(plain).padStart(16)}`);
+    console.log(`  netting per customer (never below 0) takes off ${inr(plain - netOwed(rows))}`);
+    if (Math.abs(summary.owed - sqlSum) >= 1) {
+      console.log(`  → the old SQL sum differs by ${inr(sqlSum - summary.owed)}; compare it with the credit-note and netting lines above.`);
+    }
     process.exit(failed ? 1 : 0);
 }
 

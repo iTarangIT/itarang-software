@@ -40,26 +40,38 @@ export const GET = withErrorHandler(async (req: Request) => {
     });
     // ID 218: probe once. "Not available" only when the table is truly absent;
     // a database error propagates as a 500 so the card says "could not load".
-    if (!(await hasLeadClocks())) return successResponse({ available: false });
-    const person = p.spoc_id ? { ownerIds: [p.spoc_id], includeGuessed: p.include_guessed } : {};
-    const [lead, owner, transfer, passed, computedAt, byOwner, hours] = await Promise.all([
-        p.spoc_id ? Promise.resolve(null) : clockStats("lead", p.from, p.to),
-        clockStats("owner", p.from, p.to, person),
-        clockStats("transfer", p.from, p.to, person),
-        limitsPassed(p.from, p.to, person),
-        clocksComputedAt(),
-        clockStatsByOwner("owner", p.from, p.to, { includeGuessed: p.include_guessed }),
-        getOfficeHours(),
-    ]);
-    return successResponse({
-        available: owner !== null,
-        computed_at: computedAt,
-        lead,
-        owner,
-        transfer,
-        limits_passed: passed,
-        by_owner: p.spoc_id ? byOwner.filter((r) => r.owner_id === p.spoc_id) : byOwner,
-        include_guessed: p.include_guessed,
-        office_hours: shortOfficeHours(hours),
-    });
+    // The error is logged here with its cause and how long it took, so the live
+    // log (pm2 logs | grep lead-clocks) names why: pool wait, timeout or reset.
+    const started = Date.now();
+    try {
+        if (!(await hasLeadClocks())) return successResponse({ available: false });
+        const person = p.spoc_id ? { ownerIds: [p.spoc_id], includeGuessed: p.include_guessed } : {};
+        const [lead, owner, transfer, passed, computedAt, byOwner, hours] = await Promise.all([
+            p.spoc_id ? Promise.resolve(null) : clockStats("lead", p.from, p.to),
+            clockStats("owner", p.from, p.to, person),
+            clockStats("transfer", p.from, p.to, person),
+            limitsPassed(p.from, p.to, person),
+            clocksComputedAt(),
+            clockStatsByOwner("owner", p.from, p.to, { includeGuessed: p.include_guessed }),
+            getOfficeHours(),
+        ]);
+        return successResponse({
+            available: owner !== null,
+            computed_at: computedAt,
+            lead,
+            owner,
+            transfer,
+            limits_passed: passed,
+            by_owner: p.spoc_id ? byOwner.filter((r) => r.owner_id === p.spoc_id) : byOwner,
+            include_guessed: p.include_guessed,
+            office_hours: shortOfficeHours(hours),
+        });
+    } catch (err) {
+        const e = err as { message?: string; code?: string; cause?: { code?: string; message?: string } };
+        console.error(
+            `[lead-clocks] Response time failed after ${Date.now() - started} ms: ${e?.message ?? String(err)}` +
+                ` (code ${e?.code ?? e?.cause?.code ?? "none"}${e?.cause?.message ? `; cause: ${e.cause.message}` : ""})`,
+        );
+        throw err;
+    }
 });
