@@ -95,8 +95,11 @@ function queueHref(managerRole: string): string {
 function moreHref(list: ReviewListKey, memberId: string, managerRole: string): string {
   // The one needs-action list a manager may open for their team (needsActionAccess).
   if (list === "field_visit") return `/admin/reports/needs-action/visit_overdue?spoc_id=${encodeURIComponent(memberId)}`;
-  // ID 199: their queue (Leads for a Sales Head / Sales Manager), filtered to that team member (read-only).
-  return `${queueHref(managerRole)}?member=${encodeURIComponent(memberId)}`;
+  // ID 199: the Leads list team view, filtered to that team member (read-only).
+  // A Sales Head / Sales Manager filters by Owner (owner_id; `member` is ignored
+  // for them); an ASM / ISR who manages people uses the Team member pick.
+  const id = encodeURIComponent(memberId);
+  return isManagerRole(managerRole) ? `/leads?owner_id=${id}` : `/leads?member=${id}`;
 }
 
 /** One manager's mail. Exported for scripts/verify-sales-daily.ts --my-team. */
