@@ -18,6 +18,9 @@ import {
 } from "@/lib/db/schema";
 import { ACCOUNT_QUOTE_TEAM_ROLES, mayViewAccountQuotes } from "@/lib/accounts/quotationAccess";
 import { getTeamMemberIds } from "@/lib/users/team";
+import { houseMayActOnLead } from "@/lib/auth/requireLeadAccess";
+import { houseDealerCode } from "@/lib/leads/dealerByMobile";
+import { houseOriginatedLeadIds } from "@/lib/leads/pushGuards";
 import { filesProxyTarget } from "@/lib/storage/fileAccess";
 import { supabaseUrlToProxyPath } from "@/lib/storage/legacyUrl";
 import {
@@ -34,6 +37,27 @@ import {
 } from "@/lib/storage/fileRules";
 
 export type FileUser = { id: string; role: string | null; dealer_id: string | null };
+
+function sameDealerCode(a: string | null | undefined, b: string | null | undefined): boolean {
+    const x = (a ?? "").trim();
+    return !!x && x === (b ?? "").trim();
+}
+
+/**
+ * 17 Nov: the house dealer code when the iTarang house pushed this customer
+ * file to a dealer (houseOriginatedLeadIds), else null. A failed lookup is
+ * null — the dealer then keeps only its own uploads, never more.
+ */
+async function houseCodeIfPushedFromHouse(leadId: string): Promise<string | null> {
+    try {
+        const house = await houseDealerCode();
+        if (!house) return null;
+        return (await houseOriginatedLeadIds(house, [leadId])).has(leadId) ? house : null;
+    } catch (err) {
+        console.error("[files] house push lookup failed:", err instanceof Error ? err.message : err);
+        return null;
+    }
+}
 
 function rowsOf<T>(result: unknown): T[] {
     return ((result as { rows?: T[] }).rows ?? (result as T[])) as T[];
@@ -362,6 +386,13 @@ export async function dealerViewableFiles(
     const viewer = await viewerFor(user);
     const uploads = await leadFileUploads(leadId, "%");
     const failed = uploads.some((u) => u.source === "unknown" && !u.url);
+    // 17 Nov: on a file the house pushed to this dealer, the house's uploads are
+    // the dealer's too (same as the opener). The house login itself is not the
+    // file's dealer, so it keeps seeing only its own uploads here.
+    const [lead] = await db.select({ dealer_id: leads.dealer_id }).from(leads).where(eq(leads.id, leadId)).limit(1);
+    const pushedFromHouseCode = sameDealerCode(viewer.dealerCode, lead?.dealer_id)
+        ? await houseCodeIfPushedFromHouse(leadId)
+        : null;
     const decided = new Map<string, boolean>();
     for (const url of urls) {
         if (!url || decided.has(url)) continue;
@@ -371,7 +402,7 @@ export async function dealerViewableFiles(
             continue;
         }
         const mine = uploads.filter((u) => !!u.url && storedSuffix(u.url) === suffix);
-        decided.set(url, !failed && dealerUploadedFile(viewer, mine));
+        decided.set(url, !failed && dealerUploadedFile(viewer, mine, pushedFromHouseCode));
     }
     return (url) => !url || decided.get(url) !== false;
 }
@@ -388,7 +419,15 @@ async function factsFor(file: FileKind, bucket: string, key: string, viewer: Fil
             const facts = await customerLeadFacts(file.leadId);
             // Only a dealer is limited to its own uploads; nobody else pays for the lookup.
             if (viewer.role !== "dealer") return facts;
-            return { ...facts, fileUploads: await customerFileUploads(file.leadId, bucket, key) };
+            const ownsFile = sameDealerCode(viewer.dealerCode, facts.leadDealerId);
+            const houseOnPushedFile =
+                !ownsFile && (await houseMayActOnLead(viewer.dealerCode, file.leadId).catch(() => false));
+            return {
+                ...facts,
+                houseOnPushedFile,
+                pushedFromHouseCode: ownsFile ? await houseCodeIfPushedFromHouse(file.leadId) : null,
+                fileUploads: await customerFileUploads(file.leadId, bucket, key),
+            };
         }
         case "nbfc_lead":
             return customerLeadFacts(file.leadId);
