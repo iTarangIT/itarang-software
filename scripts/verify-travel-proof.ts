@@ -3,9 +3,11 @@
 //   node --import tsx --env-file=.env.local scripts/verify-travel-proof.ts [--month=2026-10] [--asm=<email or id> ...] [--csv=<file>]
 //
 // For each ASM (default: the two ASMs with the most visits in the month) and
-// each working day (Mon–Sat) of the month, prints the verdict the submit form
-// would show — Supported (a verified visit that day, ID 196) or Not supported —
-// with verified / unverified visits, cities and calls (--csv also writes the
+// each working day of the month (the office calendar: working weekdays from
+// office hours, active holidays left out — ID 197, 13 Nov), prints the verdict
+// the submit form would show — Supported (a verified visit that day, ID 196)
+// or Not supported — with verified / unverified visits, planned visits (booked
+// on an earlier day), cities and calls (--csv also writes the
 // sheet, one row per ASM per day). Uses the real
 // dayEvidence() the form and the CEO's Day evidence use. Writes nothing.
 // Visits before E-363 are all unverified, so October reads mostly Not
@@ -15,6 +17,8 @@ import { writeFileSync } from "node:fs";
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { dayEvidence } from "@/lib/expenses/travelProofStore";
+import { loadOfficeCalendar } from "@/lib/calendar/holidays";
+import { isWorkingDay } from "@/lib/calendar/officeCalendar";
 
 const rowsOf = <T>(r: unknown): T[] => (Array.isArray(r) ? r : ((r as { rows?: T[] })?.rows ?? [])) as T[];
 
@@ -23,7 +27,7 @@ async function main() {
     const month = args.find((a) => a.startsWith("--month="))?.slice(8) ?? "2026-10";
     const wanted = args.filter((a) => a.startsWith("--asm=")).map((a) => a.slice(6));
     const csvPath = args.find((a) => a.startsWith("--csv="))?.slice(6);
-    const csv: string[] = ["ASM,Day,Verdict,Verified visits,Not verified visits,Calls,First visit (IST),Last visit (IST),Cities"];
+    const csv: string[] = ["ASM,Day,Verdict,Verified visits,Not verified visits,Planned visits,Calls,First visit (IST),Last visit (IST),Cities"];
     const q = (s: string) => `"${s.replace(/"/g, '""')}"`;
     const ist = (ts: string | null) =>
         ts ? new Date(ts).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit" }) : "";
@@ -52,25 +56,33 @@ async function main() {
         return;
     }
 
+    // ID 197 (13 Nov): the office calendar, not a fixed Monday to Saturday.
+    const { holidays, hours } = await loadOfficeCalendar();
     const days: string[] = [];
+    const holidaysLeftOut: string[] = [];
     for (let d = new Date(`${first}T00:00:00Z`); d.toISOString().slice(0, 7) === month; d.setUTCDate(d.getUTCDate() + 1)) {
-        if (d.getUTCDay() !== 0) days.push(d.toISOString().slice(0, 10));
+        const day = d.toISOString().slice(0, 10);
+        if (isWorkingDay(day, holidays, hours)) days.push(day);
+        else if (holidays.has(day)) holidaysLeftOut.push(day);
     }
+    console.log(`${days.length} working days in ${month}; holidays left out: ${holidaysLeftOut.join(", ") || "none"}`);
 
     for (const a of asms) {
         console.log(`\n${a.name} (${a.id}) — ${month}`);
-        console.log("  day         verdict         verified  not-verified  calls  cities");
+        console.log("  day         verdict         verified  not-verified  planned  calls  cities");
         let supported = 0;
         for (const day of days) {
             const ev = await dayEvidence(a.id, day);
             if (ev.verdict === "supported") supported++;
             const ver = ev.visits.filter((v) => v.verified).length;
+            // Booked on an earlier day than the visit (dayEvidence, ID 197).
+            const planned = ev.visits.filter((v) => v.planned).length;
             csv.push(
-                [q(a.name), day, ev.verdict === "supported" ? "Supported" : "Not supported", ver, ev.visits.length - ver, ev.calls,
+                [q(a.name), day, ev.verdict === "supported" ? "Supported" : "Not supported", ver, ev.visits.length - ver, planned, ev.calls,
                  ist(ev.first_visit_at), ist(ev.last_visit_at), q(ev.cities.join(", "))].join(","),
             );
             console.log(
-                `  ${day}  ${(ev.verdict === "supported" ? "Supported" : "Not supported").padEnd(14)}  ${String(ver).padStart(8)}  ${String(ev.visits.length - ver).padStart(12)}  ${String(ev.calls).padStart(5)}  ${ev.cities.join(", ")}`,
+                `  ${day}  ${(ev.verdict === "supported" ? "Supported" : "Not supported").padEnd(14)}  ${String(ver).padStart(8)}  ${String(ev.visits.length - ver).padStart(12)}  ${String(planned).padStart(7)}  ${String(ev.calls).padStart(5)}  ${ev.cities.join(", ")}`,
             );
         }
         console.log(`  → ${supported} of ${days.length} working days supported`);

@@ -96,7 +96,11 @@ export async function dayEvidence(userId: string, day: string, opts: { withDista
                    COALESCE(dl.city, a.city) AS city,
                    COALESCE(dl.state, a.state) AS state,
                    dl.area, COALESCE(dl.pincode, a.pincode) AS pincode,
-                   v.scheduled_date IS NOT NULL AS planned,
+                   -- ID 197 (spec): planned = booked on an EARLIER day than the
+                   -- visit. A visit booked and done the same day (or captured on
+                   -- the spot, which also sets a date) is not planned.
+                   (v.scheduled_date IS NOT NULL
+                    AND (v.created_at AT TIME ZONE 'Asia/Kolkata')::date < v.actual_visit_date) AS planned,
                    v.visit_outcome AS outcome,
                    CASE WHEN jsonb_typeof(v.photos) = 'array' THEN v.photos ->> 0 END AS photo_url,
                    (to_jsonb(v) ->> 'gps_accuracy_m')::float8 AS accuracy_m,
