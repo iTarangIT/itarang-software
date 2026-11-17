@@ -258,8 +258,9 @@ export async function repairLeadNumber(input: {
 
 /**
  * "Repair failed → Lost": the number could not be fixed, so the lead is closed
- * through the screen's own Mark Lost writer (reason 'other'). Ownership is the
- * caller's job, as for markLeadLost.
+ * through the screen's own Mark Lost writer with reason 'invalid_contact' (ID 126;
+ * it was 'other'). Ownership, and that the lead is in Number Repair (inNumberRepair),
+ * are the caller's job.
  */
 export async function closeLeadAfterFailedRepair(input: {
     leadId: string;
@@ -270,7 +271,7 @@ export async function closeLeadAfterFailedRepair(input: {
     await markLeadLost({
         leadId: input.leadId,
         actor: input.actor,
-        reason: "other",
+        reason: "invalid_contact",
         notes: extra ? `Number repair failed — ${extra}` : "Number repair failed",
     });
 }
@@ -278,7 +279,7 @@ export async function closeLeadAfterFailedRepair(input: {
 /**
  * Which leads sit in the Number Repair queue: a contactability flag set, still
  * active, and not closed by "Repair failed → Lost". Shared by the list and the
- * menu count (ID 90).
+ * menu count (ID 90). The same rule in code is inNumberRepair (contactabilityLabels.ts).
  */
 const NUMBER_REPAIR_WHERE = sql`dl.contactability IS NOT NULL AND dl.is_active IS NOT FALSE
                AND dl.lead_status IS DISTINCT FROM 'Lost'`;

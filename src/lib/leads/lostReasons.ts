@@ -15,6 +15,7 @@ export const LOST_REASON_WORDS: Readonly<Record<LostReason, string>> = Object.fr
     rejected_by_us_geography: "Rejected by us: geography",
     duplicate_lead: "Duplicate lead",
     other: "Other",
+    invalid_contact: "Number not working",
     onboarding_dropout: "Onboarding dropout",
     onboarding_rejected: "Onboarding rejected",
     lost_to_competition: "Lost to competition",
