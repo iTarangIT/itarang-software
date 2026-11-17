@@ -58,6 +58,8 @@ export const LOST_REASON = [
   "rejected_by_us_geography",
   "duplicate_lead",
   "other",
+  // ID 126 (17 Nov): the number could not be repaired (Number Repair "Repair failed → Lost").
+  "invalid_contact",
   "onboarding_dropout",
   // ID 214: the dealer's onboarding was rejected at Dealer Validation (set by
   // the system only; reopened to Won when the dealer applies again).

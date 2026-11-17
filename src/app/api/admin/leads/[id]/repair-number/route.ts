@@ -7,7 +7,8 @@
 //                              new_phone blank → confirm; a dead_number flag
 //                              stays (note only), non_responsive is lifted.
 //   action 'mark_lost'         "Repair failed → Lost": closes the lead through
-//                              the Mark Lost writer, reason 'other'.
+//                              the Mark Lost writer, reason 'invalid_contact'
+//                              (ID 126), and only a lead in Number Repair.
 
 import { NextResponse } from "next/server";
 import { z } from "zod";
@@ -21,6 +22,7 @@ import {
     InvalidRepairPhoneError,
     repairLeadNumber,
 } from "@/lib/leads/contactability";
+import { inNumberRepair } from "@/lib/leads/contactabilityLabels";
 import { LostLeadNotFoundError } from "@/lib/leads/markLost";
 import { StatusGuardError } from "@/lib/touchpoints/write";
 
@@ -46,9 +48,15 @@ export const POST = withErrorHandler(
         const raw = (await req.json()) as Record<string, unknown>;
         const body = BodySchema.parse({ ...raw, action: raw?.action ?? "repair" });
 
-        const [lead] = (await db.execute<{ current_owner_id: string | null; lead_status: string | null }>(sql`
-            SELECT current_owner_id, lead_status FROM dealer_leads WHERE id = ${id} LIMIT 1
-        `)) as unknown as Array<{ current_owner_id: string | null; lead_status: string | null }>;
+        type LeadRow = {
+            current_owner_id: string | null;
+            lead_status: string | null;
+            contactability: string | null;
+            is_active: boolean | null;
+        };
+        const [lead] = (await db.execute(sql`
+            SELECT current_owner_id, lead_status, contactability, is_active FROM dealer_leads WHERE id = ${id} LIMIT 1
+        `)) as unknown as LeadRow[];
         if (!lead) return errorResponse("Lead not found", 404);
         if (!MANAGERS.includes(user.role) && lead.current_owner_id !== user.id) {
             return errorResponse("Only the lead owner or a manager can repair its number.", 403);
@@ -56,6 +64,14 @@ export const POST = withErrorHandler(
 
         if (body.action === "mark_lost") {
             if (lead.lead_status === "Lost") return errorResponse("This lead is already Lost.", 409);
+            // ID 126: only a lead whose number is flagged (Number Repair) closes this way;
+            // any other lead goes through Mark Lost with a real reason.
+            if (!inNumberRepair(lead)) {
+                return errorResponse(
+                    "Only a lead in Number Repair (number flagged dead or not answering) can be closed this way — use Mark Lost and pick a reason.",
+                    409,
+                );
+            }
             try {
                 await closeLeadAfterFailedRepair({
                     leadId: id,

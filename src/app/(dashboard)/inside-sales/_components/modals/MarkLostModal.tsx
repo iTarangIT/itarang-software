@@ -32,6 +32,8 @@ export const LOST_REASON_LABELS: Record<LostReason, string> = {
     rejected_by_us_geography: "Rejected by us — geography",
     duplicate_lead: "Duplicate lead",
     other: "Other (notes required)",
+    // ID 126: what Number Repair's "Repair failed → Lost" records.
+    invalid_contact: "Number not working (could not be repaired)",
     onboarding_dropout: "Onboarding dropout (admin only)",
     // ID 214: set by the system when Dealer Validation rejects the onboarding.
     onboarding_rejected: "Onboarding rejected",
