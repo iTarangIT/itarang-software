@@ -276,6 +276,41 @@ function flattenOtherProperties(
     return out;
 }
 
+/**
+ * ID 224 (17 Nov, seen on live 10 Nov): NeoDove's workflow "Call Recording"
+ * field arrives as a LIST, not a link —
+ *   "recording_url": [{ "recording_url": "https://…", "call_duration_in_sec": 90 }]
+ * — and that list is the only place NeoDove sends the call's duration. On
+ * "Call Connected" the link is still EMPTY (all 21 on live, 10 Nov) — the
+ * recording does not exist yet — but the duration is there. Returns the last
+ * entry with a link (and its duration); else the last entry's duration with no
+ * link; null when the value is not a list. Pure.
+ */
+export function unwrapRecordingList(v: unknown): { url: unknown; durationSec: unknown } | null {
+    let list: unknown = v;
+    if (typeof v === "string" && v.trim().startsWith("[")) {
+        try {
+            list = JSON.parse(v);
+        } catch {
+            return null;
+        }
+    }
+    if (!Array.isArray(list)) return null;
+    let durationOnly: unknown = null;
+    for (let i = list.length - 1; i >= 0; i--) {
+        const e = list[i];
+        if (typeof e === "string" && e.trim()) return { url: e, durationSec: null };
+        if (e && typeof e === "object") {
+            const o = e as Record<string, unknown>;
+            const url = pick(o, "recording_url", "recordingUrl", "url", "recording", "link");
+            const durationSec = pick(o, "call_duration_in_sec", "call_duration_sec", "duration", "call_duration", "duration_sec");
+            if (url) return { url, durationSec: durationSec ?? null };
+            if (durationOnly == null && durationSec != null) durationOnly = durationSec;
+        }
+    }
+    return { url: null, durationSec: durationOnly };
+}
+
 export function parseInboundEvent(raw: unknown): NeodoveInboundEvent {
     const body: Record<string, unknown> =
         raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
@@ -308,6 +343,24 @@ export function parseInboundEvent(raw: unknown): NeodoveInboundEvent {
     const flat: Record<string, unknown> = { ...flattenOtherProperties(base), ...callFlat, ...base };
 
     const eventType = inferEventType(flat);
+    // ID 224: the recording may be a plain link or NeoDove's list (unwrapRecordingList).
+    const rawRecording = pick(
+        flat,
+        "recording_url",
+        "recordingUrl",
+        "recording",
+        "call_recording",
+        "callRecording",
+        "recording_link",
+        "audio_url",
+        "audioUrl",
+        // ID 224: names a NeoDove workflow webhook may use.
+        "call_recording_url",
+        "callRecordingUrl",
+        "recording_file",
+        "recording_file_url",
+    );
+    const recordingList = unwrapRecordingList(rawRecording);
     const rawMobile = asString(
         pick(flat, "mobile", "phone", "mobile_number", "mobileNumber", "contact_number"),
     );
@@ -377,6 +430,7 @@ export function parseInboundEvent(raw: unknown): NeodoveInboundEvent {
             pick(flat, "lead_stage_name", "leadStageName", "stage", "lead_stage", "leadStage"),
         ),
         agentName: asString(pick(flat, "agent", "agent_name", "agentName", "user")),
+        // ID 224: NeoDove sends the duration only inside the recording list.
         callDurationSec: asDurationSec(
             pick(
                 flat,
@@ -393,30 +447,13 @@ export function parseInboundEvent(raw: unknown): NeodoveInboundEvent {
                 "talkTime",
                 "billsec",
                 "call_length",
-            ),
+            ) ?? recordingList?.durationSec,
         ),
         // E-226. Only accepted if it looks like an http(s) URL: this value is
         // rendered as a link and fed to an <audio> element, so a stray "yes" or
         // a bare file name in whichever field NeoDove reuses would become a
         // broken player rather than an obviously absent one.
-        recordingUrl: asUrl(
-            pick(
-                flat,
-                "recording_url",
-                "recordingUrl",
-                "recording",
-                "call_recording",
-                "callRecording",
-                "recording_link",
-                "audio_url",
-                "audioUrl",
-                // ID 224: names a NeoDove workflow webhook may use.
-                "call_recording_url",
-                "callRecordingUrl",
-                "recording_file",
-                "recording_file_url",
-            ),
-        ),
+        recordingUrl: asUrl(recordingList ? recordingList.url : rawRecording),
         // `dispose_remarks` is what the telecaller actually typed — the "disposed
         // reason". First in the list because it is the only one of these NeoDove
         // really sends.

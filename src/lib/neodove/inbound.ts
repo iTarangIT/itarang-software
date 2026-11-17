@@ -627,7 +627,9 @@ async function handleCallRecording(event: NeodoveInboundEvent): Promise<InboundO
         await recordError(event, note);
         return { handled: false, dealerLeadId: null, action: "unresolved", note };
     }
-    if (!event.recordingUrl) {
+    // ID 224: on "Call Connected" NeoDove's link is often still empty but the
+    // duration is there — worth attaching on its own.
+    if (!event.recordingUrl && event.callDurationSec == null) {
         return { handled: true, dealerLeadId, action: "duplicate_skipped", note: "No recording on this call" };
     }
     const rows = await db.execute<{ touchpoint_id: string }>(sql`
@@ -645,7 +647,7 @@ async function handleCallRecording(event: NeodoveInboundEvent): Promise<InboundO
     if (!touchpointId) {
         return { handled: true, dealerLeadId, action: "recording_waiting", note: "Waiting for the call's disposition" };
     }
-    await storeRecordingOnly(touchpointId, event.recordingUrl);
+    await storeRecordingOnly(touchpointId, event.recordingUrl, event.callDurationSec);
     await markRecordingUsed(event.externalEventId, touchpointId);
     return { handled: true, dealerLeadId, action: "recording_attached" };
 }
@@ -669,23 +671,33 @@ async function attachWaitingRecording(touchpointId: string, dealerLeadId: string
         `);
         const row = rows[0];
         if (!row) return;
-        const url = parseInboundEvent(row.request_payload).recordingUrl;
-        if (!url) return;
-        await storeRecordingOnly(touchpointId, url);
+        const parsed = parseInboundEvent(row.request_payload);
+        if (!parsed.recordingUrl && parsed.callDurationSec == null) return;
+        await storeRecordingOnly(touchpointId, parsed.recordingUrl, parsed.callDurationSec);
         await markRecordingUsed(row.external_event_id, touchpointId);
     } catch (err) {
         console.warn("[NeoDove/inbound] waiting recording not attached:", errorMessage(err));
     }
 }
 
-/** Recording link only (own copy first, NeoDove's link if that fails). */
-async function storeRecordingOnly(touchpointId: string, recordingUrl: string): Promise<void> {
-    const url =
-        (await rehostRecording({ provider: "neodove", callId: touchpointId, recordingUrl })) || recordingUrl;
+/**
+ * Recording link (own copy first, NeoDove's link if that fails) and, ID 224,
+ * the duration NeoDove sends with it. Exported for the one-time re-run of the
+ * recordings received before the list format was understood.
+ */
+export async function storeRecordingOnly(
+    touchpointId: string,
+    recordingUrl: string | null,
+    durationSec: number | null = null,
+): Promise<void> {
+    const url = recordingUrl
+        ? (await rehostRecording({ provider: "neodove", callId: touchpointId, recordingUrl })) || recordingUrl
+        : null;
     try {
         await db.execute(sql`
             UPDATE lead_touchpoints
-               SET recording_url = COALESCE(recording_url, ${url})
+               SET recording_url = COALESCE(recording_url, ${url}),
+                   call_duration_sec = COALESCE(call_duration_sec, ${durationSec})
              WHERE touchpoint_id = ${touchpointId}::uuid
         `);
     } catch (err) {
@@ -693,7 +705,7 @@ async function storeRecordingOnly(touchpointId: string, recordingUrl: string): P
     }
 }
 
-async function markRecordingUsed(externalEventId: string, touchpointId: string): Promise<void> {
+export async function markRecordingUsed(externalEventId: string, touchpointId: string): Promise<void> {
     try {
         await db.execute(sql`
             UPDATE neodove_sync_events
@@ -751,6 +763,7 @@ async function storeCallEvidence(touchpointId: string, event: NeodoveInboundEven
     const disposition = dispositionFor(event);
     if (
         !event.recordingUrl &&
+        event.callDurationSec == null &&
         !event.agentName &&
         !disposition &&
         !event.stage &&
@@ -769,6 +782,7 @@ async function storeCallEvidence(touchpointId: string, event: NeodoveInboundEven
         await db.execute(sql`
             UPDATE lead_touchpoints
                SET recording_url = COALESCE(${recordingUrl}, recording_url),
+                   call_duration_sec = COALESCE(${event.callDurationSec}, call_duration_sec),
                    external_agent_name = COALESCE(${event.agentName}, external_agent_name),
                    disposition = COALESCE(${disposition?.label ?? null}, disposition),
                    disposition_bucket = COALESCE(${disposition?.bucket ?? null}, disposition_bucket),
