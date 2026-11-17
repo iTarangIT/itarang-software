@@ -235,13 +235,22 @@ export function LeadDetailHeader({
                         {lead.onboarding_created_at
                             ? ` · Created ${formatDateTime(lead.onboarding_created_at)}`
                             : ""}
-                        {" · "}
-                        <Link
-                            href={`/dealer-onboarding?applicationId=${lead.dealer_onboarding_application_id}`}
-                            className="font-semibold underline underline-offset-2 hover:text-emerald-900"
-                        >
-                            Continue onboarding →
-                        </Link>
+                        {/* 17 Nov: the form opens only while it is a draft. Once
+                            submitted it is a Dealer Validation file, which the
+                            ASM and ISR do not open (mayOpenOnboardingApplication). */}
+                        {(lead.onboarding_status ?? "draft").toLowerCase() === "draft" ? (
+                            <>
+                                {" · "}
+                                <Link
+                                    href={`/dealer-onboarding?applicationId=${lead.dealer_onboarding_application_id}`}
+                                    className="font-semibold underline underline-offset-2 hover:text-emerald-900"
+                                >
+                                    Continue onboarding →
+                                </Link>
+                            </>
+                        ) : (
+                            " · With the Sales Head for review"
+                        )}
                     </Banner>
                 )}
             </div>

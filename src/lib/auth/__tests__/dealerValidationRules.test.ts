@@ -67,3 +67,28 @@ describe("Dealer Validation readers (ID 166 item 11, 18 Oct)", () => {
         expect(ownsDealerApplication(null, { accountOwnerId: null, salespersonUserId: null, ownerId: null })).toBe(false);
     });
 });
+
+import { mayOpenOnboardingApplication } from "../dealerValidationRules";
+
+describe("onboarding wizard (17 Nov): ASM / ISR open drafts only", () => {
+    it("ASM and ISR open a draft but never a submitted application, even their own", () => {
+        for (const role of ["asm", "inside_sales_rep"]) {
+            expect(mayOpenOnboardingApplication({ role, userId: "u-1", dealerUserId: "u-9", onboardingStatus: "draft" })).toBe(true);
+            for (const s of ["submitted", "under_review", "correction_requested", "approved", "rejected", "withdrawn", null]) {
+                expect(mayOpenOnboardingApplication({ role, userId: "u-1", dealerUserId: "u-1", onboardingStatus: s })).toBe(false);
+            }
+        }
+    });
+
+    it("Admin, Sales Head and CEO open any application", () => {
+        for (const role of ["admin", "sales_head", "ceo"]) {
+            expect(mayOpenOnboardingApplication({ role, userId: "u-1", dealerUserId: "u-9", onboardingStatus: "submitted" })).toBe(true);
+        }
+    });
+
+    it("everyone else opens only their own application", () => {
+        expect(mayOpenOnboardingApplication({ role: "dealer", userId: "u-1", dealerUserId: "u-1", onboardingStatus: "submitted" })).toBe(true);
+        expect(mayOpenOnboardingApplication({ role: "dealer", userId: "u-1", dealerUserId: "u-2", onboardingStatus: "draft" })).toBe(false);
+        expect(mayOpenOnboardingApplication({ role: "sales_manager", userId: "", dealerUserId: "", onboardingStatus: "draft" })).toBe(false);
+    });
+});

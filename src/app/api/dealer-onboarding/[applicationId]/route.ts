@@ -7,19 +7,12 @@ import {
 } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { createClient } from "@/lib/supabase/server";
+import { mayOpenOnboardingApplication } from "@/lib/auth/dealerValidationRules";
 
 type RouteContext = {
   params: Promise<{ applicationId: string }>;
 };
 
-// Internal staff who may open ANY application in the wizard — e.g. continuing a
-// converted lead (BRD §0.13) they didn't personally create. Everyone else may
-// only open an application they OWN (dealer_user_id === their id), matching the
-// owner-scoped "My Drafts" list (/api/dealer-onboarding/my). Without the
-// ownership branch, a draft owner whose role isn't internal (e.g. the dedicated
-// "onboarding" role) gets 403 resuming their own draft, so its saved documents
-// never reload.
-const INTERNAL_ROLES = ["admin", "sales_head", "ceo", "inside_sales_rep", "asm"];
 
 export async function GET(_req: NextRequest, context: RouteContext) {
   try {
@@ -40,7 +33,6 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         .where(eq(users.id, user.id))
         .limit(1)
     )[0];
-    const isInternal = !!dbUser && INTERNAL_ROLES.includes(dbUser.role);
 
     const { applicationId } = await context.params;
 
@@ -53,9 +45,19 @@ export async function GET(_req: NextRequest, context: RouteContext) {
           .limit(1)
       )[0] ?? null;
 
-    // Authorize: internal staff may open any application; everyone else only
-    // their own. Checked after the fetch so the owner test can use the row.
-    if (application && !isInternal && application.dealer_user_id !== user.id) {
+    // Authorize (mayOpenOnboardingApplication): Admin / Sales Head / CEO any
+    // application; ASM / ISR only a draft (17 Nov: a submitted application is
+    // a Dealer Validation file they do not open); everyone else only their
+    // own. Checked after the fetch so the rule can use the row.
+    if (
+      application &&
+      !mayOpenOnboardingApplication({
+        role: dbUser?.role,
+        userId: user.id,
+        dealerUserId: application.dealer_user_id,
+        onboardingStatus: application.onboarding_status,
+      })
+    ) {
       return NextResponse.json(
         { success: false, message: "Forbidden" },
         { status: 403 }
