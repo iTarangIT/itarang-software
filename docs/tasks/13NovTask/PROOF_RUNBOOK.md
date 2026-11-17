@@ -113,3 +113,12 @@ RUNBOOK §13: `scripts/list-isr-wa-bindings.ts` (post it) → Gemini billing + O
 | 203 | 5 cold loads of Admin › Accounts | network-tab times |
 | 220 | `scripts/verify-dispatch-to-sold.ts` on db-2 | moved / failed on 6 Nov; SMS from the pm2 log (`cron-delivered-`) |
 | 211 | part of L17 | |
+
+## 17 Nov — IDs 126, 217, 218, 222
+
+| ID | Built / checked | Proof to post on live |
+|---|---|---|
+| 126 | "Repair failed → Lost" now records **Number not working** (`invalid_contact`) and only works on a lead in Number Repair (number flagged dead / not answering, active, not Lost); any other lead gets a 409 telling them to use Mark Lost. Sandbox: `scripts/verify-number-repair-126.ts` all PASS. | Number Repair › a flagged lead › Repair failed → Lost: Lost reason reads "Number not working". |
+| 217 | Already one figure (d57e5682). `scripts/verify-receivables-one-rule.ts` now also prints what the figure is made of (invoices by source, credit notes, per-customer netting). Sandbox: card = buckets = page = old SQL sum (₹2,00,46,047). | Run it on live: `node --import tsx --env-file=.env.production scripts/verify-receivables-one-rule.ts` — all PASS; if the old SQL sum differs, the "Made of" lines name the part (credit notes / netting). |
+| 218 | Already fixed in code (fe716bc3). The lead-clocks route now logs `[lead-clocks] Response time failed after N ms: <error> (code …)` before the 500. | Open the Sales dashboard on live; if the card says "could not be loaded", run `pm2 logs itarang-crm-web --lines 300 \| grep lead-clocks` and post the line (pool wait / timeout / reset). |
+| 222 | Already built (row text "visit booked for <date>", No visit booked / Visit booked / All filter, download column, My day email). Sandbox: 3 leads waiting, none booked; "Visit booked" 0, "No visit booked" 3. | Sales Head › Waiting for a field visit: GR ENTERPRISE shows "visit booked for <date>"; "No visit booked" hides it; the download has "Visit booked for". |
