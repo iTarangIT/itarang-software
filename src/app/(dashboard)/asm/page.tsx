@@ -2,7 +2,8 @@ import { requireRole } from "@/lib/auth-utils";
 import { EcofyMyLeadsCard } from "@/components/ecofy/pages";
 import { AsmQueueView } from "./_components/AsmQueueView";
 import { exportsOwnLeadsOnly } from "@/lib/leads/access";
-import { getTeamPeople } from "@/lib/users/team";
+import { getTeamMemberIds, getTeamPeople } from "@/lib/users/team";
+import { DealerVisitsBooked } from "@/components/visits/DealerVisitsBooked";
 
 export const dynamic = "force-dynamic";
 
@@ -33,6 +34,8 @@ export default async function AsmQueuePage() {
             </header>
             {/* E-307 — Ecofy leads the Sales Head assigned to this rep. */}
             <EcofyMyLeadsCard href="/asm/ecofy-leads" />
+            {/* ID 241-2: next visits booked on existing dealers (hidden when there are none). */}
+            <DealerVisitsBooked viewerId={user.id} teamIds={exportsOwnLeadsOnly(user.role) ? await getTeamMemberIds(user.id) : []} />
             {/* ID 244: the Showing pick and the numbers strip live in the view, so one pick drives
                 the strip, the tab counts and the list together. */}
             <AsmQueueView viewerId={user.id} viewerRole={user.role} teamPeople={teamPeople} viewerName={user.name ?? null} />

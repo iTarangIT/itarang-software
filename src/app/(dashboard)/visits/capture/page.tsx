@@ -4,7 +4,8 @@ import { db } from "@/lib/db";
 import { requireAuth } from "@/lib/auth-utils";
 import { leadHrefFor } from "@/lib/leads/newOwnerNotice";
 import { getTeamMemberIds } from "@/lib/users/team";
-import { mayLogAccountVisit } from "@/lib/visits/verifiedCapture";
+import { istDay, mayLogAccountVisit } from "@/lib/visits/verifiedCapture";
+import { hasDealerVisitOutcomes } from "@/lib/visits/dealerVisitStore";
 import { LeadVisitCapture, AccountVisitCapture } from "./VisitCaptureForms";
 
 export const dynamic = "force-dynamic";
@@ -71,7 +72,17 @@ export default async function VisitCapturePage({
         if (!acct) return refuse("Dealer not found.", "/my-dealers");
         const ok = mayLogAccountVisit({ userId: user.id, ownerId: acct.owner_id, teamIds: await getTeamMemberIds(user.id) });
         if (!ok) return refuse("Only this dealer's owner or their manager can log a visit here.", back);
-        return shell(<AccountVisitCapture accountId={acct.id} name={acct.name} backHref={back} />);
+        // ID 241-2: dealer outcomes + next visit once E-386 is on this database.
+        const dealerOutcomes = await hasDealerVisitOutcomes();
+        return shell(
+            <AccountVisitCapture
+                accountId={acct.id}
+                name={acct.name}
+                backHref={back}
+                dealerOutcomes={dealerOutcomes}
+                todayIst={istDay(new Date())}
+            />,
+        );
     }
 
     return refuse("Open this page from a lead or a dealer.", "/");
