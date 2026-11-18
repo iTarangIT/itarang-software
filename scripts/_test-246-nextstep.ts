@@ -11,7 +11,7 @@ import type { LeadStatus } from "@/lib/lifecycle/transitions";
 
 const NOTE_TYPES = new Set(["visit", "inside_sales_call", "whatsapp", "ai_call"]);
 
-async function show(leadId: string, view: "asm" | "inside_sales") {
+async function show(leadId: string, view: "asm" | "isr") {
     const bundle = await fetchLeadDetailBundle(leadId);
     if (!bundle) return console.log(leadId, "not found");
     const lead = bundle.lead;
@@ -52,7 +52,7 @@ async function show(leadId: string, view: "asm" | "inside_sales") {
 }
 
 async function main() {
-    await show("DL-1781512894586-yNICekRI", "inside_sales"); // Test Shop: Won, onboarding draft
+    await show("DL-1781512894586-yNICekRI", "isr"); // Test Shop: Won, onboarding draft
     const [od] = (await db.execute(sql`
         SELECT dl.id FROM dealer_leads dl
           JOIN LATERAL (SELECT b.scheduled_date FROM lead_visits b WHERE b.dealer_lead_id = dl.id
