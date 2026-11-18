@@ -12,6 +12,7 @@ import { getBoardView, type BoardTile } from "@/lib/operations/board";
 import type { Severity } from "@/lib/operations/registry";
 
 import { AutoRefresh } from "./_components/AutoRefresh";
+import { CallFeedCard } from "./_components/CallFeedCard";
 
 export const metadata = { title: "Ops Console" };
 
@@ -143,6 +144,9 @@ export default async function OperationsBoardPage() {
           <AutoRefresh intervalMs={15_000} />
         </div>
       </div>
+
+      {/* ID 229: "Last NeoDove call received <time>" and the AI dialer twin. */}
+      <CallFeedCard />
 
       {view.tiles.length === 0 ? (
         <Card>

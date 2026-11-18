@@ -84,7 +84,11 @@ describe("mayOpenFile (ID 166)", () => {
         for (const role of ["business_head", "sales_manager", "sales_executive", "finance_controller", "inside_sales_rep", "asm"]) {
             expect(mayOpenFile(viewer(role), kyc, { accountOwnerId: "someone-else" })).toBe(false);
         }
-        expect(mayOpenFile(viewer("asm"), kyc, { accountOwnerId: "u-1" })).toBe(true);
+        // 17 Nov: owning the dealer's account no longer opens customer KYC for the ASM / ISR.
+        expect(mayOpenFile(viewer("asm"), kyc, { accountOwnerId: "u-1" })).toBe(false);
+        expect(mayOpenFile(viewer("inside_sales_rep"), kyc, { accountOwnerId: "u-1" })).toBe(false);
+        // other account-owner roles keep it
+        expect(mayOpenFile(viewer("sales_manager"), kyc, { accountOwnerId: "u-1" })).toBe(true);
     });
 
     it("opens KYC for the lead's assignee and sales manager, like the KYC screens (ID 119)", () => {
@@ -238,7 +242,10 @@ describe("mayOpenFile — the NBFC store (16 Oct)", () => {
         expect(mayOpenFile(partner(["T2"]), fi, { ownerTenantIds: ["T1"] })).toBe(false);
         expect(mayOpenFile(viewer("dealer", { dealerCode: "D1" }), fi, { ownerTenantIds: ["T1"] })).toBe(false);
         expect(mayOpenFile(viewer("sales_manager"), fi, { ownerTenantIds: ["T1"] })).toBe(false);
-        expect(mayOpenFile(viewer("asm"), fi, { ownerTenantIds: ["T1"], accountOwnerId: "u-1" })).toBe(true);
+        // 17 Nov: not the ASM / ISR even as the account owner; another account-owner role still opens it
+        expect(mayOpenFile(viewer("asm"), fi, { ownerTenantIds: ["T1"], accountOwnerId: "u-1" })).toBe(false);
+        expect(mayOpenFile(viewer("inside_sales_rep"), fi, { ownerTenantIds: ["T1"], accountOwnerId: "u-1" })).toBe(false);
+        expect(mayOpenFile(viewer("sales_manager"), fi, { ownerTenantIds: ["T1"], accountOwnerId: "u-1" })).toBe(true);
         for (const role of ["admin", "ceo", "sales_head"]) expect(mayOpenFile(viewer(role), fi)).toBe(true);
         // a missing fact is a refusal
         expect(mayOpenFile(partner(["T1"]), fi)).toBe(false);
@@ -380,5 +387,68 @@ describe("mayOpenFile — folders that were open to any login (16 Oct)", () => {
         expect(mayOpenFile(viewer("nbfc_partner", { nbfcTenantIds: ["T1"] }), f, { ownerTenantIds: ["T1"] })).toBe(true);
         expect(mayOpenFile(viewer("dealer", { dealerCode: "D1" }), f, { ownerTenantIds: ["T1"] })).toBe(false);
         expect(mayOpenFile(viewer("ceo"), f)).toBe(true);
+    });
+});
+
+describe("consent form: the file's dealer and the house login on a pushed file (17 Nov)", () => {
+    const unsigned = classifyFile("documents", "kyc/LEAD-1/consent/consent_CON-1_1.pdf");
+    const signed = classifyFile("documents", "kyc/LEAD-1/signed_consent_1.pdf");
+    const aadhaar = classifyFile("documents", "kyc/LEAD-1/aadhaar_front_1.jpg");
+    const dealer = viewer("dealer", { dealerCode: "D1" });
+    const house = viewer("dealer", { dealerCode: "HOUSE" });
+
+    it("marks only the consent files", () => {
+        expect(unsigned).toMatchObject({ kind: "customer_lead", leadId: "LEAD-1", consent: true });
+        expect(signed).toMatchObject({ kind: "customer_lead", leadId: "LEAD-1", consent: true });
+        expect(classifyFile("documents", "kyc/LEAD-1/consent/preview/p.pdf")).toMatchObject({ consent: true });
+        expect(aadhaar).not.toHaveProperty("consent");
+        expect(classifyFile("documents", "leads/LEAD-1/consent/x.pdf")).not.toHaveProperty("consent");
+    });
+
+    it("the file's dealer opens the consent form with no upload row", () => {
+        expect(mayOpenFile(dealer, unsigned, { leadDealerId: "D1" })).toBe(true);
+        expect(mayOpenFile(dealer, signed, { leadDealerId: "D1" })).toBe(true);
+        // other files still need its own upload
+        expect(mayOpenFile(dealer, aadhaar, { leadDealerId: "D1" })).toBe(false);
+    });
+
+    it("the house login opens it on a file it pushed out, not on any other dealer's file", () => {
+        expect(mayOpenFile(house, unsigned, { leadDealerId: "D1", houseOnPushedFile: true })).toBe(true);
+        expect(mayOpenFile(house, signed, { leadDealerId: "D1", houseOnPushedFile: true })).toBe(true);
+        expect(mayOpenFile(house, unsigned, { leadDealerId: "D1", houseOnPushedFile: false })).toBe(false);
+        // and what the house uploaded itself on that file
+        expect(
+            mayOpenFile(house, aadhaar, {
+                leadDealerId: "D1",
+                houseOnPushedFile: true,
+                fileUploads: [{ uploaderId: "u-9", uploaderDealerCode: "HOUSE", source: "portal" }],
+            }),
+        ).toBe(true);
+        expect(mayOpenFile(house, aadhaar, { leadDealerId: "D1", houseOnPushedFile: true })).toBe(false);
+    });
+
+    it("another dealer never opens it", () => {
+        expect(mayOpenFile(viewer("dealer", { dealerCode: "D2" }), unsigned, { leadDealerId: "D1" })).toBe(false);
+    });
+});
+
+describe("file pushed by the house: the receiving dealer owns it (17 Nov)", () => {
+    const aadhaar = classifyFile("documents", "kyc/LEAD-1/aadhaar_front_1.jpg");
+    const dealer = viewer("dealer", { dealerCode: "D1" });
+    const byHouse = [{ uploaderId: "u-house", uploaderDealerCode: "HOUSE", source: "portal" }];
+    const byCustomer = [{ uploaderId: null, uploaderDealerCode: null, source: "public_link" }];
+
+    it("the dealer opens what the house uploaded on a file the house pushed to it", () => {
+        expect(mayOpenFile(dealer, aadhaar, { leadDealerId: "D1", fileUploads: byHouse, pushedFromHouseCode: "HOUSE" })).toBe(true);
+        expect(dealerUploadedFile(dealer, byHouse, "HOUSE")).toBe(true);
+    });
+
+    it("not when the house did not push the file to it", () => {
+        expect(mayOpenFile(dealer, aadhaar, { leadDealerId: "D1", fileUploads: byHouse })).toBe(false);
+        expect(mayOpenFile(dealer, aadhaar, { leadDealerId: "D2", fileUploads: byHouse, pushedFromHouseCode: "HOUSE" })).toBe(false);
+    });
+
+    it("the customer's own upload-link files stay as before", () => {
+        expect(mayOpenFile(dealer, aadhaar, { leadDealerId: "D1", fileUploads: byCustomer, pushedFromHouseCode: "HOUSE" })).toBe(false);
     });
 });

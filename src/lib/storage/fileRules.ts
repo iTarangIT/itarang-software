@@ -28,9 +28,22 @@
 // decision once the facts about that file are known. fileAuthz.ts loads the
 // facts from the database. No db or env imports here, so it unit-tests alone.
 
+import { NO_CUSTOMER_KYC_ROLES } from "@/lib/auth/leadAccessRules";
+
 export type FileKind =
     /** Customer lead (leads.id) KYC, consent, pre-sanction docs, product photos. */
-    | { kind: "customer_lead"; leadId: string; kyc: true }
+    | {
+          kind: "customer_lead";
+          leadId: string;
+          kyc: true;
+          /**
+           * 17 Nov: the consent form the system makes for the dealer to print
+           * (kyc/<lead>/consent/…) or the signed scan (kyc/<lead>/signed_consent_…).
+           * No upload row records the printable form, so the dealer of the file
+           * and the house login on a file it pushed out open it without one.
+           */
+          consent?: boolean;
+      }
     /** Dealer lead (dealer_leads.id): WhatsApp screenshots, attached call recordings. */
     | { kind: "dealer_lead"; dealerLeadId: string }
     /** Bolna / ElevenLabs recording; the lead is found from the call row. */
@@ -206,7 +219,12 @@ export function classifyFile(bucket: string, key: string): FileKind {
 
     // `documents`
     if ((top === "kyc" || top === "leads") && second) {
-        return { kind: "customer_lead", leadId: second, kyc: true };
+        const third = (parts[2] ?? "").toLowerCase();
+        const consent =
+            top === "kyc" && (third === "consent" || (parts.length === 3 && third.startsWith("signed_consent_")));
+        return consent
+            ? { kind: "customer_lead", leadId: second, kyc: true, consent: true }
+            : { kind: "customer_lead", leadId: second, kyc: true };
     }
     if (top === "whatsapp-screenshots" && second) return { kind: "dealer_lead", dealerLeadId: second };
     if (top === "expenses" && second) return { kind: "expense_bill", submitterId: second };
@@ -302,13 +320,24 @@ export type FileUpload = {
  * uploader and no source (before uploaders were recorded) is NOT the
  * dealer's: nothing shows the dealer uploaded it.
  */
-export function dealerUploadedFile(viewer: FileViewer, uploads: readonly FileUpload[] | undefined): boolean {
+export function dealerUploadedFile(
+    viewer: FileViewer,
+    uploads: readonly FileUpload[] | undefined,
+    /**
+     * 17 Nov: on a file the iTarang house pushed to this dealer, the dealer is
+     * the file's owner — what the house uploaded before (or after) the push
+     * counts as the dealer's own. Pass the house dealer code only then.
+     */
+    pushedFromHouseCode?: string | null,
+): boolean {
     if (!uploads || uploads.length === 0) return false;
+    const house = (pushedFromHouseCode ?? "").trim();
     return uploads.some((u) => {
         // ID 183: Admin / Sales Head uploaded it ACTING FOR this dealer — the
         // dealer's own upload. (Called only on the dealer's own customer.)
         if (u.source === "act_for_dealer") return true;
         if (!u.uploaderId) return false;
+        if (house && (u.uploaderDealerCode ?? "").trim() === house) return true;
         return u.uploaderId === viewer.id || sameDealer(viewer, u.uploaderDealerCode);
     });
 }
@@ -327,6 +356,17 @@ export type FileFacts = {
      * undefined or empty = no row records the file (consent PDFs, photos, …).
      */
     fileUploads?: readonly FileUpload[];
+    /**
+     * Customer lead, dealer viewer: the viewer is the iTarang house login and
+     * the house pushed this file out (houseMayActOnLead, decided 14 Oct).
+     */
+    houseOnPushedFile?: boolean;
+    /**
+     * Customer lead, dealer viewer that owns the file: the house dealer code
+     * when the house pushed this file to it (the dealer then owns the house's
+     * uploads too). Null / undefined otherwise.
+     */
+    pushedFromHouseCode?: string | null;
     /** NBFC tenants the customer lead is shared with (nbfc_lead_assignments). */
     sharedTenantIds?: readonly string[];
     /** Owners on the dealer lead: current owner and ASM. */
@@ -381,6 +421,10 @@ export function mayOpenFile(viewer: FileViewer, file: FileKind, facts: FileFacts
     const role = (viewer.role ?? "").toLowerCase();
     const top = has(FILE_TOP_ROLES, role);
     const ownsAccount = !!facts.accountOwnerId && facts.accountOwnerId === viewer.id;
+    // 17 Nov (user): the ASM and the ISR never open a customer's KYC files —
+    // owning the dealer's account no longer lets them in (customer KYC,
+    // consent, Aadhaar scans, the NBFC store's per-lead and FI / video KYC files).
+    const ownsAccountForKyc = ownsAccount && !(NO_CUSTOMER_KYC_ROLES as readonly string[]).includes(role);
 
     switch (file.kind) {
         case "dealer_lead_attachment":
@@ -400,10 +444,10 @@ export function mayOpenFile(viewer: FileViewer, file: FileKind, facts: FileFacts
         case "recovery_visit":
             return top || inTenant(viewer, facts.ownerTenantIds);
         case "nbfc_lead":
-            if (top || ownsAccount || inTenant(viewer, facts.sharedTenantIds)) return true;
+            if (top || ownsAccountForKyc || inTenant(viewer, facts.sharedTenantIds)) return true;
             return file.dealerMay && role === "dealer" && sameDealer(viewer, facts.leadDealerId);
         case "nbfc_case":
-            return top || ownsAccount || inTenant(viewer, facts.ownerTenantIds);
+            return top || ownsAccountForKyc || inTenant(viewer, facts.ownerTenantIds);
         case "nbfc_tenant":
             return top || inTenant(viewer, [file.tenantRef]);
         case "nbfc_partner_doc":
@@ -415,7 +459,7 @@ export function mayOpenFile(viewer: FileViewer, file: FileKind, facts: FileFacts
         case "agreement_template":
             return !INTERNAL_EXCLUDED.has(role);
         case "autofill_scan": {
-            if (top || ownsAccount) return true;
+            if (top || ownsAccountForKyc) return true;
             // The dealer that scanned it (the key carries the uploader's code).
             if (role === "dealer") return sameDealer(viewer, file.dealerCode);
             // The lead's iTarang owner (ID 119 owners), when the scan names a lead.
@@ -427,15 +471,22 @@ export function mayOpenFile(viewer: FileViewer, file: FileKind, facts: FileFacts
         case "assistant_media":
             return top || file.userId === viewer.id;
         case "customer_lead": {
-            if (top || ownsAccount) return true;
+            if (top || ownsAccountForKyc) return true;
             const ownsLead = [facts.leadUploaderId, facts.leadAssignedTo, facts.leadSmAssignedTo].some(
                 (o) => !!o && o === viewer.id,
             );
             if (role === "dealer") {
                 // Its own customer (or a lead it uploaded), and then only the
                 // files it uploaded itself (ID 166, E-349).
-                const ownCustomer = ownsLead || sameDealer(viewer, facts.leadDealerId);
-                return ownCustomer && dealerUploadedFile(viewer, facts.fileUploads);
+                // 17 Nov: the house login on a file it pushed out works it like
+                // the dealer (14 Oct decision), so it opens the same files.
+                const ownCustomer =
+                    ownsLead || sameDealer(viewer, facts.leadDealerId) || facts.houseOnPushedFile === true;
+                if (!ownCustomer) return false;
+                // 17 Nov: the consent form is made for the dealer to print and
+                // have signed — it opens without an upload row.
+                if (file.consent) return true;
+                return dealerUploadedFile(viewer, facts.fileUploads, facts.pushedFromHouseCode);
             }
             // ID 119: the lead's owner is whoever uploaded it, has it assigned
             // or is its sales manager — the same rule as backOfficeOwnsLead, so

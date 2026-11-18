@@ -30,7 +30,14 @@ import { log } from "@/lib/log";
 import { notifyRoles } from "@/lib/notifications/notify";
 
 import { candidatesForRule, shadowedSources } from "./alertRouting";
-import { callFeedAlertAudience, callFeedAlertEmail, isTestMailbox } from "./callFeedText";
+import {
+  CALL_FEED_METRIC,
+  callFeedAlertAudience,
+  callFeedAlertEmail,
+  callFeedBell,
+  isTestMailbox,
+  renotifiesOnCooldown,
+} from "./callFeedText";
 import { rootCauseMessage } from "./errors";
 import { formatMetricValue } from "./format";
 import { comparatorFor, getMetric, METRICS, severityForRule } from "./registry";
@@ -241,7 +248,13 @@ export async function evaluateAlerts(): Promise<AlertEvaluation> {
             SET notified_at = NOW()
             WHERE id = ${row.id as string}
               AND (notified_at IS NULL
-                   OR notified_at < NOW() - MAKE_INTERVAL(mins => ${rule.cooldown_minutes}))
+                   OR ${
+                     // ID 229: a call-feed alarm never re-rings on cooldown —
+                     // once when it opens, once when it clears.
+                     renotifiesOnCooldown(rule.metric_key)
+                       ? sql`notified_at < NOW() - MAKE_INTERVAL(mins => ${rule.cooldown_minutes})`
+                       : sql`FALSE`
+                   })
             RETURNING id
           `)) as unknown as Array<Record<string, unknown>>;
 
@@ -255,6 +268,7 @@ export async function evaluateAlerts(): Promise<AlertEvaluation> {
               // Business emails go once per alert (when it opens), not on every
               // cooldown re-notify — an overnight gap would mail all night.
               row.inserted === true,
+              candidate.value,
             );
             result.notified += 1;
           }
@@ -289,6 +303,8 @@ export async function evaluateAlerts(): Promise<AlertEvaluation> {
               rule.metric_key,
               candidate.source,
               `Recovered: ${getMetric(rule.metric_key)?.label ?? rule.metric_key} on ${candidate.source} is back within threshold.`,
+              true,
+              candidate.value,
             );
           }
         }
@@ -318,15 +334,21 @@ async function deliver(
   message: string,
   /** True on the first notice of an alert and on its recovery notice. */
   firstOrLast = true,
+  /** The measured value (call feed: working minutes), for plain-words bell text. */
+  value: number | null = null,
 ): Promise<void> {
   const channels = Array.isArray(rule.notify_channels)
     ? (rule.notify_channels as string[])
     : ["inapp"];
 
+  // ID 229 (17 Nov): the call-feed bell speaks plain words, not "calls.feed_gap".
+  const plain = metricKey === CALL_FEED_METRIC ? callFeedBell(severity, source, value) : null;
   const title =
-    severity === "resolved"
+    plain?.title ??
+    (severity === "resolved"
       ? `Resolved: ${metricKey}`
-      : `${severity === "crit" ? "CRITICAL" : "Warning"}: ${metricKey}`;
+      : `${severity === "crit" ? "CRITICAL" : "Warning"}: ${metricKey}`);
+  const bellMessage = plain?.message ?? message;
 
   // ID 229: a call feed going quiet is a business problem, not only an ops one
   // — on the live CRM the CEO and the Sales Head get the bell and an email
@@ -339,7 +361,7 @@ async function deliver(
       await notifyRoles(audience.bellRoles, {
         type: "ops_alert",
         title,
-        message,
+        message: bellMessage,
         data: { metric_key: metricKey, source, severity },
       });
       // Named logins (CALL_FEED_ALERT_LOGINS, empty now) by email — skipped when
@@ -347,7 +369,7 @@ async function deliver(
       if (audience.logins.length > 0) {
         await db.execute(sql`
           INSERT INTO notifications (id, user_id, type, title, message, data, lead_id, read, created_at)
-          SELECT gen_random_uuid()::text, u.id, 'ops_alert', ${title}, ${message},
+          SELECT gen_random_uuid()::text, u.id, 'ops_alert', ${title}, ${bellMessage},
                  ${JSON.stringify({ metric_key: metricKey, source, severity })}::jsonb, NULL, false, NOW()
           FROM users u
           WHERE LOWER(u.email) IN (${sql.join(audience.logins.map((e) => sql`${e.toLowerCase()}`), sql`, `)})
