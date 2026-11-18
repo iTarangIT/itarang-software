@@ -67,6 +67,8 @@ import { LeadsFilterBar } from "./_components/LeadsFilterBar";
 import { LeadsMoreActions } from "./_components/LeadsMoreActions";
 import { LeadsStatCards } from "./_components/LeadsStatCards";
 import { LeadsTable, type LeadRow } from "./_components/LeadsTable";
+import { nextSortState, type SortState } from "@/components/shared/TableSort";
+import { LEAD_LIST_SORT_SPECS, leadSortFromParams } from "@/lib/leads/leadListSort";
 import { LeadDrawer } from "./_components/LeadDrawer";
 import { LeadsSelectionBar } from "./_components/LeadsSelectionBar";
 import {
@@ -1189,6 +1191,15 @@ function ConvertedLeadCard({
   );
 }
 
+// ID 243 — put the Leads table's header sort into a query string (API call or page link).
+function addLeadSort(p: URLSearchParams, sort: SortState | null): URLSearchParams {
+  if (sort) {
+    p.set("sort", sort.key);
+    p.set("dir", sort.dir);
+  }
+  return p;
+}
+
 // ─── Main Page ────────────────────────────────────────────────
 
 export default function LeadsUnifiedPage() {
@@ -1290,6 +1301,24 @@ export default function LeadsUnifiedPage() {
     shouldOpenMore(fromSearchParams(new URLSearchParams(searchParams?.toString() ?? ""))),
   );
   const [leadsPage, setLeadsPage] = useState(1);
+  // ID 243 — header sort on the Leads table. The list is paged, so the API does
+  // the ordering (only its own columns, blanks last both ways); the sort sits in
+  // the page link beside the filters, so Back from a lead opens the same order.
+  const [leadSort, setLeadSort] = useState<SortState | null>(() =>
+    leadSortFromParams(new URLSearchParams(searchParams?.toString() ?? "")),
+  );
+  // Read by fetchLeads / select-all, which are stable callbacks.
+  const leadSortRef = useRef<SortState | null>(leadSort);
+  useEffect(() => {
+    leadSortRef.current = leadSort;
+  }, [leadSort]);
+  const toggleLeadSort = useCallback((key: string) => {
+    const spec = LEAD_LIST_SORT_SPECS.find((s) => s.key === key);
+    if (!spec) return;
+    setLeadSort((cur) => nextSortState(cur, key, spec.type));
+    // A new order starts from the first page.
+    setLeadsPage(1);
+  }, []);
   const [leadsLoading, setLeadsLoading] = useState(false);
   const [leadsError, setLeadsError] = useState<string | null>(null);
   // ── Merged-list filters ───────────────────────────────────────────────
@@ -1336,7 +1365,9 @@ export default function LeadsUnifiedPage() {
     p.delete("limit");
     if (tab !== "leads") p.set("tab", tab);
     const qs = p.toString();
-    const want = `${window.location.pathname}${qs ? `?${qs}` : ""}`;
+    // ID 243: the sort rides in the link too, but is not a Back "filter step".
+    const linkQs = addLeadSort(new URLSearchParams(qs), leadSortRef.current).toString();
+    const want = `${window.location.pathname}${linkQs ? `?${linkQs}` : ""}`;
     if (want !== `${window.location.pathname}${window.location.search}`) {
       window.history.replaceState(window.history.state, "", want);
     }
@@ -1351,6 +1382,17 @@ export default function LeadsUnifiedPage() {
     }
     writeFilterSteps(filterSteps.current);
   }, [applied, tab]);
+
+  // ID 243: a sort click rewrites only sort/dir in the link (no new history entry).
+  useEffect(() => {
+    const sp = new URLSearchParams(window.location.search);
+    sp.delete("sort");
+    sp.delete("dir");
+    const qs = addLeadSort(sp, leadSort).toString();
+    if (qs !== window.location.search.replace(/^\?/, "")) {
+      window.history.replaceState(window.history.state, "", `${window.location.pathname}${qs ? `?${qs}` : ""}`);
+    }
+  }, [leadSort]);
 
   /** Back: undo the newest filter step; false when none is left (leave the page). */
   const undoLastFilter = useCallback((): boolean => {
@@ -1539,7 +1581,7 @@ export default function LeadsUnifiedPage() {
       const seq = ++fetchSeqRef.current;
       if (!silent) setLeadsLoading(true);
       try {
-        const params = toSearchParams(f, page, LIMIT);
+        const params = addLeadSort(toSearchParams(f, page, LIMIT), leadSortRef.current);
         const res = await fetch(`/api/dealer-leads?${params.toString()}`);
         const data = await res.json();
         // A newer fetch superseded this one while it was in flight — drop the
@@ -1608,7 +1650,7 @@ export default function LeadsUnifiedPage() {
   useEffect(() => {
     if (tab === "leads") fetchLeads(leadsPage, applied);
     if (tab === "converted") fetchConvertedLeads(convertedPage, search);
-  }, [tab, leadsPage, convertedPage, search, applied, LIMIT]);
+  }, [tab, leadsPage, convertedPage, search, applied, LIMIT, leadSort]);
 
   // While the AI dialer is running, poll the leads list every 2s so the
   // `current_status` column reflects lead transitions (pending → calling
@@ -1634,7 +1676,8 @@ export default function LeadsUnifiedPage() {
   const selectAllMatching = useCallback(async () => {
     setSelectingAll(true);
     try {
-      const params = toSearchParams(applied, 1, LIMIT);
+      // Same order as the table (ID 243), so "first N" is the rows on screen.
+      const params = addLeadSort(toSearchParams(applied, 1, LIMIT), leadSortRef.current);
       params.set("ids_only", "1");
       const res = await fetch(`/api/dealer-leads?${params.toString()}`);
       const data = await res.json();
@@ -1665,7 +1708,7 @@ export default function LeadsUnifiedPage() {
       if (!Number.isFinite(n) || n < 1) return;
       setSelectingAll(true);
       try {
-        const params = toSearchParams(applied, 1, LIMIT);
+        const params = addLeadSort(toSearchParams(applied, 1, LIMIT), leadSortRef.current);
         params.set("ids_only", "1");
         const res = await fetch(`/api/dealer-leads?${params.toString()}`);
         const data = await res.json();
@@ -2444,6 +2487,8 @@ export default function LeadsUnifiedPage() {
             // ID 199: a manager's team view shows whose lead each row is.
             caps={teamView ? { ...caps, canSeeOwnerAsm: true } : caps}
             teamReview={teamView}
+            sort={leadSort}
+            onSort={toggleLeadSort}
             hasFilters={hasAnyFilter(draft)}
             selected={selectedLeadIds}
             onToggle={toggleLeadSelected}

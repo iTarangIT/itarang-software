@@ -5,6 +5,30 @@ import { requireInventoryAdmin } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { normalizeInventoryStatus } from "@/lib/inventory/status";
 import { getInventorySummary } from "@/lib/inventory/summary";
+import { parseSortParam, sortOrderSql } from "@/lib/http/sortParam";
+
+// ID 243 — header sort on the admin Inventory table (paged, so the API orders
+// it). Only these columns; blank values last both ways; the invoice-date order
+// (then id) is the tie-breaker so page 2 carries on. The older ?sort= values
+// keep working: "status" and "dealer" are header keys too (A to Z by default),
+// and invoice_date_desc / anything else falls through to the invoice-date order.
+const INVENTORY_SORT_KEYS = ["serial", "model", "type", "dealer", "warehouse", "status", "value", "age"] as const;
+function inventorySortSql(legacy: boolean) {
+  const blank = (col: SQL) => sql`NULLIF(btrim(lower(${col})), '')`;
+  return {
+    serial: blank(sql`${inventory.serial_number}`),
+    model: blank(sql`${inventory.model_type}`),
+    // The Type cell reads "category / sub-category".
+    type: legacy
+      ? blank(sql`concat_ws(' / ', ${inventory.asset_category}, ${inventory.asset_type})`)
+      : blank(sql`concat_ws(' / ', ${inventory.asset_category}, ${inventory.sub_category})`),
+    dealer: blank(sql`${accounts.business_entity_name}`),
+    warehouse: blank(sql`${inventory.warehouse_location}`),
+    status: blank(sql`${inventory.status}`),
+    value: sql`${inventory.inventory_amount}`,
+    age: sql`(NOW() - ${inventory.created_at})`,
+  };
+}
 
 function hasPgCode(error: unknown, code: string): boolean {
   let curr: unknown = error;
@@ -91,14 +115,13 @@ export const GET = withErrorHandler(async (req: Request) => {
 
   const whereExpr = conditions.length ? and(...conditions) : undefined;
   const legacyWhereExpr = legacyConditions.length ? and(...legacyConditions) : undefined;
+  const headerSort = parseSortParam(searchParams, INVENTORY_SORT_KEYS);
   const orderBy =
     sort === "invoice_date_desc"
       ? desc(inventory.oem_invoice_date)
-      : sort === "status"
-        ? asc(inventory.status)
-        : sort === "dealer"
-          ? asc(accounts.business_entity_name)
-          : asc(inventory.oem_invoice_date);
+      : asc(inventory.oem_invoice_date);
+  const orderFor = (legacy: boolean): SQL =>
+    sortOrderSql(headerSort, inventorySortSql(legacy), sql`${orderBy}, ${inventory.id}`);
 
   let useLegacyColumns = false;
   let items: Array<{
@@ -177,7 +200,7 @@ export const GET = withErrorHandler(async (req: Request) => {
       .leftJoin(accounts, eq(accounts.id, inventory.dealer_id))
       .leftJoin(users, eq(users.id, inventory.created_by))
       .where(whereExpr)
-      .orderBy(orderBy)
+      .orderBy(orderFor(false))
       .limit(queryLimit)
       .offset(queryOffset);
   } catch (error) {
@@ -222,7 +245,7 @@ export const GET = withErrorHandler(async (req: Request) => {
       .from(inventory)
       .leftJoin(accounts, eq(accounts.id, inventory.dealer_id))
       .where(legacyWhereExpr)
-      .orderBy(orderBy)
+      .orderBy(orderFor(true))
       .limit(queryLimit)
       .offset(queryOffset);
   }

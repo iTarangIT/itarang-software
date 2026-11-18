@@ -1,13 +1,27 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Search, ChevronLeft, ChevronRight } from 'lucide-react';
+import { SortableTh, sortRows, useTableSort, type SortSpec, type SortType } from './TableSort';
 
 interface Column<T> {
     header: string;
     accessor: keyof T;
     render?: (value: unknown, row: T) => React.ReactNode;
     textRight?: boolean;
+    /** ID 243 — false for a column whose value is not worth ordering by. */
+    sortable?: boolean;
+    /** ID 243 — how to compare; guessed from the first filled value when left out. */
+    sortType?: SortType;
+}
+
+// ID 243 — a number column opens largest first, a date newest first, text A to Z.
+function guessSortType<T>(data: T[], key: keyof T): SortType {
+    const v = data.map((r) => r[key]).find((x) => x != null && x !== '');
+    if (typeof v === 'number') return 'number';
+    if (v instanceof Date) return 'date';
+    if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v)) return 'date';
+    return 'text';
 }
 
 interface DataTableProps<T> {
@@ -32,11 +46,34 @@ export function DataTable<T extends Record<string, unknown>>({
     const [searchTerm, setSearchTerm] = useState('');
     const [currentPage, setCurrentPage] = useState(1);
 
+    // ID 243 — click a header to sort, again to reverse, a third time for the
+    // list's own order. The rows are all in hand (paged here), so the sort is
+    // applied before paging: page 2 carries on the same order. Blanks stay last.
+    const sortSpecs = useMemo<SortSpec<T>[]>(
+        () =>
+            columns
+                .filter((c) => c.sortable !== false)
+                .map((c) => ({
+                    key: String(c.accessor),
+                    type: c.sortType ?? guessSortType(data, c.accessor),
+                    value: (row: T) => row[c.accessor],
+                })),
+        [columns, data],
+    );
+    const { sort, toggle, comparator } = useTableSort(sortSpecs);
+    const onSort = (key: string) => {
+        toggle(key);
+        setCurrentPage(1);
+    };
+
     // Filtering logic
-    const filteredData = data.filter(row =>
-        Object.values(row).some(val =>
-            String(val).toLowerCase().includes(searchTerm.toLowerCase())
-        )
+    const filteredData = sortRows(
+        data.filter(row =>
+            Object.values(row).some(val =>
+                String(val).toLowerCase().includes(searchTerm.toLowerCase())
+            )
+        ),
+        comparator,
     );
 
     // Pagination logic
@@ -77,12 +114,15 @@ export function DataTable<T extends Record<string, unknown>>({
                     <thead>
                         <tr className="bg-slate-50 border-b border-slate-100">
                             {columns.map((col, i) => (
-                                <th
+                                <SortableTh
                                     key={i}
+                                    label={col.header}
+                                    sortKey={col.sortable === false ? undefined : String(col.accessor)}
+                                    sort={sort}
+                                    onToggle={onSort}
+                                    align={col.textRight ? 'right' : undefined}
                                     className={`px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider ${col.textRight ? 'text-right' : ''}`}
-                                >
-                                    {col.header}
-                                </th>
+                                />
                             ))}
                         </tr>
                     </thead>

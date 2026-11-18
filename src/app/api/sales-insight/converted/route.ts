@@ -11,7 +11,8 @@ import { withErrorHandler } from "@/lib/api-utils";
 import { requireRole } from "@/lib/auth-utils";
 import { NextResponse } from "next/server";
 import { buildConvertedQuery } from "@/lib/sales-insight/query";
-import type { ConvertedRow, Kpis, LeadSource } from "@/lib/sales-insight/types";
+import { CONVERTED_SORT_KEYS, type ConvertedRow, type Kpis, type LeadSource } from "@/lib/sales-insight/types";
+import { parseSortParam } from "@/lib/http/sortParam";
 
 const ALLOWED_ROLES = [
     "sales_insight",
@@ -32,6 +33,8 @@ function parseFilters(searchParams: URLSearchParams) {
         search: searchParams.get("search"),
         page: Number(searchParams.get("page") || 1),
         limit: Number(searchParams.get("limit") || 25),
+        // ID 243 — header sort, only the table's own columns.
+        sort: parseSortParam(searchParams, CONVERTED_SORT_KEYS),
     };
 }
 

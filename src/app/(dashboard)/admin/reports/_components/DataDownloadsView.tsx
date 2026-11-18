@@ -21,6 +21,7 @@ import { downloadFailureMessage } from "@/lib/exports/datasets/downloadClient";
 import { defaultDates, istToday } from "@/lib/exports/datasets/range";
 import { MultiSelectFilter } from "@/components/reports/MultiSelectFilter";
 import type { DownloadLogRow } from "@/lib/exports/downloadLog";
+import { SortableTh, sortRows, useUrlTableSort, type SortSpec } from "@/components/shared/TableSort";
 
 type Catalogue = {
     datasets: (DatasetInfo & { own_only: boolean })[];
@@ -32,6 +33,17 @@ type Catalogue = {
     can_full_phone: boolean;
     can_see_log: boolean;
 };
+
+// ID 243 — header sort on the Download log. The API returns the latest 200, so
+// the rows in hand are sorted in the browser; kept in the page link (?log_sort=).
+const LOG_SORT: SortSpec<DownloadLogRow>[] = [
+    { key: "when", type: "date", value: (d) => d.created_at },
+    { key: "who", type: "text", value: (d) => d.user_name },
+    { key: "dataset", type: "text" },
+    { key: "rows", type: "number", value: (d) => d.row_count },
+    { key: "phones", type: "text", value: (d) => (d.full_phone ? "Full" : "Masked") },
+    { key: "reason", type: "text" },
+];
 
 const inputCls = "h-9 rounded-md border border-border bg-surface px-2 text-sm";
 const labelCls = "block text-[10px] font-medium uppercase tracking-wide text-ink-muted mb-1";
@@ -95,6 +107,9 @@ export function DataDownloadsView() {
         queryKey: ["data-download-log"],
         queryFn: () => getJson("/api/admin/data-downloads/log"),
     });
+
+    const { sort: logSort, toggle: toggleLogSort, comparator: logComparator } = useUrlTableSort(LOG_SORT, { prefix: "log_" });
+    const logRows = useMemo(() => sortRows(log.data?.downloads ?? [], logComparator), [log.data, logComparator]);
 
     const set = (key: string, value: string) => setValues((prev) => ({ ...prev, [key]: value }));
     // ID 224: the date boxes show the dates the file will cover (this month to today).
@@ -508,16 +523,16 @@ export function DataDownloadsView() {
                         <table className="min-w-full text-xs">
                             <thead className="bg-bg text-left text-ink-muted">
                                 <tr>
-                                    <th className="px-3 py-2 font-semibold">When</th>
-                                    <th className="px-3 py-2 font-semibold">Who</th>
-                                    <th className="px-3 py-2 font-semibold">Dataset</th>
-                                    <th className="px-3 py-2 text-right font-semibold">Rows</th>
-                                    <th className="px-3 py-2 font-semibold">Phone numbers</th>
-                                    <th className="px-3 py-2 font-semibold">Reason</th>
+                                    <SortableTh label="When" sortKey="when" sort={logSort} onToggle={toggleLogSort} className="px-3" />
+                                    <SortableTh label="Who" sortKey="who" sort={logSort} onToggle={toggleLogSort} className="px-3" />
+                                    <SortableTh label="Dataset" sortKey="dataset" sort={logSort} onToggle={toggleLogSort} className="px-3" />
+                                    <SortableTh label="Rows" sortKey="rows" sort={logSort} onToggle={toggleLogSort} align="right" className="px-3 text-right" />
+                                    <SortableTh label="Phone numbers" sortKey="phones" sort={logSort} onToggle={toggleLogSort} className="px-3" />
+                                    <SortableTh label="Reason" sortKey="reason" sort={logSort} onToggle={toggleLogSort} className="px-3" />
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-border">
-                                {(log.data?.downloads ?? []).map((d) => (
+                                {logRows.map((d) => (
                                     <tr key={d.id}>
                                         <td className="whitespace-nowrap px-3 py-1.5 text-ink-muted">
                                             {new Date(d.created_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}

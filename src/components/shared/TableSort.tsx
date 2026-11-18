@@ -106,26 +106,60 @@ export function SortableTh({
       className={base}
       aria-sort={dir === "asc" ? "ascending" : dir === "desc" ? "descending" : "none"}
     >
-      <button
-        type="button"
-        onClick={() => onToggle(sortKey)}
-        title={title ?? `Sort by ${label}`}
-        className={`inline-flex items-center gap-1 uppercase tracking-wider transition-colors rounded hover:text-gray-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-200 ${
-          align === "right" ? "flex-row-reverse" : ""
-        } ${active ? "text-brand-700" : ""}`}
-      >
-        <span>{label}</span>
-        {dir === "asc" ? (
-          <ChevronUp className="w-3 h-3 shrink-0" />
-        ) : dir === "desc" ? (
-          <ChevronDown className="w-3 h-3 shrink-0" />
-        ) : (
-          // Always occupies the same space as a live arrow, so turning sorting
-          // on does not nudge every other header sideways.
-          <ChevronsUpDown className="w-3 h-3 shrink-0 text-gray-300" />
-        )}
-      </button>
+      <SortHeaderButton
+        label={label}
+        sortKey={sortKey}
+        sort={sort}
+        onToggle={onToggle}
+        align={align}
+        title={title}
+      />
     </th>
+  );
+}
+
+/**
+ * ID 243 — the clickable label and arrow on its own, for a header cell that
+ * holds more than one sortable value (the Leads list's "Source / Campaign"
+ * cell also sorts by Created) or an info tip next to the label.
+ */
+export function SortHeaderButton({
+  label,
+  sortKey,
+  sort,
+  onToggle,
+  align,
+  title,
+}: {
+  label: string;
+  sortKey: string;
+  sort: SortState | null;
+  onToggle: (key: string) => void;
+  align?: "right";
+  title?: string;
+}) {
+  const active = sort?.key === sortKey;
+  const dir = active ? sort.dir : null;
+  return (
+    <button
+      type="button"
+      onClick={() => onToggle(sortKey)}
+      title={title ?? `Sort by ${label}`}
+      className={`inline-flex items-center gap-1 uppercase tracking-wider transition-colors rounded hover:text-gray-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-200 ${
+        align === "right" ? "flex-row-reverse" : ""
+      } ${active ? "text-brand-700" : ""}`}
+    >
+      <span>{label}</span>
+      {dir === "asc" ? (
+        <ChevronUp className="w-3 h-3 shrink-0" />
+      ) : dir === "desc" ? (
+        <ChevronDown className="w-3 h-3 shrink-0" />
+      ) : (
+        // Always occupies the same space as a live arrow, so turning sorting
+        // on does not nudge every other header sideways.
+        <ChevronsUpDown className="w-3 h-3 shrink-0 text-gray-300" />
+      )}
+    </button>
   );
 }
 

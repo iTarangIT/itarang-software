@@ -47,6 +47,7 @@ import {
 import Link from "next/link";
 import { formatINRCompact, formatINRExact } from "@/lib/format";
 import { Pagination, usePagination } from "@/components/shared/Pagination";
+import { SortHeaderButton, sortRows, useUrlTableSort, type SortSpec } from "@/components/shared/TableSort";
 import { dealCardChips, type DealCard } from "@/lib/leads/dealCardRules";
 
 // E-242 — "history" is the decision log: approvals AND rejections together.
@@ -413,6 +414,15 @@ function HistoryFilter({
   );
 }
 
+// ID 243 — sort the quote cards. The API caps each tab at 100, so the rows in
+// hand are sorted in the browser (then paged); kept in the page link (?quote_sort=).
+const QUOTE_SORT: SortSpec<Quotation>[] = [
+  { key: "amount", type: "number", value: (q) => q.value },
+  { key: "raised", type: "date", value: (q) => q.created_at },
+  { key: "decided", type: "date", value: (q) => q.approved_at },
+  { key: "dealer", type: "text", value: (q) => q.dealer_name },
+];
+
 export function QuotationApprovalsPanel() {
   const qc = useQueryClient();
   const [tab, setTab] = React.useState<Tab>("pending");
@@ -471,9 +481,18 @@ export function QuotationApprovalsPanel() {
     onError: (e: Error) => setError(e.message),
   });
 
-  const quotations = React.useMemo(() => data?.quotations ?? [], [data]);
+  const { sort, toggle: toggleSort, comparator } = useUrlTableSort(QUOTE_SORT, { prefix: "quote_" });
+  const quotations = React.useMemo(() => sortRows(data?.quotations ?? [], comparator), [data, comparator]);
   const paged = usePagination(quotations, 5);
   const { setPage } = paged;
+  // A new order starts from the first page.
+  const onSort = React.useCallback(
+    (key: string) => {
+      toggleSort(key);
+      setPage(1);
+    },
+    [toggleSort, setPage],
+  );
 
   // Page 1 on every tab switch. usePagination only clamps DOWN when a list
   // shrinks, so switching from page 3 of a long queue to a short released list
@@ -577,6 +596,15 @@ export function QuotationApprovalsPanel() {
         </p>
       )}
 
+      {quotations.length > 1 && (
+        <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-semibold text-gray-500">
+          <span className="normal-case tracking-normal text-gray-400">Sort by</span>
+          <SortHeaderButton label="Amount" sortKey="amount" sort={sort} onToggle={onSort} />
+          <SortHeaderButton label="Raised" sortKey="raised" sort={sort} onToggle={onSort} />
+          {decided && <SortHeaderButton label="Decided" sortKey="decided" sort={sort} onToggle={onSort} />}
+          <SortHeaderButton label="Dealer" sortKey="dealer" sort={sort} onToggle={onSort} />
+        </div>
+      )}
       <ul className="divide-y divide-gray-50">
         {paged.pageItems.map((q) => {
           const isRejecting = rejecting === q.commercial_id;

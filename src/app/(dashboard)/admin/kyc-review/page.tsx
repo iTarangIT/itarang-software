@@ -15,6 +15,7 @@ import { toast } from 'sonner';
 import LeadNbfcUpdates, { LenderChip, type TrackerRow } from './_components/LeadNbfcUpdates';
 import DeleteApplicationButton from '@/components/shared/DeleteApplicationButton';
 import { onFreshFileClick } from '@/lib/storage/freshFileLink';
+import { SortHeaderButton, sortRows, useUrlTableSort, type SortSpec } from '@/components/shared/TableSort';
 
 type ReviewableDoc = {
     id: string;
@@ -58,8 +59,21 @@ type KycSummary = {
 // well under the route's 500-row JSON cap for any one call.
 const NBFC_FETCH_CHUNK = 100;
 
+// ID 243 — sort the KYC queue cards. The API returns the whole (capped) queue,
+// so the cards in hand are sorted in the browser; kept in the page link (?sort=).
+const KYC_SORT: SortSpec<LeadReview>[] = [
+    { key: 'customer', type: 'text', value: (l) => l.owner_name },
+    { key: 'dealer', type: 'text', value: (l) => l.dealer_name },
+    { key: 'submitted', type: 'date', value: (l) => l.submitted_at },
+    { key: 'reviewed', type: 'date', value: (l) => l.reviewed_at },
+    { key: 'pending', type: 'number', value: (l) => l.pending_count },
+    { key: 'status', type: 'text', value: (l) => l.kyc_status },
+];
+
 export default function AdminKYCReviewPage() {
     const [leads, setLeads] = useState<LeadReview[]>([]);
+    const { sort, toggle: toggleSort, comparator } = useUrlTableSort(KYC_SORT);
+    const shownLeads = sortRows(leads, comparator);
     // leadId → one row per lender assignment (a lead can be with >1 NBFC).
     const [nbfcFiles, setNbfcFiles] = useState<Record<string, TrackerRow[]>>({});
     const [loading, setLoading] = useState(true);
@@ -363,6 +377,17 @@ export default function AdminKYCReviewPage() {
 
                 {/* Lead Review Cards */}
                 <div className="space-y-4">
+                    {!loading && leads.length > 1 && (
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[10px] font-semibold text-gray-500">
+                            <span className="normal-case tracking-normal text-gray-400">Sort by</span>
+                            <SortHeaderButton label="Customer" sortKey="customer" sort={sort} onToggle={toggleSort} />
+                            <SortHeaderButton label="Dealer" sortKey="dealer" sort={sort} onToggle={toggleSort} />
+                            <SortHeaderButton label="Submitted" sortKey="submitted" sort={sort} onToggle={toggleSort} />
+                            <SortHeaderButton label="Reviewed" sortKey="reviewed" sort={sort} onToggle={toggleSort} />
+                            <SortHeaderButton label="Pending docs" sortKey="pending" sort={sort} onToggle={toggleSort} />
+                            <SortHeaderButton label="Status" sortKey="status" sort={sort} onToggle={toggleSort} />
+                        </div>
+                    )}
                     {loading ? (
                         <div className="flex items-center justify-center py-20"><Loader2 className="w-8 h-8 animate-spin text-[#1D4ED8]" /></div>
                     ) : leads.length === 0 ? (
@@ -371,7 +396,7 @@ export default function AdminKYCReviewPage() {
                             <p className="font-bold">No documents to review</p>
                         </div>
                     ) : (
-                        leads.map(lead => (
+                        shownLeads.map(lead => (
                             <div key={lead.lead_id} className="bg-white rounded-[20px] border border-gray-100 shadow-sm overflow-hidden">
                                 {/* Lead Header. The delete control is a SIBLING of the
                                     expander, not a child: a <button> cannot nest. */}

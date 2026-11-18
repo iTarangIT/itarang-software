@@ -24,6 +24,20 @@ import {
 } from "lucide-react";
 
 import InventoryDetailCard from "@/components/inventory/InventoryDetailCard";
+import { SortableTh, useUrlTableSort, type SortSpec } from "@/components/shared/TableSort";
+
+// ID 243 — header sort, kept in the page link and done by the API (the list is
+// paged). Keys match INVENTORY_SORT_KEYS in api/admin/inventory/all/route.ts.
+const INVENTORY_SORT: SortSpec<unknown>[] = [
+  { key: "serial", type: "text" },
+  { key: "model", type: "text" },
+  { key: "type", type: "text" },
+  { key: "dealer", type: "text" },
+  { key: "warehouse", type: "text" },
+  { key: "status", type: "text" },
+  { key: "value", type: "number" },
+  { key: "age", type: "number" },
+];
 
 interface DealerOption {
   id: string;
@@ -95,6 +109,14 @@ export default function AdminInventoryDashboard() {
   });
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(25);
+  const { sort, toggle: toggleSort } = useUrlTableSort(INVENTORY_SORT, { mode: "server" });
+  // A new order starts from the first page.
+  const sortQs = sort ? `${sort.key}:${sort.dir}` : "";
+  const [pagedFor, setPagedFor] = useState(sortQs);
+  if (pagedFor !== sortQs) {
+    setPagedFor(sortQs);
+    setPage(1);
+  }
   const [total, setTotal] = useState(0);
   const [rows, setRows] = useState<InventoryRow[]>([]);
   const [kpis, setKpis] = useState<KPIs | null>(null);
@@ -122,6 +144,10 @@ export default function AdminInventoryDashboard() {
       Object.entries(filters).forEach(([k, v]) => {
         if (v) params.set(k, v);
       });
+      if (sort) {
+        params.set("sort", sort.key);
+        params.set("dir", sort.dir);
+      }
       params.set("format", "csv");
       const res = await fetch(`/api/admin/inventory/all?${params.toString()}`);
       if (!res.ok) throw new Error(`Export failed (${res.status})`);
@@ -165,6 +191,10 @@ export default function AdminInventoryDashboard() {
         });
         params.set("page", String(page));
         params.set("limit", String(limit));
+        if (sort) {
+          params.set("sort", sort.key);
+          params.set("dir", sort.dir);
+        }
         const res = await fetch(`/api/admin/inventory/all?${params.toString()}`);
         const json = await res.json();
         if (cancelled) return;
@@ -190,7 +220,7 @@ export default function AdminInventoryDashboard() {
     return () => {
       cancelled = true;
     };
-  }, [filters, page, limit]);
+  }, [filters, page, limit, sort]);
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / limit)), [total, limit]);
   const pageStart = total === 0 ? 0 : (page - 1) * limit + 1;
@@ -467,14 +497,14 @@ export default function AdminInventoryDashboard() {
               <table className="w-full text-xs">
                 <thead className="bg-gray-50 text-[10px] uppercase tracking-wider text-gray-500 font-bold">
                   <tr>
-                    <th className="px-3 py-3 text-left">Serial</th>
-                    <th className="px-3 py-3 text-left">Model</th>
-                    <th className="px-3 py-3 text-left">Type</th>
-                    <th className="px-3 py-3 text-left">Dealer</th>
-                    <th className="px-3 py-3 text-left">Warehouse</th>
-                    <th className="px-3 py-3 text-left">Status</th>
-                    <th className="px-3 py-3 text-right">Base Value ₹</th>
-                    <th className="px-3 py-3 text-right">Age</th>
+                    <SortableTh label="Serial" sortKey="serial" sort={sort} onToggle={toggleSort} className="px-3 py-3 text-left" />
+                    <SortableTh label="Model" sortKey="model" sort={sort} onToggle={toggleSort} className="px-3 py-3 text-left" />
+                    <SortableTh label="Type" sortKey="type" sort={sort} onToggle={toggleSort} className="px-3 py-3 text-left" />
+                    <SortableTh label="Dealer" sortKey="dealer" sort={sort} onToggle={toggleSort} className="px-3 py-3 text-left" />
+                    <SortableTh label="Warehouse" sortKey="warehouse" sort={sort} onToggle={toggleSort} className="px-3 py-3 text-left" />
+                    <SortableTh label="Status" sortKey="status" sort={sort} onToggle={toggleSort} className="px-3 py-3 text-left" />
+                    <SortableTh label="Base Value ₹" sortKey="value" sort={sort} onToggle={toggleSort} align="right" className="px-3 py-3 text-right" />
+                    <SortableTh label="Age" sortKey="age" sort={sort} onToggle={toggleSort} align="right" className="px-3 py-3 text-right" />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">

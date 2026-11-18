@@ -11,7 +11,7 @@
 // src/lib/admin/listQueries.ts (raw sql`` fragments, db.execute).
 
 import { numberSearchMode } from "@/lib/leads/claimScope";
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 import { dispositionFilterValues } from "@/lib/leads/dispositions";
 import { db } from "@/lib/db";
 import { UNASSIGNED_FILTER } from "@/lib/admin/leadsInfoFilters";
@@ -27,6 +27,8 @@ import { IDLE_WORKING_DAYS_SQL, idlePastLimitSql } from "@/lib/leads/idleLimit";
 import { awaitingAssignment, readySplitSql, type ReadySplit } from "@/lib/leads/salesReady";
 import { SOURCE_DOOR_NONE } from "@/lib/leads/leadSourceVocab";
 import { compactName } from "@/lib/leads/queueFilterSql";
+import { sortOrderSql, type ServerSort } from "@/lib/http/sortParam";
+import type { LeadListSortKey } from "@/lib/leads/leadListSort";
 import { effectiveDoorSql } from "@/lib/leads/leadSourceDoorSql";
 import { NEEDS_DEALER_MOBILE_SQL } from "@/lib/ai-dialer/phoneTypeStore";
 import { AI_REDIAL_DUE_SQL } from "@/lib/ai/storage/dialDisposition";
@@ -307,6 +309,31 @@ const NEODOVE_LINKED_LIST = sql.raw(
 // follow-up puts the basis in the future, which counts 0 working days — so
 // that lead is "Under 30", not in no band at all.
 const IDLE_DAYS = IDLE_WORKING_DAYS_SQL;
+
+// ID 243 — header sort on the Leads list. Each allowed key (leadListSort.ts) maps
+// to an expression over `dl` alone, so the rows query and the "select all / first
+// N" id query order the same way without extra joins. Blank text is turned into
+// NULL so it stays at the bottom in both directions (sortOrderSql puts NULLS LAST).
+const blankToNull = (expr: SQL) => sql`NULLIF(btrim(lower(${expr})), '')`;
+const LEAD_LIST_SORT_SQL: Record<LeadListSortKey, SQL> = {
+    dealer: blankToNull(sql`COALESCE(NULLIF(btrim(dl.dealer_name), ''), dl.shop_name)`),
+    city: blankToNull(sql`COALESCE(NULLIF(btrim(dl.city), ''), dl.location)`),
+    status: blankToNull(sql`dl.lead_status`),
+    interest: sql`CASE lower(dl.interest_level) WHEN 'hot' THEN 3 WHEN 'warm' THEN 2 WHEN 'cold' THEN 1 END`,
+    owner: blankToNull(sql`(SELECT u.name FROM users u WHERE u.id::text = dl.current_owner_id)`),
+    asm: blankToNull(sql`(SELECT u.name FROM users u WHERE u.id::text = dl.asm_id)`),
+    last_activity: sql`dl.last_touchpoint_at`,
+    idle: sql`(${IDLE_DAYS})`,
+    source: blankToNull(sql`dl.source`),
+    created: sql`dl.created_at`,
+};
+// The list's own order. dl.id last so equal rows never swap between pages.
+const LEAD_LIST_DEFAULT_ORDER = sql`dl.last_touchpoint_at DESC NULLS LAST, dl.created_at DESC, dl.id`;
+
+/** ORDER BY for the Leads list: the header sort if any, the list's own order as tie-breaker. */
+export function leadListOrderSql(sort: ServerSort<LeadListSortKey> | null | undefined) {
+    return sortOrderSql(sort ?? null, LEAD_LIST_SORT_SQL, LEAD_LIST_DEFAULT_ORDER);
+}
 
 /**
  * Membership predicates for the campaign filter.
@@ -674,6 +701,8 @@ export async function fetchLeadListRows(
     f: LeadListFilters,
     page: number,
     limit: number,
+    // ID 243 — optional header sort; every other caller keeps the fixed order.
+    sort: ServerSort<LeadListSortKey> | null = null,
 ): Promise<LeadListRow[]> {
     const offset = (page - 1) * limit;
     const where = buildWhere(f);
@@ -718,7 +747,7 @@ export async function fetchLeadListRows(
         LEFT JOIN users owner ON owner.id::text = dl.current_owner_id
         LEFT JOIN users asm ON asm.id::text = dl.asm_id
         WHERE ${where}
-        ORDER BY dl.last_touchpoint_at DESC NULLS LAST, dl.created_at DESC
+        ORDER BY ${leadListOrderSql(sort)}
         LIMIT ${limit} OFFSET ${offset}
     `);
     return rows as unknown as LeadListRow[];
@@ -796,6 +825,8 @@ export const BULK_ID_CAP = 5000;
 export async function fetchLeadListIds(
     f: LeadListFilters,
     cap: number = BULK_ID_CAP,
+    // ID 243 — same order as the table, so "first N" means the rows on screen.
+    sort: ServerSort<LeadListSortKey> | null = null,
 ): Promise<string[]> {
     const where = buildWhere(f);
     const rows = await db.execute<{ id: string }>(sql`
@@ -803,7 +834,7 @@ export async function fetchLeadListIds(
         FROM dealer_leads dl
         ${aiSignalsJoin(f)}
         WHERE ${where}
-        ORDER BY dl.last_touchpoint_at DESC NULLS LAST, dl.created_at DESC
+        ORDER BY ${leadListOrderSql(sort)}
         LIMIT ${cap}
     `);
     return (rows as unknown as { id: string }[]).map((r) => r.id);

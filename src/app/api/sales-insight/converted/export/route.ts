@@ -11,6 +11,8 @@ import { db } from "@/lib/db";
 import { withErrorHandler } from "@/lib/api-utils";
 import { requireRole } from "@/lib/auth-utils";
 import { buildConvertedQuery } from "@/lib/sales-insight/query";
+import { CONVERTED_SORT_KEYS } from "@/lib/sales-insight/types";
+import { parseSortParam } from "@/lib/http/sortParam";
 
 const ALLOWED_ROLES = [
     "sales_insight",
@@ -46,6 +48,8 @@ export const GET = withErrorHandler(async (req: Request) => {
         search: searchParams.get("search"),
         page: 1,
         limit: MAX_EXPORT_ROWS,
+        // ID 243 — the file follows the table's header sort.
+        sort: parseSortParam(searchParams, CONVERTED_SORT_KEYS),
     };
 
     const { rowsSql } = buildConvertedQuery(filters);
