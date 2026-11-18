@@ -156,7 +156,7 @@ describe("handoverNoteInWords — test 2: the hand-over note reads in words", ()
         const remarks =
             "Reason: Commercials_Finalised; Visit: Initial_Visit; Date: 2026-06-29 (morning)\n\nDealer wants the 100Ah model.\n\nPending: GST copy";
         expect(handoverNoteInWords(remarks)).toBe(
-            "Commercials finalised. First visit booked for Mon 29 Jun (morning).\nDealer wants the 100Ah model.\nStill pending: GST copy",
+            "Dealer agreed to quote. First visit booked for Mon 29 Jun (morning).\nDealer wants the 100Ah model.\nStill pending: GST copy",
         );
     });
     it("no date", () => {

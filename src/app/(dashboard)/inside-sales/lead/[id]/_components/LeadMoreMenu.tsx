@@ -15,6 +15,8 @@ export type MoreMenuItem = {
     disabled?: boolean;
     /** Shown under a disabled item (and as its tooltip). */
     disabledReason?: string;
+    /** A short explanation under the label — the "i" text the button had (ID 215: never deleted). */
+    hint?: string;
     tone?: "gray" | "rose" | "amber" | "emerald";
 };
 
@@ -83,9 +85,11 @@ export function LeadMoreMenu({ items }: { items: MoreMenuItem[] }) {
                                     {Icon && <Icon className="h-3.5 w-3.5" />}
                                     {it.label}
                                 </span>
-                                {it.disabled && it.disabledReason && (
+                                {it.disabled && it.disabledReason ? (
                                     <span className="block pl-5 text-[11px] font-normal text-gray-500">{it.disabledReason}</span>
-                                )}
+                                ) : it.hint ? (
+                                    <span className="block pl-5 text-[11px] font-normal text-gray-500">{it.hint}</span>
+                                ) : null}
                             </button>
                         );
                     })}
