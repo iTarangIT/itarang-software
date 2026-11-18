@@ -222,7 +222,7 @@ export function nextStepFor(f: NextStepFacts): NextStep {
     if (status === "Commercials_Finalised") {
         return {
             tone: "emerald",
-            title: "Commercials finalised: mark Won when the dealer confirms",
+            title: "Dealer agreed: mark Won when the dealer confirms",
             detail: f.hasApprovedQuote ? null : "There is no dealer-approved quote yet.",
             also: null,
             actions: ["mark_won", "call_now"],
@@ -275,10 +275,12 @@ function truncate(s: string, n: number): string {
 
 // ── Hand-over note in words ─────────────────────────────────────────────────
 
+// The same words the Transfer to ASM form shows for each reason (TransferAsmModal
+// REASON_LABEL, wording audit B153), so the hand-over reads as it was picked.
 const TRANSFER_REASON_WORDS: Record<string, string> = {
-    Commercials_Finalised: "Commercials finalised",
+    Commercials_Finalised: "Dealer agreed to quote",
     Site_Visit_Needed: "Site visit needed",
-    Negotiation_Beyond_IS_Authority: "Negotiation beyond inside sales authority",
+    Negotiation_Beyond_IS_Authority: "Price talks need ASM",
     Demo_Requested: "Demo requested",
     Other: "Other reason",
 };
@@ -293,7 +295,7 @@ const VISIT_TYPE_WORDS: Record<string, string> = {
  * The asm_transfer touchpoint's remarks (buildTransferRemarks in
  * lib/leads/transferToAsm.ts: "Reason: X; Visit: Y; Date: Z (time)\n\nnotes
  * \n\nPending: …\n\nOut-of-territory: …") in words:
- * "Commercials finalised. First visit booked for Mon 29 Jun." plus the notes.
+ * "Dealer agreed to quote. First visit booked for Mon 29 Jun." plus the notes.
  * Display only; the stored remarks never change. Text in any other shape is
  * returned as it is.
  */

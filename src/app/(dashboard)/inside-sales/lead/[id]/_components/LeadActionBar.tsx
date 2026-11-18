@@ -149,7 +149,13 @@ export function LeadActionBar({
         (lead.onboarding_status ?? "draft").toLowerCase() === "draft";
 
     const more: MoreMenuItem[] = [
-        { key: "commercials", label: "Update quote", icon: Receipt, onClick: () => onAction("commercials") },
+        {
+            key: "commercials",
+            label: "Update quote",
+            icon: Receipt,
+            onClick: () => onAction("commercials"),
+            hint: "Share a brochure, give or revise a quote, or change terms.",
+        },
         { key: "transfer_asm", label: "Transfer to ASM", icon: Send, onClick: () => onAction("transfer_asm") },
     ];
     // ID 221: only to someone in the owner's team; nobody under them = no item (Transfer to ASM stays).

@@ -107,7 +107,13 @@ export function AsmLeadActionBar({
 
     const more: MoreMenuItem[] = [
         { key: "touchpoint", label: "Log activity (call / WhatsApp)", icon: MessageSquarePlus, onClick: () => onAction("touchpoint") },
-        { key: "commercials", label: "Update quote", icon: Receipt, onClick: () => onAction("commercials") },
+        {
+            key: "commercials",
+            label: "Update quote",
+            icon: Receipt,
+            onClick: () => onAction("commercials"),
+            hint: "Share a brochure, give or revise a quote, or change terms.",
+        },
     ];
     // ID 221: only to someone in the owner's team; nobody under them = no item.
     if (canOwnerReassign) more.push({ key: "reassign", label: "Reassign", icon: Repeat, onClick: () => onAction("reassign") });
