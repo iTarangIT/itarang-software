@@ -25,6 +25,7 @@ import {
   dealerTypeLabel,
   normalizeDealerType,
 } from "@/lib/dealer/dealer-type";
+import { SortableTh, sortRows, useUrlTableSort, type SortSpec } from "@/components/shared/TableSort";
 
 type DuplicateFlag = "none" | "branch" | "duplicate" | "pan-mismatch";
 
@@ -273,6 +274,31 @@ function DocumentBadge({ value }: { value: string }) {
   );
 }
 
+// ID 243 — header sort on the onboarding queue. The whole queue is loaded at
+// once (no paging), so the rows in hand are sorted in the browser; the sort is
+// kept in the page link (?sort=&dir=) so Back from an application keeps it.
+const QUEUE_SORT: SortSpec<DealerVerificationItem>[] = [
+  { key: "dealer", type: "text", value: (i) => i.dealerName },
+  { key: "company", type: "text", value: (i) => i.companyName },
+  { key: "sales_manager", type: "text", value: (i) => i.salesManagerName },
+  { key: "documents", type: "text" },
+  { key: "agreement", type: "text" },
+  { key: "status", type: "text" },
+  { key: "review", type: "text", value: (i) => i.reviewStatus },
+  { key: "rejection", type: "text", value: (i) => i.rejectionReason },
+];
+const QUEUE_HEADERS: Array<[label: string, key: string | undefined]> = [
+  ["Dealer", "dealer"],
+  ["Company", "company"],
+  ["Sales Manager", "sales_manager"],
+  ["Documents", "documents"],
+  ["Agreement", "agreement"],
+  ["Status", "status"],
+  ["Review / KYC", "review"],
+  ["Rejection Reason", "rejection"],
+  ["Actions", undefined],
+];
+
 export default function DealerVerificationPage() {
   const [applications, setApplications] = useState<DealerVerificationItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -476,6 +502,9 @@ export default function DealerVerificationPage() {
     cityFilter,
     pincodeFilter,
   ]);
+
+  const { sort, toggle: toggleSort, comparator } = useUrlTableSort(QUEUE_SORT);
+  const shown = useMemo(() => sortRows(filtered, comparator), [filtered, comparator]);
 
   // Company-type options derived from the loaded applications, so the dropdown
   // always reflects the values actually present in the queue.
@@ -800,19 +829,21 @@ export default function DealerVerificationPage() {
             <table className="min-w-full">
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50/80">
-                  {["Dealer", "Company", "Sales Manager", "Documents", "Agreement", "Status", "Review / KYC", "Rejection Reason", "Actions"].map((h, i, arr) => (
-                    <th
+                  {QUEUE_HEADERS.map(([h, key], i, arr) => (
+                    <SortableTh
                       key={h}
-                      className={`px-6 py-4 text-xs font-semibold uppercase tracking-wide text-slate-500 ${i === arr.length - 1 ? "text-right" : "text-left"}`}
-                    >
-                      {h}
-                    </th>
+                      label={h}
+                      sortKey={key}
+                      sort={sort}
+                      onToggle={toggleSort}
+                      className={`px-6 py-4 text-xs uppercase tracking-wide text-slate-500 ${i === arr.length - 1 ? "text-right" : "text-left"}`}
+                    />
                   ))}
                 </tr>
               </thead>
 
               <tbody>
-                {filtered.map((item, index) => (
+                {shown.map((item, index) => (
                   <motion.tr
                     key={item.dealerId}
                     initial={{ opacity: 0, y: 8 }}

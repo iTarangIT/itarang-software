@@ -1284,8 +1284,9 @@ async function storeOriginal(
       .from("documents")
       .upload(key, buffer, { contentType, upsert: true });
     if (error) throw new Error(error.message);
-    const { data } = supabase.storage.from("documents").getPublicUrl(key);
-    return data.publicUrl;
+    // ID 166: never a public storage address. The copy opens only through the
+    // checked files route (Finance, Admin, CEO; fileRules sales_invoice_scan).
+    return filesProxyPath("documents", key);
   } catch (err) {
     // Losing the copy is not a reason to lose the invoice — the numbers matter
     // more than the attachment, and the Drive original still exists.

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import { IntentReviewCard } from "@/components/leads/intent-review/IntentReviewCard";
@@ -30,6 +31,7 @@ import { SetLeadSource } from "@/components/leads/SetLeadSource";
 import { InfoTip } from "@/components/ui/info-tip";
 import { neodoveCampaignLine } from "@/lib/neodove/leadCampaignText";
 import { INTEREST_OPTIONS, LEAD_STATUS_LABEL } from "@/lib/leads/queueFilters";
+import { dayWords, isBlank, missingDealerDetails, shortAppId } from "@/lib/leads/leadPage246";
 
 type GroupKey = "snapshot" | "business" | "commercials" | "workflow" | "attribution" | "ownership";
 
@@ -65,9 +67,14 @@ type Props = {
     onReviseQuote?: (c: LeadDetailCommercials) => void;
     /** ID 216: ?quote=<id> from a bell / WhatsApp link — that version is opened. */
     focusQuoteId?: string | null;
+    /** ID 246: the owner's Update quote (the same modal as the action bar's), shown on the Quotes box. */
+    onUpdateQuote?: () => void;
 };
 
-export function LeadDetailRightPane({ bundle, viewerRole, onReviseQuote, focusQuoteId }: Props) {
+/** ID 246: Dealer, Quotes first; then the AI review and call recordings; then the rest. */
+const TOP_GROUPS: GroupKey[] = ["snapshot", "commercials"];
+
+export function LeadDetailRightPane({ bundle, viewerRole, onReviseQuote, focusQuoteId, onUpdateQuote }: Props) {
     const [open, setOpen] = useState<Record<GroupKey, boolean>>({
         snapshot: true,
         business: true,
@@ -79,6 +86,8 @@ export function LeadDetailRightPane({ bundle, viewerRole, onReviseQuote, focusQu
 
     // E-242 — which quotation the send dialog is open for, if any.
     const [sendFor, setSendFor] = useState<string | null>(null);
+    // ID 246: the dealer box lists filled fields; the empty ones open from "Add missing details".
+    const [showMissing, setShowMissing] = useState(false);
 
     const lead = bundle.lead;
     const cc = bundle.current_commercials;
@@ -137,48 +146,85 @@ export function LeadDetailRightPane({ bundle, viewerRole, onReviseQuote, focusQu
     return (
         <div className="overflow-y-auto bg-gray-50/30">
             <div className="px-5 py-4 space-y-3">
-                {/* Always visible, not behind a collapsible group: burying what
-                    the AI already learned inside a closed accordion is how it
-                    stayed invisible to the rep who has to act on it. Renders
-                    nothing when the AI has never called this lead. */}
-                <IntentReviewCard leadId={lead.id} />
-
-                {/* ID 84: onboarding milestones — stalls show before they become drop-outs. */}
-                {bundle.onboarding && (
-                    <div
-                        className={`rounded-lg border px-4 py-3 text-xs ${
-                            bundle.onboarding.stalled ? "border-amber-200 bg-amber-50" : "border-gray-100 bg-white"
-                        }`}
-                    >
-                        <p className="text-sm font-semibold text-gray-800">
-                            Dealer onboarding
-                            {bundle.onboarding.stalled && (
-                                <span className="ml-2 rounded bg-amber-200 px-1.5 py-0.5 text-[10px] font-bold text-amber-900">
-                                    {bundle.onboarding.stalled_label ?? "Stalled"}
-                                </span>
-                            )}
-                        </p>
-                        <div className="mt-2 grid grid-cols-2 gap-2 text-gray-600">
-                            <span>Status: {bundle.onboarding.onboarding_status.replace(/_/g, " ")}</span>
-                            <span>
-                                Docs submitted:{" "}
-                                {bundle.onboarding.docs_submitted_at ? fmtDate(bundle.onboarding.docs_submitted_at) : "not yet"}
-                            </span>
-                            {/* ID 84.1: the lead's own outcome (Signed / Manual agreement on file /
-                                Not needed / …) when recorded, else the application's status. */}
-                            <span>
-                                Agreement:{" "}
-                                {bundle.onboarding.agreement_outcome_label ??
-                                    (bundle.onboarding.agreement_status ?? "not started").replace(/_/g, " ")}
-                            </span>
-                            <span>
-                                Approved: {bundle.onboarding.approved_at ? fmtDate(bundle.onboarding.approved_at) : "not yet"}
-                            </span>
+                {/* ID 84: onboarding milestones — stalls show before they become drop-outs.
+                    ID 246: laid out as the mock-up's Onboarding progress box. */}
+                {bundle.onboarding && (() => {
+                    const o = bundle.onboarding;
+                    const st = (o.onboarding_status ?? "draft").toLowerCase();
+                    const draft = st === "draft";
+                    // The header's rule (17 Nov): the form opens only on a Won /
+                    // Converted lead's own application while it is still a draft.
+                    const own = lead.dealer_onboarding_application_id === o.application_id;
+                    const canContinue =
+                        draft && own && (lead.lead_status === "Won" || lead.lead_status === "Converted");
+                    const appCreated = own ? lead.onboarding_created_at : null;
+                    return (
+                        <div className="rounded-lg border border-gray-100 bg-white px-4 py-3 text-xs">
+                            <div className="flex items-center justify-between gap-2">
+                                <p className="text-sm font-semibold text-gray-800">
+                                    Onboarding
+                                    {o.stalled && (
+                                        <span className="ml-2 rounded bg-amber-200 px-1.5 py-0.5 text-[10px] font-bold text-amber-900">
+                                            {o.stalled_label ?? "Stalled"}
+                                        </span>
+                                    )}
+                                </p>
+                                <span className="text-[11px] text-gray-500">{shortAppId(o.application_id)}</span>
+                            </div>
+                            <div className="mt-2 space-y-1.5">
+                                <MilestoneRow
+                                    label="Application"
+                                    value={
+                                        draft
+                                            ? `Draft${appCreated ? ` since ${dayWords(appCreated, false)}` : ""}`
+                                            : `${st.charAt(0).toUpperCase()}${st.slice(1).replace(/_/g, " ")}${
+                                                  o.docs_submitted_at ? ` · docs ${dayWords(o.docs_submitted_at, false)}` : ""
+                                              }`
+                                    }
+                                    pending={draft}
+                                />
+                                {/* ID 84.1: the lead's own outcome (Signed / Manual agreement on file /
+                                    Not needed / …) when recorded, else the application's status. */}
+                                <MilestoneRow
+                                    label="Agreement"
+                                    value={
+                                        o.agreement_outcome_label ??
+                                        (o.agreement_status ? o.agreement_status.replace(/_/g, " ") : "Not generated")
+                                    }
+                                />
+                                <MilestoneRow
+                                    label="Approval"
+                                    value={o.approved_at ? `Approved ${dayWords(o.approved_at, false)}` : "Not yet"}
+                                />
+                            </div>
+                            {canContinue ? (
+                                <Link
+                                    href={`/dealer-onboarding?applicationId=${o.application_id}`}
+                                    className="mt-2 inline-block text-xs font-semibold text-emerald-700 hover:underline"
+                                >
+                                    Continue onboarding →
+                                </Link>
+                            ) : !draft ? (
+                                <p className="mt-2 text-[11px] text-gray-500">With the Sales Head for review.</p>
+                            ) : null}
                         </div>
-                    </div>
-                )}
+                    );
+                })()}
 
-                {GROUPS.map((g) => {
+                {[
+                    ...GROUPS.filter((g) => TOP_GROUPS.includes(g.key)),
+                    // ID 246: the AI review + call recordings sit here.
+                    { key: "ai_review" as const, label: "", icon: Receipt },
+                    ...GROUPS.filter((g) => !TOP_GROUPS.includes(g.key)),
+                ].map((g) => {
+                    if (g.key === "ai_review") {
+                        // Always visible, not behind a collapsible group: burying what
+                        // the AI already learned inside a closed accordion is how it
+                        // stayed invisible to the rep who has to act on it. Renders
+                        // nothing when the AI has never called this lead. Holds the
+                        // call recordings (Attach audio): ID 246 moved it down only.
+                        return <IntentReviewCard key="ai_review" leadId={lead.id} />;
+                    }
                     const Icon = g.icon;
                     const isOpen = open[g.key];
                     return (
@@ -207,58 +253,94 @@ export function LeadDetailRightPane({ bundle, viewerRole, onReviseQuote, focusQu
                                                         Same dealer as an onboarding on the CRM. {onboarded.reason}
                                                     </p>
                                                 )}
-                                            <Field label="Dealer Name" value={lead.dealer_name} />
-                                            <Field label="Shop Name" value={lead.shop_name} />
-                                            {/* E-296 — always rendered; NULL reads "Not set". */}
-                                            <Field
-                                                label="Business type"
-                                                value={
-                                                    <span
-                                                        className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${businessTypeTone(lead.business_type)}`}
-                                                    >
-                                                        {businessTypeLabel(lead.business_type)}
-                                                    </span>
-                                                }
-                                            />
+                                            {/* ID 246: only the filled fields; the empty ones are
+                                                listed under "Add missing details". */}
+                                            {!isBlank(lead.dealer_name) && <Field label="Dealer name" value={lead.dealer_name} />}
+                                            {!isBlank(lead.shop_name) && <Field label="Shop name" value={lead.shop_name} />}
+                                            {!isBlank(lead.city) && <Field label="City" value={lead.city} />}
+                                            {!isBlank(lead.state) && <Field label="State" value={lead.state} />}
+                                            {!isBlank(lead.language) && <Field label="Language" value={lead.language} />}
                                             {/* ID 81 — where the lead came from; locked at creation. */}
                                             <Field label={SOURCE_LABELS.door} value={doorLabel(lead.source_door) ?? "Not recorded"} />
-                                            <Field
-                                                label={SOURCE_LABELS.origin}
-                                                value={
-                                                    originLabel(lead.source_origin) ?? (
-                                                        <SetLeadSource
-                                                            leadId={lead.id}
-                                                            hasCampaign={!!lead.acquisition_campaign_id}
-                                                            onSaved={() => void queryClient.invalidateQueries()}
-                                                        />
-                                                    )
-                                                }
-                                            />
-                                            {/* ID 235: the campaign the lead CAME IN through (scrape run,
-                                                upload), apart from the NeoDove campaign calling it now. */}
-                                            <Field label="Came in via" value={lead.acquisition_campaign_name ?? "None"} />
-                                            <Field
-                                                label="NeoDove campaign"
-                                                value={neodoveCampaignLine(bundle.neodove_campaign ?? null, (d) => fmtDate(d))}
-                                            />
-                                            <Field label="Phone" value={lead.phone} />
-                                            <Field label="Language" value={lead.language} />
-                                            <Field label="City" value={lead.city} />
-                                            <Field label="State" value={lead.state} />
-                                            <Field label="Pincode" value={lead.pincode} />
-                                            <Field label="Area" value={lead.area} />
-                                            <div className="col-span-2">
+                                            {/* E-296 business type: shown when set. */}
+                                            {!isBlank(lead.business_type) && (
                                                 <Field
-                                                    label="Segments"
+                                                    label="Business type"
                                                     value={
-                                                        lead.segments?.length
-                                                            ? lead.segments.map((s) => (
-                                                                  <span key={s} className="inline-flex items-center mr-1 mb-1 rounded-md bg-gray-100 px-1.5 py-0.5 text-[11px] font-medium text-gray-700">{s}</span>
-                                                              ))
-                                                            : "—"
+                                                        <span
+                                                            className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${businessTypeTone(lead.business_type)}`}
+                                                        >
+                                                            {businessTypeLabel(lead.business_type)}
+                                                        </span>
                                                     }
                                                 />
-                                            </div>
+                                            )}
+                                            {originLabel(lead.source_origin) && (
+                                                <Field label={SOURCE_LABELS.origin} value={originLabel(lead.source_origin)} />
+                                            )}
+                                            {/* ID 235: the campaign the lead CAME IN through (scrape run,
+                                                upload), apart from the NeoDove campaign calling it now. */}
+                                            {lead.acquisition_campaign_name && (
+                                                <Field label="Came in via" value={lead.acquisition_campaign_name} />
+                                            )}
+                                            {bundle.neodove_campaign && (
+                                                <Field
+                                                    label="NeoDove campaign"
+                                                    value={neodoveCampaignLine(bundle.neodove_campaign, (d) => fmtDate(d))}
+                                                />
+                                            )}
+                                            {!isBlank(lead.pincode) && <Field label="Pincode" value={lead.pincode} />}
+                                            {!isBlank(lead.area) && <Field label="Area" value={lead.area} />}
+                                            {!isBlank(lead.segments) && (
+                                                <div className="col-span-2">
+                                                    <Field
+                                                        label="Segments"
+                                                        value={lead.segments.map((seg) => (
+                                                            <span key={seg} className="inline-flex items-center mr-1 mb-1 rounded-md bg-gray-100 px-1.5 py-0.5 text-[11px] font-medium text-gray-700">{seg}</span>
+                                                        ))}
+                                                    />
+                                                </div>
+                                            )}
+                                            {(() => {
+                                                const missing = missingDealerDetails(lead);
+                                                if (!missing.length) return null;
+                                                return (
+                                                    <div className="col-span-2 rounded-md border border-dashed border-gray-300 px-3 py-2">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setShowMissing((v) => !v)}
+                                                            className="text-left w-full"
+                                                        >
+                                                            <span className="block text-xs font-semibold text-emerald-700">
+                                                                + Add missing details ({missing.length})
+                                                            </span>
+                                                            <span className="block text-[11px] text-gray-500">{missing.join(", ")}</span>
+                                                        </button>
+                                                        {showMissing && (
+                                                            <div className="mt-2 grid grid-cols-2 gap-3">
+                                                                {missing.map((label) =>
+                                                                    label === "Found via" ? (
+                                                                        // ID 81: the one empty field the lead page already sets.
+                                                                        <Field
+                                                                            key={label}
+                                                                            label={SOURCE_LABELS.origin}
+                                                                            value={
+                                                                                <SetLeadSource
+                                                                                    leadId={lead.id}
+                                                                                    hasCampaign={!!lead.acquisition_campaign_id}
+                                                                                    onSaved={() => void queryClient.invalidateQueries()}
+                                                                                />
+                                                                            }
+                                                                        />
+                                                                    ) : (
+                                                                        <Field key={label} label={label} value="Not set" />
+                                                                    ),
+                                                                )}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                );
+                                            })()}
                                         </div>
                                     )}
                                     {g.key === "business" && (
@@ -285,6 +367,19 @@ export function LeadDetailRightPane({ bundle, viewerRole, onReviseQuote, focusQu
                                     )}
                                     {g.key === "commercials" && (
                                         <div className="space-y-3">
+                                            {/* ID 246: the owner's Update quote, on the Quotes box too. */}
+                                            {onUpdateQuote && (
+                                                <div className="flex justify-end">
+                                                    <button
+                                                        type="button"
+                                                        onClick={onUpdateQuote}
+                                                        className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50"
+                                                    >
+                                                        <Receipt className="h-3.5 w-3.5" />
+                                                        {bundle.commercials_history.length ? "Update quote" : "Create quote"}
+                                                    </button>
+                                                </div>
+                                            )}
                                             {cc ? (
                                                 <>
                                                     <div className="flex items-center justify-between text-xs text-gray-500">
@@ -431,6 +526,19 @@ export function LeadDetailRightPane({ bundle, viewerRole, onReviseQuote, focusQu
                     onClose={() => setSendFor(null)}
                 />
             )}
+        </div>
+    );
+}
+
+function MilestoneRow({ label, value, pending }: { label: string; value: string; pending?: boolean }) {
+    return (
+        <div
+            className={`flex items-center justify-between gap-2 rounded-md border px-3 py-1.5 ${
+                pending ? "border-amber-200 bg-amber-50 text-amber-800" : "border-gray-200 text-gray-700"
+            }`}
+        >
+            <span className="font-medium">{label}</span>
+            <span className="text-right">{value}</span>
         </div>
     );
 }

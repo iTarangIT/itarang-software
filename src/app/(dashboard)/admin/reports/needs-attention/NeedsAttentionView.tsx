@@ -19,6 +19,20 @@ import type { NeedsAttentionHolderSummary, NeedsAttentionRow } from "@/lib/leads
 import { COUNTED_FROM_LABEL } from "@/lib/leads/needsAttentionLabels";
 import { IDLE_MIN_OPTIONS, filterNeedsAttention, type NeedsAttentionFilters } from "@/lib/leads/needsAttentionFilter";
 import { LEAD_STATUS_LABEL } from "@/lib/leads/queueFilters";
+import { SortableTh, sortRows, useUrlTableSort, type SortSpec } from "@/components/shared/TableSort";
+
+// ID 243 — header sort on both lists (idle leads, dead numbers): one capped
+// list in hand, sorted in the browser, kept in the page link (?na_sort=).
+const NA_SORT: SortSpec<NeedsAttentionRow>[] = [
+    { key: "dealer", type: "text" },
+    { key: "holder", type: "text", value: (r) => r.holder_name },
+    { key: "status", type: "text", value: (r) => r.lead_status },
+    { key: "idle", type: "number", value: (r) => r.days_idle },
+    { key: "counted_from", type: "date", value: (r) => r.counted_from_at },
+    { key: "last_worked", type: "date", value: (r) => r.last_worked_at },
+    { key: "follow_up", type: "date", value: (r) => r.next_follow_up_at },
+    { key: "disposition", type: "text", value: (r) => r.last_disposition },
+];
 
 const QUERY_KEY = ["needs-attention"];
 
@@ -123,8 +137,9 @@ export function NeedsAttentionView() {
     // ID 192: a follow-up more than 30 days ahead is ignored; those leads are listed and counted apart.
     const totalParked = (data?.holders ?? []).reduce((s, h) => s + (h.parked ?? 0), 0);
     const capped = rows.length < totalIdle + totalDead;
-    const idle = shown.filter((r) => !r.non_responsive);
-    const deadNumbers = shown.filter((r) => r.non_responsive);
+    const { sort, toggle: toggleSort, comparator } = useUrlTableSort(NA_SORT, { prefix: "na_" });
+    const idle = sortRows(shown.filter((r) => !r.non_responsive), comparator);
+    const deadNumbers = sortRows(shown.filter((r) => r.non_responsive), comparator);
     const statuses = useMemo(
         () => [...new Set(rows.map((r) => r.lead_status).filter((s): s is string => !!s))].sort(),
         [rows],
@@ -190,19 +205,21 @@ export function NeedsAttentionView() {
                                     onChange={toggleAll}
                                 />
                             </th>
-                            <th className="px-3 py-2 text-left font-semibold">Dealer / shop</th>
-                            <th className="px-3 py-2 text-left font-semibold">Held by</th>
-                            <th className="px-3 py-2 text-left font-semibold">Status</th>
-                            <th className="px-3 py-2 text-right font-semibold">Working days idle</th>
-                            <th
-                                className="px-3 py-2 text-left font-semibold"
+                            <SortableTh label="Dealer / shop" sortKey="dealer" sort={sort} onToggle={toggleSort} className="px-3 text-left" />
+                            <SortableTh label="Held by" sortKey="holder" sort={sort} onToggle={toggleSort} className="px-3 text-left" />
+                            <SortableTh label="Status" sortKey="status" sort={sort} onToggle={toggleSort} className="px-3 text-left" />
+                            <SortableTh label="Working days idle" sortKey="idle" sort={sort} onToggle={toggleSort} align="right" className="px-3 text-right" />
+                            <SortableTh
+                                label="Counted from"
+                                sortKey="counted_from"
+                                sort={sort}
+                                onToggle={toggleSort}
+                                className="px-3 text-left"
                                 title="The date the idle count runs from: a passed follow-up, the day the holder got the lead, the last work, or (none of those) the day it was created"
-                            >
-                                Counted from
-                            </th>
-                            <th className="px-3 py-2 text-left font-semibold">Last worked</th>
-                            <th className="px-3 py-2 text-left font-semibold">Follow-up</th>
-                            <th className="px-3 py-2 text-left font-semibold">Last disposition</th>
+                            />
+                            <SortableTh label="Last worked" sortKey="last_worked" sort={sort} onToggle={toggleSort} className="px-3 text-left" />
+                            <SortableTh label="Follow-up" sortKey="follow_up" sort={sort} onToggle={toggleSort} className="px-3 text-left" />
+                            <SortableTh label="Last disposition" sortKey="disposition" sort={sort} onToggle={toggleSort} className="px-3 text-left" />
                             <th className="px-3 py-2" />
                         </tr>
                     </thead>

@@ -11,7 +11,7 @@ export default async function MyDealerAccountPage({ params }: { params: Promise<
     await requireRole([...ACCOUNT_QUOTE_VIEW_ROLES]);
     const { id } = await params;
     return (
-        <div className="px-4 sm:px-6 md:px-8 py-6 space-y-5 max-w-[1100px]">
+        <div className="px-4 sm:px-6 md:px-8 py-6 space-y-5 max-w-[1400px]">
             <AccountPageView accountId={decodeURIComponent(id)} />
         </div>
     );

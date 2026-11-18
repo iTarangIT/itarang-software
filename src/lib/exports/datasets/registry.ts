@@ -1192,6 +1192,8 @@ const calls: Dataset = {
                 ...this.sheets[0],
                 rows: data.map(({ ai_call_id, recording_url, ...r }) => ({
                     ...r,
+                    // ID 209: the caller's role in words ("inside sales"), as the other sheets.
+                    caller_role: ((r.caller_role as string | null) ?? "").replace(/_/g, " ") || null,
                     recording_url: recordingCell(recording_url, ai_call_id, origin, r.connected === true),
                 })),
             },

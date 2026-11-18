@@ -13,6 +13,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, ExternalLink, FileText, Send } from "lucide-react";
+import { SortableTh, sortRows, useUrlTableSort, type SortSpec } from "@/components/shared/TableSort";
 import {
     QuotationSendDialog,
     type QuotationTerms,
@@ -68,6 +69,20 @@ const TABS: Array<{ key: PartnerQuotationStatus; label: string }> = [
 ];
 
 export const QUOTATIONS_QUERY_KEY = "partner-quotations";
+
+// ID 243 — header sort. The list is capped at 200 by the API, so the rows in
+// hand are sorted in the browser; the sort is kept in the page link (?q_sort=).
+const QUOTE_SORT: SortSpec<PartnerQuotation>[] = [
+    { key: "quote_number", type: "text" },
+    { key: "dealer", type: "text", value: (q) => q.dealer_name || q.shop_name },
+    { key: "city", type: "text" },
+    { key: "value", type: "number" },
+    { key: "version", type: "number", value: (q) => q.version_no },
+    { key: "status", type: "text", value: (q) => statusLabel(q) },
+    { key: "raised", type: "date", value: (q) => q.created_at },
+    { key: "decided", type: "date", value: (q) => (q.approval_status === "pending" ? null : q.approved_at) },
+    { key: "dealer_decision", type: "text", value: (q) => q.dealer_decision },
+];
 
 export async function fetchPartnerQuotations(
     status: PartnerQuotationStatus | "all",
@@ -132,7 +147,8 @@ export function PartnerQuotationsView() {
     });
 
     const counts = query.data?.counts;
-    const rows = query.data?.quotations ?? [];
+    const { sort, toggle: toggleSort, comparator } = useUrlTableSort(QUOTE_SORT, { prefix: "q_" });
+    const rows = sortRows(query.data?.quotations ?? [], comparator);
 
     return (
         <div className="space-y-4">
@@ -177,15 +193,15 @@ export function PartnerQuotationsView() {
                 <table className="min-w-full text-sm">
                     <thead className="bg-gray-50 text-left text-xs uppercase tracking-wide text-gray-500">
                         <tr>
-                            <th className="px-4 py-2.5">Quote no.</th>
-                            <th className="px-4 py-2.5">Dealer</th>
-                            <th className="px-4 py-2.5">City</th>
-                            <th className="px-4 py-2.5 text-right">Value</th>
-                            <th className="px-4 py-2.5">Ver.</th>
-                            <th className="px-4 py-2.5">Status</th>
-                            <th className="px-4 py-2.5">Raised</th>
-                            <th className="px-4 py-2.5">Decided</th>
-                            <th className="px-4 py-2.5">Dealer</th>
+                            <SortableTh label="Quote no." sortKey="quote_number" sort={sort} onToggle={toggleSort} className="px-4 py-2.5" />
+                            <SortableTh label="Dealer" sortKey="dealer" sort={sort} onToggle={toggleSort} className="px-4 py-2.5" />
+                            <SortableTh label="City" sortKey="city" sort={sort} onToggle={toggleSort} className="px-4 py-2.5" />
+                            <SortableTh label="Value" sortKey="value" sort={sort} onToggle={toggleSort} align="right" className="px-4 py-2.5 text-right" />
+                            <SortableTh label="Ver." sortKey="version" sort={sort} onToggle={toggleSort} className="px-4 py-2.5" />
+                            <SortableTh label="Status" sortKey="status" sort={sort} onToggle={toggleSort} className="px-4 py-2.5" />
+                            <SortableTh label="Raised" sortKey="raised" sort={sort} onToggle={toggleSort} className="px-4 py-2.5" />
+                            <SortableTh label="Decided" sortKey="decided" sort={sort} onToggle={toggleSort} className="px-4 py-2.5" />
+                            <SortableTh label="Dealer" sortKey="dealer_decision" sort={sort} onToggle={toggleSort} className="px-4 py-2.5" title="What the dealer answered" />
                             <th className="px-4 py-2.5 text-right">Actions</th>
                         </tr>
                     </thead>

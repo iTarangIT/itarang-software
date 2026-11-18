@@ -3,6 +3,7 @@
 import { ChevronLeft, ChevronRight, Loader2, Inbox } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { ConvertedRow } from "@/lib/sales-insight/types";
+import { SortableTh, type SortState } from "@/components/shared/TableSort";
 
 type Props = {
     rows: ConvertedRow[];
@@ -13,6 +14,9 @@ type Props = {
     error: string | null;
     onPageChange: (page: number) => void;
     onRowClick: (row: ConvertedRow) => void;
+    /** ID 243 — header sort (done by the API; the list is paged). */
+    sort?: SortState | null;
+    onSort?: (key: string) => void;
 };
 
 function formatDate(iso: string | null): string {
@@ -67,6 +71,8 @@ export function ConvertedTable({
     error,
     onPageChange,
     onRowClick,
+    sort = null,
+    onSort = () => {},
 }: Props) {
     const totalPages = Math.max(1, Math.ceil(total / pageSize));
     const start = total === 0 ? 0 : (page - 1) * pageSize + 1;
@@ -93,13 +99,13 @@ export function ConvertedTable({
                     <table className="w-full text-sm">
                         <thead className="bg-gray-50/50 text-xs uppercase tracking-wide text-gray-500">
                             <tr>
-                                <th className="text-left px-4 py-3 font-medium">Source</th>
-                                <th className="text-left px-4 py-3 font-medium">Name</th>
+                                <SortableTh label="Source" sortKey="source" sort={sort} onToggle={onSort} className="text-left px-4 py-3" />
+                                <SortableTh label="Name" sortKey="name" sort={sort} onToggle={onSort} className="text-left px-4 py-3" />
                                 <th className="text-left px-4 py-3 font-medium">Phone</th>
-                                <th className="text-left px-4 py-3 font-medium">Region</th>
-                                <th className="text-left px-4 py-3 font-medium">Dealer</th>
-                                <th className="text-left px-4 py-3 font-medium">Converted</th>
-                                <th className="text-left px-4 py-3 font-medium">Intent</th>
+                                <SortableTh label="Region" sortKey="region" sort={sort} onToggle={onSort} className="text-left px-4 py-3" />
+                                <SortableTh label="Dealer" sortKey="dealer" sort={sort} onToggle={onSort} className="text-left px-4 py-3" />
+                                <SortableTh label="Converted" sortKey="converted" sort={sort} onToggle={onSort} className="text-left px-4 py-3" />
+                                <SortableTh label="Intent" sortKey="intent" sort={sort} onToggle={onSort} className="text-left px-4 py-3" />
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">

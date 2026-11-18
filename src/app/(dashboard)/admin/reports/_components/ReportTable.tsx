@@ -4,13 +4,31 @@
 // result declares `drill`, non-zero cells in the drill columns open the list of
 // leads behind the number.
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Inbox } from "lucide-react";
 import type { ReportResult } from "@/lib/admin/types";
+import { SortableTh, sortRows, useUrlTableSort, type SortSpec } from "@/components/shared/TableSort";
 import { DrillLeadsModal, type DrillTarget } from "./DrillLeadsModal";
+
+type ReportRow = ReportResult["rows"][number];
 
 export function ReportTable({ result, qs = "" }: { result: ReportResult; qs?: string }) {
     const [drill, setDrill] = useState<DrillTarget | null>(null);
+
+    // ID 243 — header sort over the rows in hand (a report is one unpaged
+    // result), kept in the page link (?rep_sort=). Number columns open largest
+    // first; a text column that holds dates sorts as dates. Blanks stay last.
+    const specs = useMemo<SortSpec<ReportRow>[]>(
+        () =>
+            result.columns.map((c) => {
+                const first = result.rows.map((r) => r[c.key]).find((v) => v != null && v !== "");
+                const isDate = typeof first === "string" && /^\d{4}-\d{2}-\d{2}/.test(first);
+                return { key: c.key, type: c.numeric ? "number" : isDate ? "date" : "text" };
+            }),
+        [result],
+    );
+    const { sort, toggle, comparator } = useUrlTableSort(specs, { prefix: "rep_" });
+    const rows = useMemo(() => sortRows(result.rows, comparator), [result.rows, comparator]);
 
     if (result.rows.length === 0) {
         return (
@@ -29,19 +47,20 @@ export function ReportTable({ result, qs = "" }: { result: ReportResult; qs?: st
                 <thead className="bg-bg/60 text-[11px] uppercase tracking-wide text-ink-muted">
                     <tr>
                         {result.columns.map((c) => (
-                            <th
+                            <SortableTh
                                 key={c.key}
-                                className={`px-4 py-2.5 font-semibold ${
-                                    c.numeric ? "text-right" : "text-left"
-                                }`}
-                            >
-                                {c.label}
-                            </th>
+                                label={c.label}
+                                sortKey={c.key}
+                                sort={sort}
+                                onToggle={toggle}
+                                align={c.numeric ? "right" : undefined}
+                                className={`px-4 py-2.5 ${c.numeric ? "text-right" : "text-left"}`}
+                            />
                         ))}
                     </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                    {result.rows.map((row, i) => (
+                    {rows.map((row, i) => (
                         <tr key={i} className="hover:bg-bg/60">
                             {result.columns.map((c) => {
                                 const v = row[c.key];

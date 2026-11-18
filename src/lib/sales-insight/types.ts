@@ -27,6 +27,10 @@ export type ConvertedRow = {
     also_in: LeadSource[];
 };
 
+// ID 243 — the columns the Converted Leads table sorts by (on the server: it is paged).
+export const CONVERTED_SORT_KEYS = ["source", "name", "region", "dealer", "converted", "intent"] as const;
+export type ConvertedSortKey = (typeof CONVERTED_SORT_KEYS)[number];
+
 export type ConvertedFilters = {
     from_date?: string | null;     // ISO date, inclusive
     to_date?: string | null;       // ISO date, inclusive
@@ -35,6 +39,8 @@ export type ConvertedFilters = {
     search?: string | null;        // ILIKE on display_name / phone
     page?: number;
     limit?: number;
+    /** ID 243 — header sort; null keeps the newest-converted-first order. */
+    sort?: { key: ConvertedSortKey; dir: "asc" | "desc" } | null;
 };
 
 export type Kpis = {
