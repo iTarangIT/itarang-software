@@ -21,9 +21,12 @@ import { toast } from "sonner";
 
 export default function NbfcPortalHeader({
     tenantName,
+    userTitle = "NBFC Partner",
     onMenuClick,
 }: {
     tenantName: string;
+    /** E-388 — designation badge (e.g. "Credit Verifier" for a child login). */
+    userTitle?: string;
     onMenuClick?: () => void;
 }) {
     const { user } = useAuth();
@@ -140,7 +143,7 @@ export default function NbfcPortalHeader({
                                     color: "var(--color-brand-sky)",
                                 }}
                             >
-                                NBFC Partner
+                                {userTitle}
                             </span>
                         </div>
                         <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${isProfileOpen ? "rotate-180" : ""}`} />

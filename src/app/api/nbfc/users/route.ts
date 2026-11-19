@@ -26,6 +26,7 @@ import { nbfcRoles, nbfcUsers, users } from "@/lib/db/schema";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
 import { NBFC_ASSIGNABLE_SYSTEM_ROLES } from "@/lib/nbfc/origination-roles";
 import { assertValidParent, cleanDelegatedSteps } from "@/lib/nbfc/approval-hierarchy";
+import { CHILD_DEFAULT_NAV, CHILD_DEFAULT_TITLE, cleanAllowedNav } from "@/lib/nbfc/portal-nav";
 import {
   ensureSupabaseUser,
   generatePortalPassword,
@@ -57,6 +58,10 @@ const Body = z.object({
   // act on delegated_steps after the parent approves.
   parent_user_id: z.string().uuid().optional().nullable(),
   delegated_steps: z.array(z.string()).optional(),
+  // E-388 — sidebar menus (null/absent ⇒ all; a child defaults to Acquire only)
+  // and the designation shown instead of "NBFC Partner".
+  allowed_nav: z.array(z.string()).nullable().optional(),
+  title: z.string().trim().max(64).optional().nullable(),
 });
 
 function statusFromError(msg: string): number {
@@ -112,6 +117,13 @@ export async function POST(req: NextRequest) {
     const parentUserId = parsed.data.parent_user_id ?? null;
     if (parentUserId) await assertValidParent(tenantId, null, parentUserId);
     const delegatedSteps = parentUserId ? cleanDelegatedSteps(parsed.data.delegated_steps) : [];
+    const allowedNav =
+      parsed.data.allowed_nav !== undefined
+        ? cleanAllowedNav(parsed.data.allowed_nav)
+        : parentUserId
+          ? [...CHILD_DEFAULT_NAV]
+          : null;
+    const title = parsed.data.title?.trim() || (parentUserId ? CHILD_DEFAULT_TITLE : null);
 
     // Path 1 — the email already has an iTarang account: link it.
     // Path 2 — no account yet: provision a fresh Supabase login + users row and
@@ -192,6 +204,8 @@ export async function POST(req: NextRequest) {
       notification_prefs: {},
       parent_user_id: parentUserId,
       delegated_steps: delegatedSteps,
+      allowed_nav: allowedNav,
+      title,
     });
 
     return NextResponse.json({

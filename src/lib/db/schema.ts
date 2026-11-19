@@ -4876,6 +4876,10 @@ export const nbfcUsers = pgTable(
     // steps the NBFC admin lets the child act on (src/lib/nbfc/approval-hierarchy.ts).
     parent_user_id: uuid("parent_user_id"),
     delegated_steps: jsonb("delegated_steps").$type<string[]>().default([]).notNull(),
+    // E-388 — sidebar menus this user may open (NULL ⇒ all; src/lib/nbfc/portal-nav.ts)
+    // and the designation shown instead of "NBFC Partner" (e.g. "Credit Verifier").
+    allowed_nav: jsonb("allowed_nav").$type<string[] | null>(),
+    title: varchar("title", { length: 64 }),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({

@@ -9,7 +9,8 @@ import {
 } from "@/lib/nbfc/origination-roles";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
 import type { HierarchyStep } from "@/lib/nbfc/approval-hierarchy-rules";
-import ApprovalHierarchyPanel, { StepTicks, memberLabel, type HierarchyMember } from "./ApprovalHierarchyPanel";
+import ApprovalHierarchyPanel, { MenuTicks, StepTicks, memberLabel, type HierarchyMember } from "./ApprovalHierarchyPanel";
+import { CHILD_DEFAULT_NAV, CHILD_DEFAULT_TITLE, type NbfcNavId } from "@/lib/nbfc/portal-nav";
 
 interface Member extends HierarchyMember {
   user_id: string;
@@ -48,6 +49,9 @@ export default function UsersSection({ currentUserId, members, canManage = false
   // E-387 — "Reports to" (parent) for a new child login + its delegated steps.
   const [parentId, setParentId] = useState("");
   const [steps, setSteps] = useState<HierarchyStep[]>([]);
+  // E-388 — menus + designation for the new child.
+  const [nav, setNav] = useState<NbfcNavId[] | null>([...CHILD_DEFAULT_NAV]);
+  const [title, setTitle] = useState(CHILD_DEFAULT_TITLE);
   // Parents = members who report to nobody.
   const parentOptions = members.filter((m) => !m.parent_user_id);
   // A selected value is either "sys:<role>" (system role) or "custom:<roleId>".
@@ -86,6 +90,8 @@ export default function UsersSection({ currentUserId, members, canManage = false
         phone?: string;
         parent_user_id?: string;
         delegated_steps?: string[];
+        allowed_nav?: string[] | null;
+        title?: string;
       } = {
         email: email.trim(),
       };
@@ -94,6 +100,8 @@ export default function UsersSection({ currentUserId, members, canManage = false
       if (parentId) {
         body.parent_user_id = parentId;
         body.delegated_steps = steps;
+        body.allowed_nav = nav;
+        if (title.trim()) body.title = title.trim();
       }
       if (roleValue.startsWith("custom:")) body.role_id = roleValue.slice("custom:".length);
       else body.role = roleValue.slice("sys:".length);
@@ -121,6 +129,8 @@ export default function UsersSection({ currentUserId, members, canManage = false
       setPhone("");
       setParentId("");
       setSteps([]);
+      setNav([...CHILD_DEFAULT_NAV]);
+      setTitle(CHILD_DEFAULT_TITLE);
       setRoleValue("sys:viewer");
       router.refresh();
     } catch (e) {
@@ -337,7 +347,21 @@ export default function UsersSection({ currentUserId, members, canManage = false
               {memberLabel(members, parentId)} for approval. After approval{" "}
               {memberLabel(members, parentId)} owns the lead.
             </p>
-            <p className="mt-1.5 text-slate-600">After approval this user may ALSO do (tick only what you allow):</p>
+            <label className="mt-2 block">
+              <span className="block mb-1 text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                Designation (shown instead of &ldquo;NBFC Partner&rdquo;)
+              </span>
+              <input
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                disabled={busy}
+                maxLength={64}
+                className="border border-slate-300 rounded px-2 py-1 text-sm w-56 bg-white"
+              />
+            </label>
+            <p className="mt-2 text-slate-600">Menus this user can see and open:</p>
+            <MenuTicks value={nav} onChange={setNav} disabled={busy} />
+            <p className="mt-2 text-slate-600">After approval this user may ALSO do (tick only what you allow):</p>
             <StepTicks value={steps} onChange={setSteps} disabled={busy} />
           </div>
         ) : null}
@@ -387,6 +411,7 @@ export default function UsersSection({ currentUserId, members, canManage = false
         members={members}
         canManage={canManage}
         cibilReviewEnabledAt={cibilReviewEnabledAt}
+        currentUserId={currentUserId}
       />
     </section>
   );

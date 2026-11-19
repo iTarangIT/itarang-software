@@ -33,124 +33,29 @@ import {
   X,
 } from "lucide-react";
 import { useNbfcWorkQueue } from "@/hooks/useNbfcWorkQueue";
+import { NBFC_NAV, isNavAllowed, type NbfcNavId } from "@/lib/nbfc/portal-nav";
 
-const NAV_ITEMS: Array<{
-  id: string;
-  href: string;
-  label: string;
-  icon: React.ComponentType<{ className?: string }>;
-}> = [
-  // Addendum V0.1 §7.1 — Acquire is the pre-disbursal origination workspace.
-  // Sits above Monitor (Portfolio Overview) since it is the primary surface
-  // for an NBFC user under the addendum's competing-NBFC routing model.
-  {
-    id: "acquire",
-    href: "/nbfc/acquire",
-    label: "Acquire",
-    icon: Briefcase,
-  },
-  {
-    id: "portfolio",
-    href: "/nbfc/portfolio",
-    label: "Portfolio Overview",
-    icon: ChartLine,
-  },
-  {
-    id: "leads",
-    href: "/nbfc/leads",
-    label: "Lead Intelligence",
-    icon: Search,
-  },
-  {
-    id: "emi-tracker",
-    href: "/nbfc/emi-tracker",
-    label: "EMI Tracker",
-    icon: CalendarClock,
-  },
-  {
-    id: "batteries",
-    href: "/nbfc/batteries",
-    label: "Battery Monitoring",
-    icon: Layers,
-  },
-  {
-    id: "risk",
-    href: "/nbfc/risk",
-    label: "Risk Alerts",
-    icon: Siren,
-  },
-  // Where "Flag for Recovery" lands. The flag wrote a pipeline row and a
-  // battery stub and then had nowhere to show them: the Kanban below carries
-  // a serial and a stage, with no borrower, no dealer and no outstanding on
-  // it. This is the flagged book — read here, moved on the board.
-  {
-    id: "recovery-queue",
-    href: "/nbfc/recovery/queue",
-    label: "Recovery",
-    icon: Flag,
-  },
-  {
-    id: "recovery",
-    href: "/nbfc/recovery",
-    label: "Recovery & Auction",
-    icon: ClipboardList,
-  },
-  // [BRD §3, §5] The battery master and the workshop console. Both had APIs
-  // and no screen, so recovered stock could only be registered — and repairs
-  // only raised — with curl.
-  {
-    id: "recovery-batteries",
-    href: "/nbfc/recovery/batteries",
-    label: "Recovered Batteries",
-    icon: BatteryCharging,
-  },
-  {
-    id: "recovery-refurbishment",
-    href: "/nbfc/recovery/refurbishment",
-    label: "Refurbishment",
-    icon: Wrench,
-  },
-  // [E-258] Scrap is the one recovery outcome the auction cannot sell — a
-  // dealer bids on batteries that still work. This is where it goes instead:
-  // bundled, photographed, priced and sold to iTarang.
-  {
-    id: "recovery-scrap",
-    href: "/nbfc/recovery/scrap",
-    label: "Scrap Sales",
-    icon: Recycle,
-  },
-  // [E-234] `/nbfc/auction` shipped with E-038 and was never linked from
-  // anywhere — an orphan page reachable only by typing the URL. Recovery is the
-  // pipeline that feeds it, so they are siblings rather than merged.
-  //
-  // It was labelled "Auction Marketplace" while it still offered NBFCs a bid
-  // button. It does not: bidders are dealers, and an NBFC is the seller here.
-  // The label now says whose lots these are.
-  {
-    id: "auction",
-    href: "/nbfc/auction",
-    label: "Auction Lots",
-    icon: Gavel,
-  },
-  {
-    id: "auction-drafts",
-    href: "/nbfc/auction/drafts",
-    label: "Draft Lots",
-    icon: FilePlus2,
-  },
-  {
-    id: "audit",
-    href: "/nbfc/audit",
-    label: "Audit Log",
-    icon: FileText,
-  },
-  {
-    id: "settings",
-    href: "/nbfc/settings",
-    label: "Settings",
-    icon: Cog,
-  },
-];
+// E-388 — the menu list lives in src/lib/nbfc/portal-nav.ts (shared with the
+// page guard and the Settings → Users menu ticks); icons are attached here.
+const NAV_ICONS: Record<NbfcNavId, React.ComponentType<{ className?: string }>> = {
+  acquire: Briefcase,
+  portfolio: ChartLine,
+  leads: Search,
+  "emi-tracker": CalendarClock,
+  batteries: Layers,
+  risk: Siren,
+  "recovery-queue": Flag,
+  recovery: ClipboardList,
+  "recovery-batteries": BatteryCharging,
+  "recovery-refurbishment": Wrench,
+  "recovery-scrap": Recycle,
+  auction: Gavel,
+  "auction-drafts": FilePlus2,
+  audit: FileText,
+  settings: Cog,
+};
+
+const NAV_ITEMS = NBFC_NAV.map((n) => ({ ...n, icon: NAV_ICONS[n.id] }));
 
 const inr = (n: number) =>
   new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(n);
@@ -162,8 +67,12 @@ function SidebarBody({
   aumInr,
   pathname,
   acquirePending,
+  allowedNav,
+  userTitle,
   onNavigate,
 }: {
+  allowedNav: string[] | null;
+  userTitle: string;
   tenantName: string;
   activeLoans: number;
   aumInr: number | null;
@@ -184,7 +93,7 @@ function SidebarBody({
 
       <div className="px-5 py-4 border-b border-white/[0.07]">
         <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-white/30">
-          NBFC Partner
+          {userTitle}
         </p>
         <p className="text-[14px] font-semibold text-white mt-1 truncate">
           {tenantName}
@@ -208,7 +117,7 @@ function SidebarBody({
               — lit up EVERY ancestor, so /nbfc/auction/drafts highlighted both
               "Auction Lots" and "Draft Lots" at once. Matching the deepest
               entry is the same rule the main app sidebar uses. */}
-          {NAV_ITEMS.map((item) => {
+          {NAV_ITEMS.filter((item) => isNavAllowed(allowedNav, item.id)).map((item) => {
             const Icon = item.icon;
             const matches = (href: string) =>
               pathname === href || pathname.startsWith(`${href}/`);
@@ -258,9 +167,13 @@ export default function NbfcPortalSidebar({
   tenantName,
   activeLoans,
   aumInr,
+  allowedNav = null,
+  userTitle = "NBFC Partner",
   mobileOpen = false,
   onClose,
 }: {
+  allowedNav?: string[] | null;
+  userTitle?: string;
   tenantName: string;
   activeLoans: number;
   aumInr: number | null;
@@ -280,6 +193,8 @@ export default function NbfcPortalSidebar({
           aumInr={aumInr}
           pathname={pathname}
           acquirePending={acquire_pending}
+          allowedNav={allowedNav}
+          userTitle={userTitle}
         />
       </aside>
 
@@ -320,6 +235,8 @@ export default function NbfcPortalSidebar({
             aumInr={aumInr}
             pathname={pathname}
             acquirePending={acquire_pending}
+          allowedNav={allowedNav}
+          userTitle={userTitle}
             onNavigate={onClose}
           />
         </aside>
