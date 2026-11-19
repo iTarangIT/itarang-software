@@ -433,8 +433,9 @@ export async function decideDealerReview(opts: {
 
   if (opts.decision !== "reject") {
     try {
-      const { pushStep4ToWhatsApp } = await import("@/lib/whatsapp/step4-flow");
-      void pushStep4ToWhatsApp(lead.id).catch(() => {});
+      // E-391 — auto-route by an NBFC routing rule, else "Choose lender".
+      const { step4OpenedFor } = await import("./nbfc-routing");
+      void step4OpenedFor(lead.id, "dealer_check_approved").catch(() => {});
     } catch {
       /* best-effort */
     }

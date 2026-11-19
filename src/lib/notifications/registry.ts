@@ -180,6 +180,7 @@ export const TYPE_LABELS: Record<string, string> = {
   "lead.dealer_check_pending": "Dealer assignment waiting for the admin check",
   "lead.dealer_check_approved": "Dealer assignment approved / changed by the admin",
   "lead.dealer_check_rejected": "Dealer assignment rejected by the admin",
+  "lead.auto_routed": "Application sent to an NBFC by a routing rule",
   "lead.dealer_progress": "Dealer moved a file iTarang pushed to them",
   "lead.pushed_away": "Customer file moved from you to another dealer by iTarang",
   "lead.acted_for_dealer": "iTarang worked on your customer file for you",

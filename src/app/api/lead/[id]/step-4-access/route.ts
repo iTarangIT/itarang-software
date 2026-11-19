@@ -251,6 +251,25 @@ export async function GET(
       // be sent to a lender: preview only, with the reason on the banner.
       const { nbfcRoutingBlock } = await import("@/lib/leads/dealer-assignment");
       const dealerCheckBlock = alreadySubmitted ? null : await nbfcRoutingBlock(leadId);
+      // E-391 — a lead that reached Step 4 before its routing rule existed is
+      // sent now; the page then shows it read-only.
+      if (!alreadySubmitted && !dealerCheckBlock) {
+        const { autoRouteLead } = await import("@/lib/leads/nbfc-routing");
+        const routed = await autoRouteLead(leadId, { trigger: "step4_page" });
+        if (routed.routed) {
+          return NextResponse.json({
+            success: true,
+            data: {
+              allowed: true,
+              paymentMode: "finance",
+              ...sharedFields,
+              readOnly: true,
+              kycStatus: "pending_final_approval",
+              reason: `Sent to ${routed.nbfcName} automatically by an iTarang routing rule.`,
+            },
+          });
+        }
+      }
       return NextResponse.json({
         success: true,
         data: {

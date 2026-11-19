@@ -153,6 +153,8 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "lead.dealer_check_pending": "Leads",
   "lead.dealer_check_approved": "Leads",
   "lead.dealer_check_rejected": "Leads",
+  // E-391 — the file went to an NBFC automatically by a routing rule.
+  "lead.auto_routed": "Leads",
   "lead.dealer_progress": "Leads",
   // ID 33 / 183 (16 Oct) — the dealer a file was moved away from; iTarang
   // worked the dealer's file for him ("Done by <name> for <dealer>").

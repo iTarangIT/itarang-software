@@ -85,8 +85,11 @@ export async function submitStep4ProductSelection(opts: {
   submittedBy: string;
   /** The lead's dealer code, for the notification's dealer name. */
   dealerCode: string | null;
+  /** E-391 — set by autoRouteLead, which already resolved the routing rule. */
+  routingResolved?: boolean;
 }): Promise<Step4SubmitResult> {
-  const { leadId, lead, body, submittedBy, dealerCode } = opts;
+  const { leadId, lead, submittedBy, dealerCode } = opts;
+  let { body } = opts;
 
   if (body.selectedNbfcs && body.selectedNbfcs.length > 1) {
     throw new Error("Only one lending partner may be selected.");
@@ -95,6 +98,19 @@ export async function submitStep4ProductSelection(opts: {
   // admin before the file goes to any lender (web and WhatsApp both land here).
   const { assertNbfcRoutingAllowed } = await import("./dealer-assignment");
   await assertNbfcRoutingAllowed(leadId);
+  // E-391 — an NBFC routing rule decides the lender when one fits: a stale page
+  // or chat that still shows the choice cannot send the file elsewhere.
+  if (!opts.routingResolved) {
+    const { routingOverrideFor } = await import("./nbfc-routing");
+    const forced = await routingOverrideFor(leadId);
+    if (forced) {
+      body = {
+        ...body,
+        externalLender: undefined,
+        selectedNbfcs: [{ nbfc_id: String(forced.nbfcId), loan_product_id: forced.loanProductId }],
+      };
+    }
+  }
 
   const productSelectionId = await generateId("PS");
   const now = new Date();

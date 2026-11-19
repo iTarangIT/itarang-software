@@ -10,6 +10,7 @@ import {
   ShoppingCart,
   Users,
   UserCheck,
+  Route,
   FileText,
   Download,
   Mail,
@@ -394,6 +395,18 @@ function loanProductSettingsItem(idPrefix: string) {
   };
 }
 
+// E-391 — Settings → NBFC routing rules (Battery Pool diagram 1 part 2): rules
+// that send a file straight to one NBFC when Step 4 opens. Same factory
+// convention as loanProductSettingsItem so the admin and sales_head groups match.
+function nbfcRoutingSettingsItem(idPrefix: string) {
+  return {
+    id: `${idPrefix}-nbfc-routing`,
+    label: "NBFC routing rules",
+    icon: Route,
+    href: "/admin/settings/nbfc-routing",
+  };
+}
+
 // Settings → the digest screens (E-287/E-288). One factory per screen, same
 // one-factory-per-role convention as loanProductSettingsItem above — the admin
 // and sales_head Settings groups have to stay in step, and a second hand-written
@@ -615,6 +628,7 @@ const ROLE_TRAILING_SECTIONS: Record<string, any[]> = {
         myDayDigestItem("sh"),
         buybackDailyDigestItem("sh"),
         loanProductSettingsItem("sh"),
+        nbfcRoutingSettingsItem("sh"),
         nbfcSettingsSubnav("sh"),
         whatsappSettingsSubnav("sh"),
         {
@@ -1773,6 +1787,7 @@ const roleNavigation: Record<string, any[]> = {
         timeLimitsItem("admin"),
         kycFileOpensItem("admin"),
         loanProductSettingsItem("admin"),
+        nbfcRoutingSettingsItem("admin"),
         nbfcSettingsSubnav("admin"),
         whatsappSettingsSubnav("admin"),
         {

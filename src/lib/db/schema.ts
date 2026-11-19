@@ -14168,3 +14168,29 @@ export const houseLoginStaffLinks = pgTable(
     staffIdx: index("house_login_staff_links_staff_idx").on(t.staff_user_id),
   }),
 );
+
+// E-391 — Battery Pool diagram 1, part 2: NBFC routing rules. Any mix of
+// dealer, customer state + city and product category → one NBFC + loan
+// product; the most specific active rule wins. When Step 4 opens and the rule's
+// product passes the BRE, the file is sent to that NBFC automatically.
+export const nbfcRoutingRules = pgTable(
+  "nbfc_routing_rules",
+  {
+    id: serial("id").primaryKey().notNull(),
+    dealer_code: varchar("dealer_code", { length: 255 }),
+    state: varchar("state", { length: 100 }),
+    city: varchar("city", { length: 100 }),
+    product_category: varchar("product_category", { length: 50 }),
+    nbfc_id: integer("nbfc_id").notNull(),
+    loan_product_id: integer("loan_product_id").notNull(),
+    is_active: boolean("is_active").default(true).notNull(),
+    notes: text("notes"),
+    created_by: uuid("created_by"),
+    updated_by: uuid("updated_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    activeIdx: index("nbfc_routing_rules_active_idx").on(t.is_active, t.id),
+  }),
+);

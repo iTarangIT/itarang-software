@@ -485,6 +485,12 @@ async function onStep4Start(
       return;
     }
   }
+  {
+    // E-391 — an NBFC routing rule picks the lender: send it now, no list.
+    const { autoRouteLead } = await import("@/lib/leads/nbfc-routing");
+    const routed = await autoRouteLead(leadId, { trigger: "whatsapp_step4" });
+    if (routed.routed) return;
+  }
 
   await patchLeadSub(session.id, "s4", {
     picks: [],

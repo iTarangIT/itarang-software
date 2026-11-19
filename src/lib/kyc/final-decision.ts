@@ -509,10 +509,12 @@ export async function applyKycFinalDecision(input: {
                     return;
                 }
 
-                const { pushStep4ToWhatsApp } = await import(
-                    "@/lib/whatsapp/step4-flow"
+                // E-391 — an NBFC routing rule sends the file straight to its
+                // NBFC; otherwise the usual WhatsApp "Choose lender" prompt.
+                const { step4OpenedFor } = await import(
+                    "@/lib/leads/nbfc-routing"
                 );
-                await pushStep4ToWhatsApp(leadId);
+                await step4OpenedFor(leadId, "kyc_approved");
             } catch (err) {
                 console.error(
                     `[final-decision] post-approval WhatsApp step for ${leadId} failed:`,
