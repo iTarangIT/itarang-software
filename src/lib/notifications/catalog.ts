@@ -149,6 +149,12 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "lead.reinquiry": "Leads",
   // 14 Oct — a customer file pushed between the iTarang house dealer and a dealer.
   "lead.pushed_to_dealer": "Leads",
+  // E-390 — iTarang Admin dealer-assignment check (Battery Pool diagram 1).
+  "lead.dealer_check_pending": "Leads",
+  "lead.dealer_check_approved": "Leads",
+  "lead.dealer_check_rejected": "Leads",
+  // E-391 — the file went to an NBFC automatically by a routing rule.
+  "lead.auto_routed": "Leads",
   "lead.dealer_progress": "Leads",
   // ID 33 / 183 (16 Oct) — the dealer a file was moved away from; iTarang
   // worked the dealer's file for him ("Done by <name> for <dealer>").
@@ -251,6 +257,10 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "nbfc.cibil_approved": "NBFC Requests",
   "nbfc.cibil_rejected": "NBFC Requests",
   "nbfc.cibil_reminder": "NBFC Requests",
+  // E-389 — approve with conditions / documents asked before the CIBIL decision.
+  "nbfc.cibil_approved_conditions": "NBFC Requests",
+  "nbfc.cibil_docs_requested": "NBFC Requests",
+  "nbfc.cibil_docs_returned": "NBFC Requests",
   // Emitted by /api/admin/nbfc-requests/verdicts/[verdictId]/forward. Same
   // story as onboarding_initiated above — real, emitted, and unmapped until
   // E-231.r
@@ -491,6 +501,7 @@ const WARNING = new Set([
   "lead.callback_overdue",
   // 14 Oct — a file iTarang pushed is waiting on the dealer to continue it.
   "lead.pushed_to_dealer",
+  "lead.dealer_check_pending",
   // Store R-15 — the customer is waiting for a call and the file for a dealer.
   "lead.online_store_finance",
   // ID 171 — someone has to drop the invoices into Drive / import the register.
@@ -513,6 +524,8 @@ const WARNING = new Set([
   "fi.requested",
   "nbfc.cibil_submitted",
   "nbfc.cibil_reminder",
+  "nbfc.cibil_docs_requested",
+  "nbfc.cibil_docs_returned",
   "fi.assigned",
   "fi.reinspection",
   "vkyc.initiated",

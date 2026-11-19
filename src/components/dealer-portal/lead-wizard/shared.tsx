@@ -157,7 +157,7 @@ function getDealerStatus(uploaded: boolean, status?: string): { label: string; c
     return { label: 'Uploaded - Pending Review', color: 'text-blue-600', dotColor: 'bg-amber-500', icon: 'clock' };
 }
 
-export function DocumentCard({ label, required, uploaded, status, failedReason, onUpload, disabled, fileUrl, hint, hintTip }: {
+export function DocumentCard({ label, required, uploaded, status, failedReason, onUpload, disabled, fileUrl, hint, hintTip, skipped, onSkip, onUndoSkip }: {
     label: string;
     required?: boolean;
     uploaded: boolean;
@@ -171,6 +171,12 @@ export function DocumentCard({ label, required, uploaded, status, failedReason, 
     hint?: string | null;
     // The rest of the hint, behind an "i" (writing standard rule 4).
     hintTip?: string | null;
+    // E-392 — this document was skipped with a reason (shown instead of "Required").
+    skipped?: { reason: string } | null;
+    // E-392 — offer "Skip" (with a reason) while nothing is uploaded. Absent for
+    // Aadhaar / PAN, which can never be skipped.
+    onSkip?: (reason: string) => Promise<void> | void;
+    onUndoSkip?: () => Promise<void> | void;
 }) {
     const dealerStatus = getDealerStatus(uploaded, status);
     const isPdf = !!fileUrl && /\.pdf($|\?)/i.test(fileUrl);
@@ -284,6 +290,77 @@ export function DocumentCard({ label, required, uploaded, status, failedReason, 
                     )}
                 </div>
             </label>
+            {!uploaded && (skipped || onSkip) && (
+                <SkipFooter skipped={skipped ?? null} onSkip={onSkip} onUndoSkip={onUndoSkip} disabled={disabled} />
+            )}
+        </div>
+    );
+}
+
+/** E-392 — "Skip" with a reason under a document card, or the recorded skip. */
+function SkipFooter({ skipped, onSkip, onUndoSkip, disabled }: {
+    skipped: { reason: string } | null;
+    onSkip?: (reason: string) => Promise<void> | void;
+    onUndoSkip?: () => Promise<void> | void;
+    disabled?: boolean;
+}) {
+    const [open, setOpen] = useState(false);
+    const [reason, setReason] = useState('');
+    const [busy, setBusy] = useState(false);
+    if (skipped) {
+        return (
+            <div className="px-3 pb-3 -mt-1">
+                <p className="text-[10px] leading-snug text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5">
+                    <b>Skipped</b> — {skipped.reason}
+                    {onUndoSkip && !disabled && (
+                        <button type="button" className="ml-1 font-bold text-[#0047AB] hover:underline" onClick={() => void onUndoSkip()}>
+                            Undo
+                        </button>
+                    )}
+                </p>
+            </div>
+        );
+    }
+    if (!onSkip || disabled) return null;
+    if (!open) {
+        return (
+            <div className="px-3 pb-3 -mt-1">
+                <button type="button" onClick={() => setOpen(true)} className="text-[10px] font-bold text-gray-500 hover:text-[#0047AB] hover:underline">
+                    Don&apos;t have it? Skip
+                </button>
+            </div>
+        );
+    }
+    return (
+        <div className="px-3 pb-3 -mt-1 space-y-1.5">
+            <textarea
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                rows={2}
+                maxLength={500}
+                placeholder="Why can't it be given? (required)"
+                className="w-full rounded-lg border border-gray-300 px-2 py-1 text-[11px]"
+            />
+            <div className="flex gap-2">
+                <button
+                    type="button"
+                    disabled={busy || reason.trim().length < 3}
+                    onClick={async () => {
+                        setBusy(true);
+                        try {
+                            await onSkip(reason.trim());
+                            setOpen(false);
+                            setReason('');
+                        } finally {
+                            setBusy(false);
+                        }
+                    }}
+                    className="rounded-md bg-amber-600 px-2 py-1 text-[10px] font-bold text-white disabled:opacity-50"
+                >
+                    {busy ? 'Saving…' : 'Skip'}
+                </button>
+                <button type="button" onClick={() => setOpen(false)} className="text-[10px] text-gray-500">Cancel</button>
+            </div>
         </div>
     );
 }

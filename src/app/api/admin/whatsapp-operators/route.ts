@@ -22,6 +22,7 @@ import {
 } from "@/lib/api-utils";
 import { resolveWhatsAppDealer } from "@/lib/whatsapp/dealer-identity";
 import { toWaPhone } from "@/lib/whatsapp/operator-identity";
+import { staffOptions } from "@/lib/users/staff-options";
 
 const READ_ROLES = ["admin", "sales_head", "ceo"];
 const WRITE_ROLES = ["admin", "sales_head"];
@@ -82,6 +83,8 @@ export const GET = withErrorHandler(async () => {
         },
       };
     }),
+    // E-390 — who each operator number can be linked to ("Sales person").
+    staff: await staffOptions(),
   });
 });
 

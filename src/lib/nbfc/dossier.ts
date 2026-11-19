@@ -56,6 +56,8 @@ export interface CustomerDossier {
    * chosen battery serial for display.
    */
   productModel: string | null;
+  /** E-392 — customer documents the dealer / customer skipped, with the reason. */
+  skippedDocs: Array<{ docType: string; label: string; reason: string; skippedByName: string | null; channel: string; skippedAt: string }>;
 }
 
 /** Fetches the full customer dossier for a lead, or null if the lead is gone. */
@@ -148,5 +150,6 @@ export async function getCustomerDossier(
     supportingDocs,
     productSelection: selection,
     productModel,
+    skippedDocs: await (await import("@/lib/kyc/customer-doc-config")).listSkips(leadId),
   };
 }

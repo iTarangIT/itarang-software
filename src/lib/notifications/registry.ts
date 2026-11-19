@@ -177,6 +177,10 @@ export const TYPE_LABELS: Record<string, string> = {
   "dialer.campaign_paused": "AI dialer campaign paused: carrier refusing calls",
   "lead.reinquiry": "Known dealer came in again (re-inquiry)",
   "lead.pushed_to_dealer": "Customer file pushed to a dealer by iTarang",
+  "lead.dealer_check_pending": "Dealer assignment waiting for the admin check",
+  "lead.dealer_check_approved": "Dealer assignment approved / changed by the admin",
+  "lead.dealer_check_rejected": "Dealer assignment rejected by the admin",
+  "lead.auto_routed": "Application sent to an NBFC by a routing rule",
   "lead.dealer_progress": "Dealer moved a file iTarang pushed to them",
   "lead.pushed_away": "Customer file moved from you to another dealer by iTarang",
   "lead.acted_for_dealer": "iTarang worked on your customer file for you",
@@ -244,6 +248,9 @@ export const TYPE_LABELS: Record<string, string> = {
   "nbfc.cibil_approved": "CIBIL report approved",
   "nbfc.cibil_rejected": "CIBIL report rejected",
   "nbfc.cibil_reminder": "CIBIL report reminder",
+  "nbfc.cibil_approved_conditions": "CIBIL approved with conditions",
+  "nbfc.cibil_docs_requested": "Documents asked before CIBIL decision",
+  "nbfc.cibil_docs_returned": "Requested documents back for CIBIL decision",
   nbfc_verdict_forwarded: "NBFC verdict forwarded to the dealer",
   // The flat predecessor of `nbfc.request_forwarded`. Its catalog entry landed
   // without a matching label, so verify:notifications has been failing on it

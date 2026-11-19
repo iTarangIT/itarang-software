@@ -15,7 +15,15 @@
 import { and, desc, eq, inArray, isNotNull, type SQL } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { leads, nbfcAuditLog, nbfcCibilReviews, nbfcLeadAssignments, nbfcUsers, users } from "@/lib/db/schema";
+import {
+  leads,
+  nbfcAuditLog,
+  nbfcCibilReviews,
+  nbfcDocRequests,
+  nbfcLeadAssignments,
+  nbfcUsers,
+  users,
+} from "@/lib/db/schema";
 import { sendEmail } from "@/lib/email/mailer";
 import { esc } from "@/lib/nbfc/event-mailer";
 import { putNbfcObject } from "@/lib/nbfc/nbfc-storage";
@@ -23,10 +31,13 @@ import { isAssignmentDecided } from "@/lib/nbfc/offer-negotiation";
 import { RECALLED_ERROR, isLeadRecalled } from "@/lib/nbfc/recall";
 import { rejectNbfcFile } from "@/lib/nbfc/reject-file";
 import { getActiveAssignment } from "@/lib/nbfc/vkyc";
-import { emit, tenantDisplayName } from "@/lib/notifications/emit";
+import { NBFC_DOC_STATUS_LABEL } from "@/lib/nbfc/doc-requests";
+import { raiseNbfcDocRequest, type RaiseItem } from "@/lib/nbfc/raise-doc-request";
+import { emit, tenantDisplayName, toAdmins } from "@/lib/notifications/emit";
 import { nbfcParty } from "@/lib/notifications/provenance";
 import {
   decideCibilDecision,
+  decideCibilDocRequest,
   decideCibilSubmit,
   getHierarchyContext,
   getLatestCibilReview,
@@ -252,12 +263,19 @@ export async function submitCibilReview(opts: {
 export async function decideCibilReview(opts: {
   actor: Actor;
   leadId: string;
-  decision: "approve" | "reject";
+  /** E-389 — "approve_with_conditions" approves exactly like "approve" and keeps the conditions. */
+  decision: "approve" | "approve_with_conditions" | "reject";
   reason: string | null;
+  conditions?: string | null;
 }) {
   const { actor, leadId, decision } = opts;
   const reason = opts.reason?.trim() || null;
+  const conditions = decision === "approve_with_conditions" ? opts.conditions?.trim().slice(0, 2000) || null : null;
   if (decision === "reject" && !reason) throw new Error("BAD_REQUEST: a reason is required to reject");
+  if (decision === "approve_with_conditions" && !conditions) {
+    throw new Error("BAD_REQUEST: write the conditions for this approval");
+  }
+  const approve = decision !== "reject";
 
   const ctx = await getHierarchyContext(actor.tenant_id, actor.user_id, leadId);
   const review = ctx.reviewRow;
@@ -270,12 +288,12 @@ export async function decideCibilReview(opts: {
 
   const { customerName } = await loadOpenAssignment(actor.tenant_id, leadId);
   const now = new Date();
-  const status = decision === "approve" ? "approved" : "rejected";
+  const status = approve ? "approved" : "rejected";
 
   // Guarded on status='pending' so two approvers clicking at once can't both win.
   const updated = await db
     .update(nbfcCibilReviews)
-    .set({ status, decision_reason: reason, decided_by: actor.user_id, decided_at: now, updated_at: now })
+    .set({ status, decision_reason: reason, conditions, decided_by: actor.user_id, decided_at: now, updated_at: now })
     .where(and(eq(nbfcCibilReviews.id, review!.id), eq(nbfcCibilReviews.status, "pending")))
     .returning({ id: nbfcCibilReviews.id });
   if (!updated.length) throw new Error("CONFLICT: this CIBIL report was already decided — refresh the page");
@@ -283,10 +301,10 @@ export async function decideCibilReview(opts: {
   await db.insert(nbfcAuditLog).values({
     tenant_id: actor.tenant_id,
     user_id: actor.user_id,
-    action_type: decision === "approve" ? "cibil_review_approved" : "cibil_review_rejected",
+    action_type: approve ? "cibil_review_approved" : "cibil_review_rejected",
     action_id: review!.id,
     before_state: { lead_id: leadId, status: "pending" },
-    after_state: { lead_id: leadId, status, reason },
+    after_state: { lead_id: leadId, status, reason, conditions },
     created_at: now,
   });
 
@@ -301,33 +319,59 @@ export async function decideCibilReview(opts: {
   }
 
   const decider = (await userLabels([actor.user_id])).get(actor.user_id);
+  const by = decider?.name ?? "Your approver";
+  const who = customerName ?? leadId;
   void bellUser({
     tenantId: actor.tenant_id,
     userId: review!.submitted_by,
     actorName: decider?.name ?? null,
-    type: decision === "approve" ? "nbfc.cibil_approved" : "nbfc.cibil_rejected",
-    title: decision === "approve" ? "CIBIL report approved" : "CIBIL report rejected - file closed",
-    message:
-      decision === "approve"
-        ? `${decider?.name ?? "Your approver"} approved the CIBIL report for ${customerName ?? leadId}.`
-        : `${decider?.name ?? "Your approver"} rejected the CIBIL report for ${customerName ?? leadId}: ${reason}`,
+    type: conditions ? "nbfc.cibil_approved_conditions" : approve ? "nbfc.cibil_approved" : "nbfc.cibil_rejected",
+    title: conditions
+      ? "CIBIL report approved with conditions"
+      : approve
+        ? "CIBIL report approved"
+        : "CIBIL report rejected - file closed",
+    message: conditions
+      ? `${by} approved the CIBIL report for ${who} with conditions: ${conditions}`
+      : approve
+        ? `${by} approved the CIBIL report for ${who}.`
+        : `${by} rejected the CIBIL report for ${who}: ${reason}`,
     leadId,
-    data: { cibil_review_id: review!.id, reason },
+    data: { cibil_review_id: review!.id, reason, conditions },
   });
   void mailUser({
     userId: review!.submitted_by,
     leadId,
-    subject: `CIBIL report ${status} — Lead ${leadId}`,
-    heading:
-      decision === "approve"
-        ? `${decider?.name ?? "Your approver"} approved the CIBIL report. The lead now continues with them.`
-        : `${decider?.name ?? "Your approver"} rejected the CIBIL report. The file is closed.`,
+    subject: `CIBIL report ${conditions ? "approved with conditions" : status} — Lead ${leadId}`,
+    heading: approve
+      ? `${by} approved the CIBIL report${conditions ? " with conditions" : ""}. The lead now continues with them.`
+      : `${by} rejected the CIBIL report. The file is closed.`,
     rows: [
       ["Lead ID", leadId],
       ["Customer", customerName],
+      ["Conditions", conditions],
       ["Reason", reason],
     ],
   });
+  if (conditions) {
+    // The iTarang admin sees the conditions too (Battery Pool diagram 1).
+    void (async () => {
+      const nbfcName = await tenantDisplayName(actor.tenant_id);
+      await emit({
+        type: "nbfc.cibil_approved_conditions",
+        title: `${nbfcName} approved CIBIL with conditions`,
+        message: `${by} (${nbfcName}) approved the CIBIL report for ${who} with conditions: ${conditions}`,
+        leadId,
+        stage: "Acquire · CIBIL review",
+        from: nbfcParty(nbfcName, decider?.name ?? null),
+        data: { cibil_review_id: review!.id, conditions },
+        email: false,
+        to: [toAdmins({ href: `/admin/kyc-review/${encodeURIComponent(leadId)}` })],
+      });
+    })().catch((err) =>
+      console.warn("[cibil-review] admin conditions notice failed", err instanceof Error ? err.message : String(err)),
+    );
+  }
 
   return { id: review!.id, status };
 }
@@ -344,6 +388,8 @@ export async function getCibilReviewView(tenantId: string, leadId: string) {
     cibil_score: review.cibil_score,
     report_file_name: review.report_file_name,
     decision_reason: review.decision_reason,
+    conditions: review.conditions,
+    doc_requests: await listCibilDocRequests(review.id),
     created_at: review.created_at.toISOString(),
     decided_at: review.decided_at?.toISOString() ?? null,
     submitted_by: { id: review.submitted_by, name: names.get(review.submitted_by)?.name ?? "—" },
@@ -486,4 +532,149 @@ export async function remindCibilVerifier(opts: { actor: Actor; leadId: string; 
     });
   }
   return { sent_to: verifiers.map((v) => v.name) };
+}
+
+/* ------------------------------------------------------------------ *
+ * E-389 — "Request additional documents" from the CIBIL review.
+ * ------------------------------------------------------------------ */
+
+/** The document requests raised from one CIBIL review, newest first. */
+async function listCibilDocRequests(reviewId: string) {
+  const rows = await db
+    .select({
+      id: nbfcDocRequests.id,
+      status: nbfcDocRequests.status,
+      requested_items: nbfcDocRequests.requested_items,
+      nbfc_comments: nbfcDocRequests.nbfc_comments,
+      created_at: nbfcDocRequests.created_at,
+    })
+    .from(nbfcDocRequests)
+    .where(eq(nbfcDocRequests.cibil_review_id, reviewId))
+    .orderBy(desc(nbfcDocRequests.created_at));
+  return rows.map((r) => ({
+    id: r.id,
+    status: r.status,
+    status_label: NBFC_DOC_STATUS_LABEL[r.status] ?? r.status,
+    items: (Array.isArray(r.requested_items) ? (r.requested_items as Array<{ doc_label?: string }>) : [])
+      .map((it) => it?.doc_label)
+      .filter((l): l is string => !!l),
+    comments: r.nbfc_comments,
+    created_at: r.created_at.toISOString(),
+  }));
+}
+
+/**
+ * The approver asks for more documents before deciding the CIBIL report. The
+ * review stays pending (the verifier stays locked); the request is an ordinary
+ * NBFC 'additional_docs' request routed through the iTarang admin, linked back
+ * via nbfc_doc_requests.cibil_review_id.
+ */
+export async function requestCibilDocs(opts: {
+  actor: Actor & { tenant_slug: string };
+  leadId: string;
+  items: RaiseItem[];
+  comments: string | null;
+  docFor?: "primary" | "co_borrower";
+  req?: Request;
+}) {
+  const { actor, leadId } = opts;
+  if (actor.role === "viewer") throw new Error("FORBIDDEN: a viewer cannot request documents");
+  const items = opts.items
+    .map((it) => ({ ...it, doc_label: it.doc_label.trim() }))
+    .filter((it) => it.doc_label);
+  if (!items.length) throw new Error("BAD_REQUEST: pick at least one document");
+
+  const ctx = await getHierarchyContext(actor.tenant_id, actor.user_id, leadId);
+  const can = decideCibilDocRequest(ctx.review, {
+    userId: actor.user_id,
+    role: actor.role,
+    isChild: !!ctx.parentUserId,
+  });
+  if (!can.ok) throw new Error(`FORBIDDEN: ${can.reason}`);
+  const review = ctx.reviewRow!;
+  const { assignment, customerName } = await loadOpenAssignment(actor.tenant_id, leadId);
+
+  const comments =
+    opts.comments?.trim() ||
+    `Raised from the CIBIL review: ${items.map((it) => (it.reason ? `${it.doc_label} (${it.reason})` : it.doc_label)).join("; ")}`;
+
+  const { id } = await raiseNbfcDocRequest({
+    leadId,
+    assignment,
+    tenantId: actor.tenant_id,
+    nbfcName: actor.tenant_slug,
+    raisedBy: actor.user_id,
+    requestType: "additional_docs",
+    docFor: opts.docFor ?? "primary",
+    comments,
+    items,
+    cibilReviewId: review.id,
+    req: opts.req,
+  });
+
+  await db.insert(nbfcAuditLog).values({
+    tenant_id: actor.tenant_id,
+    user_id: actor.user_id,
+    action_type: "cibil_review_docs_requested",
+    action_id: review.id,
+    before_state: null,
+    after_state: { lead_id: leadId, request_id: id, items: items.map((it) => it.doc_label), comments },
+    created_at: new Date(),
+  });
+
+  const sender = (await userLabels([actor.user_id])).get(actor.user_id);
+  if (review.submitted_by !== actor.user_id) {
+    void bellUser({
+      tenantId: actor.tenant_id,
+      userId: review.submitted_by,
+      actorName: sender?.name ?? null,
+      type: "nbfc.cibil_docs_requested",
+      title: "More documents asked on your CIBIL file",
+      message: `${sender?.name ?? "Your approver"} asked for more documents on ${customerName ?? leadId} before deciding the CIBIL report: ${items
+        .map((it) => it.doc_label)
+        .join(", ")}. The request goes through the iTarang admin.`,
+      leadId,
+      data: { cibil_review_id: review.id, request_id: id },
+    });
+  }
+  return { id, items: items.map((it) => it.doc_label) };
+}
+
+/**
+ * Called (lazily) by doc-requests.ts when a request raised from a CIBIL review
+ * is pushed back to the NBFC. Tells the approver of a still-pending review that
+ * the documents are in. Never throws.
+ */
+export async function notifyCibilDocsReturned(opts: {
+  tenantId: string;
+  leadId: string;
+  reviewId: string;
+  requestId: string;
+}) {
+  try {
+    const [r] = await db
+      .select({ status: nbfcCibilReviews.status, approver: nbfcCibilReviews.approver_user_id })
+      .from(nbfcCibilReviews)
+      .where(eq(nbfcCibilReviews.id, opts.reviewId))
+      .limit(1);
+    if (!r || r.status !== "pending") return;
+    const [lead] = await db
+      .select({ full_name: leads.full_name, owner_name: leads.owner_name })
+      .from(leads)
+      .where(eq(leads.id, opts.leadId))
+      .limit(1);
+    const who = lead?.full_name ?? lead?.owner_name ?? opts.leadId;
+    await bellUser({
+      tenantId: opts.tenantId,
+      userId: r.approver,
+      actorName: "iTarang admin",
+      type: "nbfc.cibil_docs_returned",
+      title: `Requested documents are back - ${who}`,
+      message: `The documents you asked for on ${who} are verified and back with you. Review them and decide the CIBIL report.`,
+      leadId: opts.leadId,
+      data: { cibil_review_id: opts.reviewId, request_id: opts.requestId },
+    });
+  } catch (err) {
+    console.warn("[cibil-review] docs-returned notice failed", err instanceof Error ? err.message : String(err));
+  }
 }

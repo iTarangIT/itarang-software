@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, Suspense } from 'react';
+import { useState, useEffect, useRef, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Plus, X, AlertCircle, Scan, Info, ChevronDown, Loader2, ShieldCheck, UserPlus, ArrowRight } from 'lucide-react';
 import { useIndiaLocationData } from '@/lib/location/useIndiaLocationData';
@@ -185,6 +185,30 @@ function NewLeadWizardContent() {
     }, [dealerQuery, dealerMatch, dealerFinanceOnly, pushEligible]);
 
     const clearDealerPick = () => { setDealerMatch(null); setDealerQuery(''); setDealerResults([]); setDealerLookupMsg(null); };
+
+    // E-390 — Battery Pool diagram 1: the dealers the iTarang sales person
+    // linked to this login owns (Account ownership). One → pre-picked; several
+    // → quick-pick buttons. Every pick goes to the iTarang admin's dealer check.
+    const [myDealers, setMyDealers] = useState<{ dealerId: string; name: string }[]>([]);
+    const myDealersAutoPicked = useRef(false);
+    useEffect(() => {
+        if (!pushEligible) return;
+        let alive = true;
+        const finance = dealerFinanceOnly ? '?finance=1' : '';
+        fetch(`/api/leads/my-dealers${finance}`, { cache: 'no-store' })
+            .then((r) => r.json())
+            .then((j) => {
+                if (!alive || !j?.success) return;
+                const list: { dealerId: string; name: string }[] = j.data?.dealers ?? [];
+                setMyDealers(list);
+                if (list.length === 1 && !myDealersAutoPicked.current) {
+                    myDealersAutoPicked.current = true;
+                    setDealerMatch((cur) => cur ?? list[0]);
+                }
+            })
+            .catch(() => { /* no list */ });
+        return () => { alive = false; };
+    }, [pushEligible, dealerFinanceOnly]);
 
     // ─── Draft Init ─────────────────────────────────────────────────────────
 
@@ -1002,6 +1026,21 @@ function NewLeadWizardContent() {
                                         </div>
                                     </>
                                 ) : (
+                                    <>
+                                    {myDealers.length > 0 && (
+                                        <div className="space-y-1.5">
+                                            <p className="text-xs font-semibold text-gray-600">Your dealers</p>
+                                            <div className="flex flex-wrap gap-2">
+                                                {myDealers.map((d) => (
+                                                    <button key={d.dealerId} type="button"
+                                                        onClick={() => { setDealerMatch(d); setDealerResults([]); setDealerQuery(''); }}
+                                                        className="px-3 py-1.5 rounded-full border border-blue-200 bg-blue-50 text-xs font-semibold text-blue-800 hover:bg-blue-100">
+                                                        {d.name}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
                                     <InputField
                                         label="Dealer (optional)"
                                         value={dealerQuery}
@@ -1009,10 +1048,11 @@ function NewLeadWizardContent() {
                                         placeholder="Dealer company name or 10-digit mobile — leave blank for iTarang House"
                                         maxLength={80}
                                     />
+                                    </>
                                 )}
                                 {dealerMatch ? (
                                     <p className="px-1 text-xs font-semibold text-emerald-700">
-                                        This lead will be created under {dealerMatch.name}. It will show in their portal; you can still finish the KYC.
+                                        This lead will be created under {dealerMatch.name}. It will show in their portal; you can still finish the KYC. The iTarang admin confirms the dealer before the file goes to a lender.
                                     </p>
                                 ) : dealerLookupLoading ? (
                                     <p className="px-1 text-xs text-gray-500 flex items-center gap-1.5"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Searching dealers…</p>

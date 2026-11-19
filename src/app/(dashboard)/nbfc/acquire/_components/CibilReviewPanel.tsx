@@ -4,12 +4,16 @@
  * E-387 — CIBIL review on an Acquire lead (parent / child approval hierarchy).
  *
  * Child   : upload the CIBIL PDF + note (+ optional score) → "Send to <parent>".
- * Parent  : open the report, Approve, or Reject with a mandatory reason
- *           (a rejection closes the file for this NBFC).
+ * Parent  : open the report, then Approve, Approve with conditions (E-389),
+ *           Request documents (E-389 — goes to the iTarang admin, the review
+ *           stays pending), or Reject with a mandatory reason (a rejection
+ *           closes the file for this NBFC).
  * Everyone: sees the status, who sent it, who decided and why.
  */
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
+
+import RequestMoreDocsModal, { type DocItem } from "@/components/kyc/step3/RequestMoreDocsModal";
 
 type Review = {
   id: string;
@@ -18,6 +22,17 @@ type Review = {
   cibil_score: number | null;
   report_file_name: string | null;
   decision_reason: string | null;
+  /** E-389 — set when approved with conditions. */
+  conditions: string | null;
+  /** E-389 — document requests the approver raised from this review. */
+  doc_requests: Array<{
+    id: string;
+    status: string;
+    status_label: string;
+    items: string[];
+    comments: string | null;
+    created_at: string;
+  }>;
   created_at: string;
   decided_at: string | null;
   submitted_by: { id: string; name: string };
@@ -71,6 +86,10 @@ export default function CibilReviewPanel({ leadId, closed }: { leadId: string; c
   const [score, setScore] = useState("");
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState("");
+  const [withConditions, setWithConditions] = useState(false);
+  const [conditions, setConditions] = useState("");
+  const [docsOpen, setDocsOpen] = useState(false);
+  const [docsSent, setDocsSent] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const [fileName, setFileName] = useState<string | null>(null);
   const [reminding, setReminding] = useState(false);
@@ -145,20 +164,61 @@ export default function CibilReviewPanel({ leadId, closed }: { leadId: string; c
     }
   }
 
-  async function decide(decision: "approve" | "reject") {
+  async function requestDocs({
+    items,
+    doc_for,
+  }: {
+    items: DocItem[];
+    doc_for: "primary" | "co_borrower";
+  }): Promise<{ success: boolean; error?: string }> {
+    try {
+      const res = await fetch(`${base}/request-docs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          doc_for,
+          items: items.map((it) => ({ doc_label: it.doc_label, reason: it.reason, is_required: it.is_required })),
+        }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return {
+          success: false,
+          error: String(j.error ?? `HTTP ${res.status}`).replace(/^(CONFLICT|BAD_REQUEST|FORBIDDEN): /, ""),
+        };
+      }
+      setDocsSent("Request sent to the iTarang admin. You will be notified when the documents are back.");
+      await load();
+      router.refresh();
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  async function decide(decision: "approve" | "approve_with_conditions" | "reject") {
     if (decision === "reject" && !reason.trim()) return setError("A reason is required to reject.");
+    if (decision === "approve_with_conditions" && !conditions.trim()) {
+      return setError("Write the conditions for this approval.");
+    }
     setBusy(true);
     setError(null);
     try {
       const res = await fetch(`${base}/decide`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ decision, reason: decision === "reject" ? reason.trim() : null }),
+        body: JSON.stringify({
+          decision,
+          reason: decision === "reject" ? reason.trim() : null,
+          conditions: decision === "approve_with_conditions" ? conditions.trim() : null,
+        }),
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(j.error ?? `HTTP ${res.status}`);
       setRejecting(false);
       setReason("");
+      setWithConditions(false);
+      setConditions("");
       await load();
       router.refresh();
     } catch (e) {
@@ -201,7 +261,9 @@ export default function CibilReviewPanel({ leadId, closed }: { leadId: string; c
             {review.status === "pending"
               ? `Waiting for ${review.approver.name}`
               : review.status === "approved"
-                ? "Approved"
+                ? review.conditions
+                  ? "Approved with conditions"
+                  : "Approved"
                 : "Rejected"}
           </span>
         ) : null}
@@ -242,6 +304,48 @@ export default function CibilReviewPanel({ leadId, closed }: { leadId: string; c
                 </>
               ) : null}
             </p>
+          ) : null}
+          {review.conditions ? (
+            <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
+              <span className="block text-[10px] font-bold uppercase tracking-wider text-emerald-700">
+                Approved with conditions
+              </span>
+              <span className="whitespace-pre-wrap">{review.conditions}</span>
+            </div>
+          ) : null}
+          {review.doc_requests.length ? (
+            <div className="pt-1 space-y-1.5">
+              <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                Documents requested before deciding
+              </span>
+              {review.doc_requests.map((d) => (
+                <div
+                  key={d.id}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs"
+                >
+                  <span className="text-slate-700">
+                    {d.items.length ? d.items.join(", ") : d.comments ?? "Documents"}
+                    <span className="text-slate-400"> · {fmt(d.created_at)}</span>
+                  </span>
+                  <span className="flex items-center gap-2">
+                    <span
+                      className={`rounded-full border px-2 py-0.5 font-semibold ${
+                        d.status === "pushed_to_nbfc" || d.status === "closed"
+                          ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                          : d.status === "rejected"
+                            ? "border-red-200 bg-red-50 text-red-700"
+                            : "border-amber-200 bg-amber-50 text-amber-800"
+                      }`}
+                    >
+                      {d.status_label}
+                    </span>
+                    <a href="#nbfc-requests" className="font-semibold text-[color:var(--color-brand-sky)] hover:underline">
+                      View
+                    </a>
+                  </span>
+                </div>
+              ))}
+            </div>
           ) : null}
         </div>
       ) : null}
@@ -391,7 +495,7 @@ export default function CibilReviewPanel({ leadId, closed }: { leadId: string; c
       {/* Parent / approver view */}
       {me.can_decide && review?.status === "pending" && !closed ? (
         <div className="flex flex-wrap items-start gap-2">
-          {!rejecting ? (
+          {!rejecting && !withConditions ? (
             <>
               <button
                 onClick={() => decide("approve")}
@@ -399,6 +503,27 @@ export default function CibilReviewPanel({ leadId, closed }: { leadId: string; c
                 className="px-4 py-1.5 text-sm font-bold rounded bg-emerald-600 text-white disabled:opacity-50"
               >
                 {busy ? "Saving…" : "Approve"}
+              </button>
+              <button
+                onClick={() => {
+                  setWithConditions(true);
+                  setError(null);
+                }}
+                disabled={busy}
+                className="px-4 py-1.5 text-sm font-bold rounded border border-emerald-400 text-emerald-800 bg-white disabled:opacity-50"
+              >
+                Approve with conditions
+              </button>
+              <button
+                onClick={() => {
+                  setDocsOpen(true);
+                  setDocsSent(null);
+                  setError(null);
+                }}
+                disabled={busy}
+                className="px-4 py-1.5 text-sm font-bold rounded border border-amber-400 text-amber-900 bg-white disabled:opacity-50"
+              >
+                Request documents
               </button>
               <button
                 onClick={() => {
@@ -411,6 +536,30 @@ export default function CibilReviewPanel({ leadId, closed }: { leadId: string; c
                 Reject
               </button>
             </>
+          ) : withConditions ? (
+            <div className="w-full space-y-2">
+              <textarea
+                value={conditions}
+                onChange={(e) => setConditions(e.target.value)}
+                disabled={busy}
+                rows={3}
+                maxLength={2000}
+                className="w-full border border-emerald-300 rounded px-2 py-1.5 text-sm"
+                placeholder="Conditions (required) — e.g. co-borrower's bank statement before sanction, max tenure 12 months…"
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={() => decide("approve_with_conditions")}
+                  disabled={busy}
+                  className="px-4 py-1.5 text-sm font-bold rounded bg-emerald-600 text-white disabled:opacity-50"
+                >
+                  {busy ? "Saving…" : "Approve with these conditions"}
+                </button>
+                <button onClick={() => setWithConditions(false)} disabled={busy} className="text-xs text-slate-500 hover:underline">
+                  Cancel
+                </button>
+              </div>
+            </div>
           ) : (
             <div className="w-full space-y-2">
               <textarea
@@ -438,9 +587,26 @@ export default function CibilReviewPanel({ leadId, closed }: { leadId: string; c
           )}
         </div>
       ) : null}
+      {docsSent ? <p className="text-xs text-emerald-700">{docsSent}</p> : null}
+
+      <RequestMoreDocsModal
+        open={docsOpen}
+        onClose={() => setDocsOpen(false)}
+        leadId={leadId}
+        defaultDocFor="primary"
+        submitItems={requestDocs}
+        title="Request documents before the CIBIL decision"
+        noteText="This request goes to the iTarang admin, who forwards it to the dealer / salesperson / customer on WhatsApp. The CIBIL report stays waiting for your decision; you will be notified when the documents are back."
+        submitLabel="Send to admin"
+      />
 
       {me.is_child && review?.status === "pending" ? (
-        <p className="text-xs text-amber-800">Your actions on this lead are locked until {parent} decides.</p>
+        <p className="text-xs text-amber-800">
+          {review.doc_requests.some((d) => d.status !== "closed" && d.status !== "rejected")
+            ? `${parent} asked for more documents before deciding — still waiting for approval. `
+            : ""}
+          Your actions on this lead are locked until {parent} decides.
+        </p>
       ) : null}
       {me.is_child && review?.status === "approved" ? (
         <p className="text-xs text-slate-600">

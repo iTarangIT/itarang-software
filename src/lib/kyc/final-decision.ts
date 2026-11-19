@@ -159,10 +159,14 @@ export async function applyKycFinalDecision(input: {
     if (decision === "approved") {
         const blockers: string[] = [];
 
+        // E-392 — a skipped RC copy (with a reason) waives the RC card.
+        const { listSkips } = await import("./customer-doc-config");
+        const rcSkipped = (await listSkips(leadId)).some((s) => s.docType === "rc_copy");
         for (const v of step3Verifications) {
             const applicant = v.applicant ?? "primary";
             if (applicant !== "primary") continue;
             if (!isAdminCardType(v.verification_type)) continue;
+            if (rcSkipped && v.verification_type === "rc") continue;
             if (v.admin_action !== "accepted") {
                 blockers.push(
                     `${v.verification_type} verification is "${v.admin_action ?? "pending"}" — accept it on the card`,
@@ -509,10 +513,12 @@ export async function applyKycFinalDecision(input: {
                     return;
                 }
 
-                const { pushStep4ToWhatsApp } = await import(
-                    "@/lib/whatsapp/step4-flow"
+                // E-391 — an NBFC routing rule sends the file straight to its
+                // NBFC; otherwise the usual WhatsApp "Choose lender" prompt.
+                const { step4OpenedFor } = await import(
+                    "@/lib/leads/nbfc-routing"
                 );
-                await pushStep4ToWhatsApp(leadId);
+                await step4OpenedFor(leadId, "kyc_approved");
             } catch (err) {
                 console.error(
                     `[final-decision] post-approval WhatsApp step for ${leadId} failed:`,

@@ -61,6 +61,8 @@ interface Wrapper {
   target_doc_key: string | null;
   nbfc_comments: string | null;
   admin_notes: string | null;
+  /** E-389 — set when the NBFC approver raised this from the CIBIL review. */
+  cibil_review_id?: string | null;
   // E-210 — documents the admin uploaded and sent to the NBFC with this
   // message, and the verdict the message answers (if any).
   attachments: VerdictAttachment[] | null;
@@ -879,6 +881,11 @@ export default function NbfcKycVerificationCard({ leadId }: { leadId: string }) 
                     {request.dealer_direct ? (
                       <span className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-700">
                         NBFC → Dealer
+                      </span>
+                    ) : null}
+                    {request.cibil_review_id ? (
+                      <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800 normal-case">
+                        Raised from CIBIL review — NBFC waits on these to decide
                       </span>
                     ) : null}
                   </p>

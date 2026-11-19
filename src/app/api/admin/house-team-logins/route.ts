@@ -20,10 +20,11 @@
 // when the person needs both).
 
 import { z } from "zod";
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { users } from "@/lib/db/schema";
+import { houseLoginStaffLinks, users } from "@/lib/db/schema";
+import { staffOptions } from "@/lib/users/staff-options";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { requireRole } from "@/lib/auth-utils";
 import { generateTemporaryPassword } from "@/lib/auth/generateTemporaryPassword";
@@ -45,7 +46,30 @@ const createSchema = z.object({
     .refine((v) => v === null || /^[6-9]\d{9}$/.test(v), "Enter a 10-digit mobile, or leave it empty"),
 });
 
-const patchSchema = z.object({ userId: z.string().uuid(), active: z.boolean() });
+// `active` switches a login on/off; `staffUserId` (E-390) links the login to
+// the iTarang sales person who uses it (null = unlink). Either or both.
+const patchSchema = z
+  .object({
+    userId: z.string().uuid(),
+    active: z.boolean().optional(),
+    staffUserId: z.string().uuid().nullable().optional(),
+  })
+  .refine((b) => b.active !== undefined || b.staffUserId !== undefined, { message: "Nothing to change" });
+
+async function staffLinks(loginIds: string[]): Promise<Map<string, string>> {
+  if (!loginIds.length) return new Map();
+  try {
+    const rows = await db
+      .select({ login: houseLoginStaffLinks.login_user_id, staff: houseLoginStaffLinks.staff_user_id })
+      .from(houseLoginStaffLinks)
+      .where(inArray(houseLoginStaffLinks.login_user_id, loginIds));
+    return new Map(rows.map((r) => [r.login, r.staff]));
+  } catch {
+    // Database without E-390: no links yet.
+    return new Map();
+  }
+}
+
 
 /** Who manages the house team logins: Admin and Sales Head (ID 182, 16 Oct). */
 const HOUSE_TEAM_LOGIN_ROLES = ["admin", "sales_head"];
@@ -72,9 +96,17 @@ export const GET = withErrorHandler(async () => {
     .from(users)
     .where(and(eq(users.dealer_id, h.code), eq(users.role, "dealer")))
     .orderBy(asc(users.created_at));
+  const [links, staff] = await Promise.all([staffLinks(rows.map((r) => r.id)), staffOptions()]);
+  const staffName = new Map(staff.map((s) => [s.id, s.name]));
   return successResponse({
     houseDealerCode: h.code,
-    logins: rows.map((r) => ({ ...r, shared: r.id === h.sharedUserId })),
+    logins: rows.map((r) => ({
+      ...r,
+      shared: r.id === h.sharedUserId,
+      staffUserId: links.get(r.id) ?? null,
+      staffName: links.has(r.id) ? staffName.get(links.get(r.id)!) ?? null : null,
+    })),
+    staff,
   });
 });
 
@@ -137,19 +169,40 @@ export const POST = withErrorHandler(async (req: Request) => {
 });
 
 export const PATCH = withErrorHandler(async (req: Request) => {
-  await requireRole(HOUSE_TEAM_LOGIN_ROLES);
+  const admin = await requireRole(HOUSE_TEAM_LOGIN_ROLES);
   const parsed = patchSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return errorResponse("Pick a login.", 400);
   const h = await house();
   if (!h) return errorResponse("The iTarang house dealer is not set up on this environment.", 500);
-  if (parsed.data.userId === h.sharedUserId) {
-    return errorResponse("The shared house login can't be switched off here — WhatsApp customer files are created under it.", 409);
-  }
-  const rows = await db
-    .update(users)
-    .set({ is_active: parsed.data.active, updated_at: new Date() })
+  const [login] = await db
+    .select({ id: users.id })
+    .from(users)
     .where(and(eq(users.id, parsed.data.userId), eq(users.dealer_id, h.code), eq(users.role, "dealer")))
-    .returning({ id: users.id });
-  if (!rows.length) return errorResponse("That is not a house team login.", 404);
-  return successResponse({ userId: parsed.data.userId, active: parsed.data.active });
+    .limit(1);
+  if (!login) return errorResponse("That is not a house team login.", 404);
+
+  // E-390 — link / unlink the iTarang sales person who uses this login.
+  if (parsed.data.staffUserId !== undefined) {
+    if (parsed.data.staffUserId === null) {
+      await db.delete(houseLoginStaffLinks).where(eq(houseLoginStaffLinks.login_user_id, login.id));
+    } else {
+      const ok = (await staffOptions()).some((s) => s.id === parsed.data.staffUserId);
+      if (!ok) return errorResponse("Pick an active iTarang team member.", 400);
+      await db
+        .insert(houseLoginStaffLinks)
+        .values({ login_user_id: login.id, staff_user_id: parsed.data.staffUserId, updated_by: admin.id, updated_at: new Date() })
+        .onConflictDoUpdate({
+          target: houseLoginStaffLinks.login_user_id,
+          set: { staff_user_id: parsed.data.staffUserId, updated_by: admin.id, updated_at: new Date() },
+        });
+    }
+  }
+
+  if (parsed.data.active !== undefined) {
+    if (parsed.data.userId === h.sharedUserId) {
+      return errorResponse("The shared house login can't be switched off here — WhatsApp customer files are created under it.", 409);
+    }
+    await db.update(users).set({ is_active: parsed.data.active, updated_at: new Date() }).where(eq(users.id, login.id));
+  }
+  return successResponse({ userId: parsed.data.userId, active: parsed.data.active, staffUserId: parsed.data.staffUserId });
 });

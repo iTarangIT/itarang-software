@@ -925,6 +925,26 @@ export const POST = withErrorHandler(async (req: Request) => {
                 if (pushDetached) await logPushCouponRelease(pushDetached, data.leadId!, user.id, pushTarget.name);
                 const { notifyDealerOfPushedLead } = await import('@/lib/whatsapp/pushedLeadNotice');
                 await notifyDealerOfPushedLead(data.leadId!, { reason: ITARANG_TEAM_PUSH_REASON, fromDealerId: pushFrom?.dealerId ?? null });
+                // E-390 — Battery Pool diagram 1: the dealer an iTarang salesperson
+                // named goes to the iTarang admin's dealer check before the file
+                // can reach a lender. "Your dealers" = the accounts the sales person
+                // linked to this house login owns. Best-effort, never throws.
+                {
+                    const da = await import('@/lib/leads/dealer-assignment');
+                    const staff = await da.staffUserForInitiator({ loginUserId: user.id });
+                    const owned = await da.eligibleDealersForStaff(staff).catch(() => []);
+                    await da.openDealerReview({
+                        leadId: data.leadId!,
+                        dealerId: pushTarget.dealerId,
+                        reasonKind: da.kindForSalespersonPick({
+                            eligibleCount: owned.length,
+                            pickedFromOwned: owned.some((d) => d.dealerId === pushTarget!.dealerId),
+                        }),
+                        candidates: owned.map((d) => ({ dealerId: d.dealerId, name: d.name })),
+                        channel: 'web',
+                        initiator: { userId: user.id, name: user.name ?? null },
+                    });
+                }
             } else if (step1Actor) {
                 // ID 183: the house saved Step 1 of a file it pushed out.
                 await recordActorStep(step1Actor, 'saved the customer details (Step 1)');

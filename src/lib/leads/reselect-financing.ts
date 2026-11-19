@@ -81,6 +81,12 @@ export async function reselectFinancing(opts: {
   if (String(lead.payment_method || "").toLowerCase() === "cash") {
     throw new ReselectError("This is a cash lead — there is no lender to route it to.");
   }
+  // E-390 — the iTarang admin's dealer check must be cleared first.
+  {
+    const { isNbfcRoutingBlocked } = await import("./dealer-assignment-rules");
+    const b = isNbfcRoutingBlocked(lead.assignment_status);
+    if (b.blocked) throw new ReselectError(b.message, 409);
+  }
 
   const assignments = await db
     .select({

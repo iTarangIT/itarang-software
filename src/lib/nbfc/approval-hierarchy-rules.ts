@@ -98,6 +98,9 @@ export function decideStep(ctx: HierarchyContext, step: GatedStep): StepDecision
 
   // Parent / any non-child login.
   if (step === "reject") return { ok: true };
+  // E-389 — the approver may ask for more documents BEFORE deciding the CIBIL
+  // report (Battery Pool diagram 3); every other step waits for approval.
+  if (step === "docs" && status === "pending") return { ok: true };
   if (ctx.gateApplies && status !== "approved") {
     return {
       ok: false,
@@ -135,4 +138,25 @@ export function decideCibilDecision(
   if (review.approverUserId === actor.userId) return { ok: true };
   if (actor.role === "nbfc_admin" && !actor.isChild) return { ok: true };
   return { ok: false, reason: "Only the approver or an NBFC admin can decide this CIBIL report." };
+}
+
+/**
+ * E-389 — whether `actor` may ask for additional documents on a PENDING CIBIL
+ * report (the review stays pending until the documents come back). Same people
+ * as decideCibilDecision: the approver or another non-child nbfc_admin, never
+ * the submitter.
+ */
+export function decideCibilDocRequest(
+  review: { status: CibilReviewStatus; submittedBy: string; approverUserId: string } | null,
+  actor: { userId: string; role: string; isChild: boolean },
+): StepDecision {
+  const d = decideCibilDecision(review, actor);
+  if (d.ok) return d;
+  if (!review || review.status !== "pending") {
+    return { ok: false, reason: "Documents can only be requested while the CIBIL report is waiting for approval." };
+  }
+  if (review.submittedBy === actor.userId) {
+    return { ok: false, reason: "The approver asks for documents — you sent this CIBIL report." };
+  }
+  return { ok: false, reason: "Only the approver or an NBFC admin can ask for documents on this CIBIL report." };
 }

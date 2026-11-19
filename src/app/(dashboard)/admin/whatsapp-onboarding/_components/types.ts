@@ -24,6 +24,9 @@ export type OperatorRow = {
     counts: OperatorCounts;
 };
 
+/** E-390 — an iTarang team member an operator number can be linked to. */
+export type StaffOption = { id: string; name: string; role: string | null };
+
 export type PipelineFile = {
     applicationId: string;
     companyName: string | null;

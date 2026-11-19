@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import {
@@ -19,6 +19,7 @@ import AskItarangHelp from '@/components/dealer-portal/lead-wizard/AskItarangHel
 import LeadWorkNote from '@/components/dealer-portal/lead-wizard/LeadWorkNote';
 import KycTimeline from '@/components/kyc/KycTimeline';
 import { onFreshFileClick } from '@/lib/storage/freshFileLink';
+import DealerCheckBanner from '@/components/leads/DealerCheckBanner';
 
 type UploadedDoc = {
     id?: string;
@@ -253,16 +254,57 @@ export default function KYCPage() {
 
     // ─── Document Stats ─────────────────────────────────────────────────────
 
-    // Each document's required/optional flag is the source of truth in
-    // FINANCE_DOCUMENTS (constants.ts), used as-is regardless of asset type.
-    const requiredDocs = useMemo(() => FINANCE_DOCUMENTS.map(doc => ({ ...doc })), []);
+    // E-392 — which documents are asked comes from Settings › Customer KYC
+    // documents (Aadhaar front/back + PAN always). An asked document other than
+    // Aadhaar / PAN may be skipped with a reason. Until the list loads, the
+    // FINANCE_DOCUMENTS flags (constants.ts) stand in.
+    const [docReq, setDocReq] = useState<{
+        asked: string[];
+        mandatory: string[];
+        skipped: Array<{ docType: string; reason: string }>;
+    } | null>(null);
+    const loadDocReq = useCallback(async () => {
+        try {
+            const r = await fetch(`/api/kyc/${leadId}/doc-requirements`, { cache: 'no-store' });
+            const j = await r.json().catch(() => null);
+            if (j?.success) setDocReq(j.data);
+        } catch { /* keep the defaults */ }
+    }, [leadId]);
+    useEffect(() => { void loadDocReq(); }, [loadDocReq, uploadedDocs]);
+    const skipMap = useMemo(
+        () => new Map((docReq?.skipped ?? []).map((s) => [s.docType, s] as const)),
+        [docReq],
+    );
+    const isMandatoryDoc = useCallback(
+        (key: string) => (docReq ? docReq.mandatory.includes(key) : ['aadhaar_front', 'aadhaar_back', 'pan_card'].includes(key)),
+        [docReq],
+    );
+    const skipDoc = useCallback(async (key: string, reason: string) => {
+        const r = await fetch(`/api/kyc/${leadId}/skip-document`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ doc_type: key, reason }),
+        });
+        const j = await r.json().catch(() => null);
+        if (!j?.success) { setApiError(j?.error?.message || 'Could not skip the document'); return; }
+        await loadDocReq();
+    }, [leadId, loadDocReq]);
+    const undoSkipDoc = useCallback(async (key: string) => {
+        await fetch(`/api/kyc/${leadId}/skip-document?doc_type=${encodeURIComponent(key)}`, { method: 'DELETE' });
+        await loadDocReq();
+    }, [leadId, loadDocReq]);
+
+    const requiredDocs = useMemo(
+        () => FINANCE_DOCUMENTS.map(doc => ({ ...doc, required: docReq ? docReq.asked.includes(doc.key) : doc.required })),
+        [docReq],
+    );
 
     const docStats = useMemo(() => {
         const required = requiredDocs.filter(d => d.required);
         const uploaded = required.filter(d => uploadedDocs[d.key]?.file_url);
-        const pending = required.filter(d => !uploadedDocs[d.key]?.file_url);
+        const pending = required.filter(d => !uploadedDocs[d.key]?.file_url && !(skipMap.has(d.key) && !isMandatoryDoc(d.key)));
         return { total: required.length, uploadedCount: uploaded.length, pending };
-    }, [requiredDocs, uploadedDocs]);
+    }, [requiredDocs, uploadedDocs, skipMap, isMandatoryDoc]);
 
     // Split required vs optional docs so the required ones show up front,
     // followed by the optional ones (both always visible).
@@ -739,6 +781,10 @@ export default function KYCPage() {
                 />
 
                 <ErrorBanner message={apiError} onDismiss={() => setApiError(null)} />
+                {/* E-390: dealer-assignment check (initiator re-picks after a rejection). */}
+                <div className="mb-4 empty:hidden">
+                    <DealerCheckBanner leadId={leadId} />
+                </div>
 
                 {/* ID 183: the dealer may ask iTarang to work this file for him. */}
                 {/* ID 183 (21 Oct): "being worked by" — and the house login's dealer-wins check. */}
@@ -1078,6 +1124,9 @@ export default function KYCPage() {
                                     failedReason={uploadedDocs[doc.key]?.rejection_reason || uploadedDocs[doc.key]?.failed_reason}
                                     onUpload={file => handleDocUpload(doc.key, file)}
                                     fileUrl={uploadedDocs[doc.key]?.file_viewable === false ? null : uploadedDocs[doc.key]?.file_url}
+                                    skipped={skipMap.get(doc.key) ?? null}
+                                    onSkip={doc.required && !isMandatoryDoc(doc.key) ? (reason) => skipDoc(doc.key, reason) : undefined}
+                                    onUndoSkip={() => undoSkipDoc(doc.key)}
                                 />
                             ))}
                         </div>

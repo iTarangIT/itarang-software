@@ -10,6 +10,7 @@ import {
   ShoppingCart,
   Users,
   UserCheck,
+  Route,
   FileText,
   Download,
   Mail,
@@ -394,6 +395,18 @@ function loanProductSettingsItem(idPrefix: string) {
   };
 }
 
+// E-391 — Settings → NBFC routing rules (Battery Pool diagram 1 part 2): rules
+// that send a file straight to one NBFC when Step 4 opens. Same factory
+// convention as loanProductSettingsItem so the admin and sales_head groups match.
+function nbfcRoutingSettingsItem(idPrefix: string) {
+  return {
+    id: `${idPrefix}-nbfc-routing`,
+    label: "NBFC routing rules",
+    icon: Route,
+    href: "/admin/settings/nbfc-routing",
+  };
+}
+
 // Settings → the digest screens (E-287/E-288). One factory per screen, same
 // one-factory-per-role convention as loanProductSettingsItem above — the admin
 // and sales_head Settings groups have to stay in step, and a second hand-written
@@ -602,6 +615,13 @@ const ROLE_TRAILING_SECTIONS: Record<string, any[]> = {
           icon: ShieldCheck,
           href: "/admin/settings/kyc-automation",
         },
+        {
+          // E-392 — Battery Pool diagram 1 part 3: which customer KYC documents are asked.
+          id: "sh-customer-kyc-docs",
+          label: "Customer KYC documents",
+          icon: FileCheck,
+          href: "/admin/settings/customer-kyc-docs",
+        },
         dealerValidationDigestItem("sh"),
         kycReviewDigestItem("sh"),
         scrapBuybackDigestItem("sh"),
@@ -615,6 +635,7 @@ const ROLE_TRAILING_SECTIONS: Record<string, any[]> = {
         myDayDigestItem("sh"),
         buybackDailyDigestItem("sh"),
         loanProductSettingsItem("sh"),
+        nbfcRoutingSettingsItem("sh"),
         nbfcSettingsSubnav("sh"),
         whatsappSettingsSubnav("sh"),
         {
@@ -633,6 +654,13 @@ const ROLE_TRAILING_SECTIONS: Record<string, any[]> = {
           label: "House team logins",
           icon: UserPlus,
           href: "/admin/house-team-logins",
+        },
+        {
+          // E-390 — Battery Pool diagram 1: the iTarang Admin dealer-assignment check.
+          id: "dealer-checks",
+          label: "Dealer checks",
+          icon: UserCheck,
+          href: "/admin/dealer-checks",
         },
       ],
     },
@@ -1751,6 +1779,13 @@ const roleNavigation: Record<string, any[]> = {
           icon: ShieldCheck,
           href: "/admin/settings/kyc-automation",
         },
+        {
+          // E-392 — Battery Pool diagram 1 part 3: which customer KYC documents are asked.
+          id: "admin-customer-kyc-docs",
+          label: "Customer KYC documents",
+          icon: FileCheck,
+          href: "/admin/settings/customer-kyc-docs",
+        },
         dealerValidationDigestItem("admin"),
         kycReviewDigestItem("admin"),
         scrapBuybackDigestItem("admin"),
@@ -1766,6 +1801,7 @@ const roleNavigation: Record<string, any[]> = {
         timeLimitsItem("admin"),
         kycFileOpensItem("admin"),
         loanProductSettingsItem("admin"),
+        nbfcRoutingSettingsItem("admin"),
         nbfcSettingsSubnav("admin"),
         whatsappSettingsSubnav("admin"),
         {
@@ -1807,6 +1843,13 @@ const roleNavigation: Record<string, any[]> = {
           label: "House team logins",
           icon: UserPlus,
           href: "/admin/house-team-logins",
+        },
+        {
+          // E-390 — Battery Pool diagram 1: the iTarang Admin dealer-assignment check.
+          id: "dealer-checks",
+          label: "Dealer checks",
+          icon: UserCheck,
+          href: "/admin/dealer-checks",
         },
       ],
     },
