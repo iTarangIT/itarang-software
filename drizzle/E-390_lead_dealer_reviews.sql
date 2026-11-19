@@ -1,4 +1,3 @@
--- migration-gate: held
 -- E-390 — Battery Pool diagram 1: iTarang Admin checks the dealer assignment
 -- before a file can be routed to an NBFC (19 Nov 2026).
 --
