@@ -14194,3 +14194,26 @@ export const nbfcRoutingRules = pgTable(
     activeIdx: index("nbfc_routing_rules_active_idx").on(t.is_active, t.id),
   }),
 );
+
+// E-392 — Battery Pool diagram 1, part 3: a customer KYC document the dealer /
+// salesperson / customer skipped, with the reason. Aadhaar front/back and PAN
+// are never skippable. cleared_at is set when the document is uploaded later.
+export const kycDocumentSkips = pgTable(
+  "kyc_document_skips",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    lead_id: varchar("lead_id", { length: 50 }).notNull(),
+    doc_for: varchar("doc_for", { length: 20 }).default("customer").notNull(),
+    doc_type: varchar("doc_type", { length: 50 }).notNull(),
+    reason: text("reason").notNull(),
+    skipped_by: uuid("skipped_by"),
+    skipped_by_name: text("skipped_by_name"),
+    // web | whatsapp
+    channel: varchar("channel", { length: 12 }).default("web").notNull(),
+    skipped_at: timestamp("skipped_at", { withTimezone: true }).defaultNow().notNull(),
+    cleared_at: timestamp("cleared_at", { withTimezone: true }),
+  },
+  (t) => ({
+    leadIdx: index("kyc_document_skips_lead_idx").on(t.lead_id),
+  }),
+);

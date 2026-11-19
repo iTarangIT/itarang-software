@@ -307,6 +307,21 @@ export default function CustomerDossierPanel({
             ))}
           </div>
         )}
+        {(dossier.skippedDocs ?? []).length > 0 && (
+          <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+            <p className="mb-1.5 text-[11px] font-bold uppercase tracking-wider text-amber-800">Skipped by the dealer / customer</p>
+            <ul className="space-y-1">
+              {dossier.skippedDocs.map((d) => (
+                <li key={d.docType} className="text-sm text-amber-900">
+                  <b>{d.label}</b> — {d.reason}
+                  <span className="ml-1 text-xs text-amber-700">
+                    ({d.channel === "whatsapp" ? "WhatsApp" : "CRM"}, {new Date(d.skippedAt).toLocaleDateString("en-IN")})
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </SectionCard>
 
       {/* 4 — Co-borrower(s) */}

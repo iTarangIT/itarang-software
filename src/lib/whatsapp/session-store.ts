@@ -94,6 +94,10 @@ export type Ctx = {
     paymentMethod?: "finance" | "cash" | "other_finance";
     /** Customer KYC document types collected so far (DC_LEAD_DOCS). */
     docs?: Record<string, true>;
+    /** E-392 — KYC doc keys being skipped, waiting for the typed reason (DC_LEAD_DOC_SKIP_REASON). */
+    skipDocs?: string[];
+    /** E-392 — the skip is being made in the customer's own (house) flow, not by the dealer. */
+    skipByCustomer?: boolean;
     /** The product list offered at DC_LEAD_PRODUCT, so a tapped row resolves
      *  back to its catalogue ids. */
     productOptions?: Array<{

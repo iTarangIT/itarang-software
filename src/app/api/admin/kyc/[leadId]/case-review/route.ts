@@ -252,9 +252,14 @@ export async function GET(
         appUser.id,
       );
 
+    // E-392 — customer documents skipped with a reason (WhatsApp / CRM).
+    const { listSkips } = await import("@/lib/kyc/customer-doc-config");
+    const skippedDocs = await listSkips(leadId);
+
     return NextResponse.json(protectIds({
       success: true,
       data: {
+        skippedDocs,
         lead: {
           id: lead.id,
           name: lead.full_name || lead.owner_name || "",

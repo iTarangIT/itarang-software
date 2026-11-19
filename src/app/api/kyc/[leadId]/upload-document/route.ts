@@ -121,6 +121,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             });
         }
 
+        // E-392 — an uploaded document is no longer "skipped".
+        if (docFor === 'customer') {
+            const { clearSkip } = await import('@/lib/kyc/customer-doc-config');
+            await clearSkip(leadId, docType);
+        }
+
         // file_url on the record: the dealer opens a file iTarang uploaded for
         // him (ID 166 rule, fileAuthz — kyc_documents has no upload_source).
         await recordKycStep(gate.actor, `uploaded ${docType.replace(/_/g, ' ')}${docFor === 'borrower' ? ' (co-borrower)' : ''}`, { file_url: fileUrl });

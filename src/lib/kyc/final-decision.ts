@@ -159,10 +159,14 @@ export async function applyKycFinalDecision(input: {
     if (decision === "approved") {
         const blockers: string[] = [];
 
+        // E-392 — a skipped RC copy (with a reason) waives the RC card.
+        const { listSkips } = await import("./customer-doc-config");
+        const rcSkipped = (await listSkips(leadId)).some((s) => s.docType === "rc_copy");
         for (const v of step3Verifications) {
             const applicant = v.applicant ?? "primary";
             if (applicant !== "primary") continue;
             if (!isAdminCardType(v.verification_type)) continue;
+            if (rcSkipped && v.verification_type === "rc") continue;
             if (v.admin_action !== "accepted") {
                 blockers.push(
                     `${v.verification_type} verification is "${v.admin_action ?? "pending"}" — accept it on the card`,

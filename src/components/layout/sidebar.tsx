@@ -615,6 +615,13 @@ const ROLE_TRAILING_SECTIONS: Record<string, any[]> = {
           icon: ShieldCheck,
           href: "/admin/settings/kyc-automation",
         },
+        {
+          // E-392 — Battery Pool diagram 1 part 3: which customer KYC documents are asked.
+          id: "sh-customer-kyc-docs",
+          label: "Customer KYC documents",
+          icon: FileCheck,
+          href: "/admin/settings/customer-kyc-docs",
+        },
         dealerValidationDigestItem("sh"),
         kycReviewDigestItem("sh"),
         scrapBuybackDigestItem("sh"),
@@ -1771,6 +1778,13 @@ const roleNavigation: Record<string, any[]> = {
           label: "KYC automation",
           icon: ShieldCheck,
           href: "/admin/settings/kyc-automation",
+        },
+        {
+          // E-392 — Battery Pool diagram 1 part 3: which customer KYC documents are asked.
+          id: "admin-customer-kyc-docs",
+          label: "Customer KYC documents",
+          icon: FileCheck,
+          href: "/admin/settings/customer-kyc-docs",
         },
         dealerValidationDigestItem("admin"),
         kycReviewDigestItem("admin"),
