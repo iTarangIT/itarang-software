@@ -8,12 +8,18 @@ import {
   NBFC_ROLE_LABELS,
 } from "@/lib/nbfc/origination-roles";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
+import type { HierarchyStep } from "@/lib/nbfc/approval-hierarchy-rules";
+import ApprovalHierarchyPanel, { StepTicks, memberLabel, type HierarchyMember } from "./ApprovalHierarchyPanel";
 
-interface Member {
+interface Member extends HierarchyMember {
   user_id: string;
   role: string;
   email: string | null;
   name: string | null;
+  phone?: string | null;
+  // E-387 — parent/child CIBIL approval hierarchy.
+  parent_user_id?: string | null;
+  delegated_steps?: string[];
   created_at: string | null;
 }
 
@@ -21,6 +27,9 @@ interface Props {
   tenantId: string;
   currentUserId: string | null;
   members: Member[];
+  /** nbfc_admin — may edit the approval hierarchy. */
+  canManage?: boolean;
+  cibilReviewEnabledAt?: string | null;
 }
 
 // Addendum V0.2 §7.2 — five origination roles.
@@ -29,12 +38,18 @@ function roleLabel(role: string): string {
   return (NBFC_ROLE_LABELS as Record<string, string>)[role] ?? role;
 }
 
-export default function UsersSection({ currentUserId, members }: Props) {
+export default function UsersSection({ currentUserId, members, canManage = false, cibilReviewEnabledAt = null }: Props) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  // E-387 — "Reports to" (parent) for a new child login + its delegated steps.
+  const [parentId, setParentId] = useState("");
+  const [steps, setSteps] = useState<HierarchyStep[]>([]);
+  // Parents = members who report to nobody.
+  const parentOptions = members.filter((m) => !m.parent_user_id);
   // A selected value is either "sys:<role>" (system role) or "custom:<roleId>".
   const [roleValue, setRoleValue] = useState("sys:viewer");
   const [customRoles, setCustomRoles] = useState<{ id: string; name: string }[]>([]);
@@ -63,10 +78,23 @@ export default function UsersSection({ currentUserId, members }: Props) {
     setError(null);
     setNewLogin(null);
     try {
-      const body: { email: string; name?: string; role?: string; role_id?: string } = {
+      const body: {
+        email: string;
+        name?: string;
+        role?: string;
+        role_id?: string;
+        phone?: string;
+        parent_user_id?: string;
+        delegated_steps?: string[];
+      } = {
         email: email.trim(),
       };
       if (name.trim()) body.name = name.trim();
+      if (phone.trim()) body.phone = phone.trim();
+      if (parentId) {
+        body.parent_user_id = parentId;
+        body.delegated_steps = steps;
+      }
       if (roleValue.startsWith("custom:")) body.role_id = roleValue.slice("custom:".length);
       else body.role = roleValue.slice("sys:".length);
       const res = await fetch("/api/nbfc/users", {
@@ -90,6 +118,9 @@ export default function UsersSection({ currentUserId, members }: Props) {
       }
       setEmail("");
       setName("");
+      setPhone("");
+      setParentId("");
+      setSteps([]);
       setRoleValue("sys:viewer");
       router.refresh();
     } catch (e) {
@@ -137,6 +168,7 @@ export default function UsersSection({ currentUserId, members }: Props) {
           <tr>
             <th className="px-3 py-2 text-left font-bold">User</th>
             <th className="px-3 py-2 text-left font-bold">Role</th>
+            <th className="px-3 py-2 text-left font-bold">Reports to</th>
             <th className="px-3 py-2 text-left font-bold">Joined</th>
             <th className="px-3 py-2"></th>
           </tr>
@@ -144,7 +176,7 @@ export default function UsersSection({ currentUserId, members }: Props) {
         <tbody>
           {members.length === 0 ? (
             <tr>
-              <td colSpan={4} className="px-3 py-6 text-center text-slate-500">
+              <td colSpan={5} className="px-3 py-6 text-center text-slate-500">
                 No members yet. Invite someone below.
               </td>
             </tr>
@@ -153,9 +185,25 @@ export default function UsersSection({ currentUserId, members }: Props) {
               <tr key={m.user_id} className="border-t border-slate-100 dark:border-slate-800">
                 <td className="px-3 py-2">
                   <div className="font-medium">{m.name ?? m.email ?? m.user_id}</div>
-                  <div className="text-xs text-slate-500">{m.email ?? ""}</div>
+                  <div className="text-xs text-slate-500">
+                    {m.email ?? ""}
+                    {m.phone ? <span className="ml-2 tabular-nums">· {m.phone}</span> : null}
+                  </div>
                 </td>
                 <td className="px-3 py-2 text-xs font-bold">{roleLabel(m.role)}</td>
+                <td className="px-3 py-2 text-xs">
+                  {m.parent_user_id ? (
+                    <span className="inline-flex items-center gap-1 rounded bg-emerald-50 px-1.5 py-0.5 font-semibold text-emerald-800">
+                      {memberLabel(members, m.parent_user_id)}
+                    </span>
+                  ) : members.some((c) => c.parent_user_id === m.user_id) ? (
+                    <span className="inline-flex items-center rounded bg-sky-50 px-1.5 py-0.5 font-semibold text-sky-800">
+                      Approver
+                    </span>
+                  ) : (
+                    <span className="text-slate-400">—</span>
+                  )}
+                </td>
                 <td className="px-3 py-2 text-xs text-slate-500 tabular-nums">
                   {m.created_at ? new Date(m.created_at).toLocaleDateString() : "—"}
                 </td>
@@ -209,6 +257,20 @@ export default function UsersSection({ currentUserId, members }: Props) {
               placeholder="Jane Partner"
             />
           </div>
+          <div className="min-w-[140px]">
+            <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">
+              Mobile <span className="font-normal normal-case text-slate-400">(optional)</span>
+            </label>
+            <input
+              type="tel"
+              inputMode="numeric"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              disabled={busy}
+              className="w-full border border-slate-300 rounded px-2 py-1 text-sm"
+              placeholder="98XXXXXXXX"
+            />
+          </div>
           <div>
             <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">
               Role
@@ -242,6 +304,24 @@ export default function UsersSection({ currentUserId, members }: Props) {
               )}
             </select>
           </div>
+          <div>
+            <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">
+              Reports to <span className="font-normal normal-case text-slate-400">(child user)</span>
+            </label>
+            <select
+              value={parentId}
+              onChange={(e) => setParentId(e.target.value)}
+              disabled={busy}
+              className="border border-slate-300 rounded px-2 py-1 text-sm"
+            >
+              <option value="">Nobody (independent)</option>
+              {parentOptions.map((m) => (
+                <option key={m.user_id} value={m.user_id}>
+                  {m.name ?? m.email ?? m.user_id}
+                </option>
+              ))}
+            </select>
+          </div>
           <button
             onClick={invite}
             disabled={busy}
@@ -250,6 +330,17 @@ export default function UsersSection({ currentUserId, members }: Props) {
             {busy ? "Inviting…" : "Invite"}
           </button>
         </div>
+        {parentId ? (
+          <div className="mt-3 rounded border border-emerald-200 bg-emerald-50/60 px-3 py-2.5 text-xs">
+            <p className="font-semibold text-emerald-900">
+              Child user — uploads the CIBIL report and a note and sends them to{" "}
+              {memberLabel(members, parentId)} for approval. After approval{" "}
+              {memberLabel(members, parentId)} owns the lead.
+            </p>
+            <p className="mt-1.5 text-slate-600">After approval this user may ALSO do (tick only what you allow):</p>
+            <StepTicks value={steps} onChange={setSteps} disabled={busy} />
+          </div>
+        ) : null}
         {error ? (
           <div className="mt-2 px-3 py-2 bg-red-50 text-red-700 text-xs rounded">{error}</div>
         ) : null}
@@ -291,6 +382,12 @@ export default function UsersSection({ currentUserId, members }: Props) {
           login is created and a one-time password is shown here for you to relay.
         </p>
       </div>
+
+      <ApprovalHierarchyPanel
+        members={members}
+        canManage={canManage}
+        cibilReviewEnabledAt={cibilReviewEnabledAt}
+      />
     </section>
   );
 }

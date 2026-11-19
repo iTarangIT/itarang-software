@@ -5,10 +5,11 @@ import { AlertTriangle } from "lucide-react";
 import {
   dealers,
   leads,
+  nbfcCibilReviews,
   nbfcLeadAssignments,
   productSelections,
 } from "@/lib/db/schema";
-import { getCurrentTenant } from "@/lib/nbfc/tenant";
+import { getCurrentTenant, getSessionUser } from "@/lib/nbfc/tenant";
 import {
   getNbfcWorkQueueLeadIds,
   type WorkQueueNeed,
@@ -200,6 +201,18 @@ export default async function AcquireQueuePage({
     dealer_code: r.dealer_code,
     dealer_name: r.dealer_name,
   }));
+
+  // E-387 — CIBIL reports waiting for approval, flagged on the row so the
+  // approver (parent) sees what needs a decision.
+  const sessionUser = await getSessionUser();
+  const pendingCibil = new Map(
+    (
+      await db
+        .select({ lead_id: nbfcCibilReviews.lead_id, approver: nbfcCibilReviews.approver_user_id })
+        .from(nbfcCibilReviews)
+        .where(and(eq(nbfcCibilReviews.tenant_id, tenant.id), eq(nbfcCibilReviews.status, "pending")))
+    ).map((r) => [r.lead_id, r.approver]),
+  );
 
   // Distinct values for the filter dropdowns.
   const dealerOptions = Array.from(
@@ -571,6 +584,13 @@ export default async function AcquireQueuePage({
                     >
                       {STATUS_LABEL[r.assignment_status] ?? r.assignment_status}
                     </span>
+                    {pendingCibil.has(r.lead_id) ? (
+                      <span className="mt-1 block w-fit rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-800">
+                        {pendingCibil.get(r.lead_id) === sessionUser?.id
+                          ? "CIBIL: waiting for you"
+                          : "CIBIL: waiting for approval"}
+                      </span>
+                    ) : null}
                   </td>
                   <td className="px-4 py-3 text-xs text-slate-500">
                     {relativeTime(r.assigned_at)}

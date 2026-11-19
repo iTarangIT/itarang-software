@@ -22,6 +22,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { enachMandates } from "@/lib/db/schema";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
+import { hierarchyBlock } from "@/lib/nbfc/approval-hierarchy-http";
 import { getWinningAssignment } from "@/lib/nbfc/enach";
 import { fetchPayment, verifyPaymentSignature } from "@/lib/razorpay";
 import { notifyEnachEvent } from "@/lib/notifications/events";
@@ -65,6 +66,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
     const { razorpay_payment_id, razorpay_order_id, razorpay_signature } = parsed.data;
 
     const actor = await resolveActor(req.headers);
+    // E-387 — parent/child CIBIL approval hierarchy gate.
+    const hierarchyBlocked = await hierarchyBlock(actor, leadId, "enach");
+    if (hierarchyBlocked) return hierarchyBlocked;
     if (actor.role !== "operations" && actor.role !== "nbfc_admin") {
       return NextResponse.json(
         { ok: false, error: `FORBIDDEN: role '${actor.role}' cannot confirm E-NACH; operations or nbfc_admin required` },

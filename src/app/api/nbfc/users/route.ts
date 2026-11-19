@@ -13,6 +13,9 @@
  *
  * This mirrors the many-to-many model (nbfc_users): many logins can map to the
  * same tenant. Caller must hold `users.manage` (the tenant's nbfc_admin).
+ *
+ * E-387 — optional `parent_user_id` + `delegated_steps` create a CHILD login
+ * (parent/child CIBIL approval hierarchy); optional `phone` is the mobile.
  */
 import { NextRequest, NextResponse } from "next/server";
 import { clientError } from "@/lib/nbfc/http-error";
@@ -22,6 +25,7 @@ import { and, eq } from "drizzle-orm";
 import { nbfcRoles, nbfcUsers, users } from "@/lib/db/schema";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
 import { NBFC_ASSIGNABLE_SYSTEM_ROLES } from "@/lib/nbfc/origination-roles";
+import { assertValidParent, cleanDelegatedSteps } from "@/lib/nbfc/approval-hierarchy";
 import {
   ensureSupabaseUser,
   generatePortalPassword,
@@ -40,6 +44,19 @@ const Body = z.object({
   // E-162 — optional custom RBAC role (§15.8). When set, `role` is derived from
   // the custom role's base_role for the legacy coarse checks.
   role_id: z.string().uuid().optional().nullable(),
+  // Mobile number, stored on the users row (new logins; fills a blank one on link).
+  phone: z
+    .string()
+    .trim()
+    .transform((v) => v.replace(/[\s-]/g, "").replace(/^(\+91|91)(?=\d{10}$)/, ""))
+    .pipe(z.string().regex(/^[6-9]\d{9}$/, "mobile must be a 10-digit Indian number"))
+    .optional()
+    .or(z.literal("").transform(() => undefined)),
+  // E-387 — parent/child approval hierarchy: this new user is a CHILD of
+  // parent_user_id (uploads the CIBIL report for the parent's approval) and may
+  // act on delegated_steps after the parent approves.
+  parent_user_id: z.string().uuid().optional().nullable(),
+  delegated_steps: z.array(z.string()).optional(),
 });
 
 function statusFromError(msg: string): number {
@@ -91,12 +108,16 @@ export async function POST(req: NextRequest) {
     }
 
     const email = parsed.data.email;
+    const phone = parsed.data.phone ?? null;
+    const parentUserId = parsed.data.parent_user_id ?? null;
+    if (parentUserId) await assertValidParent(tenantId, null, parentUserId);
+    const delegatedSteps = parentUserId ? cleanDelegatedSteps(parsed.data.delegated_steps) : [];
 
     // Path 1 — the email already has an iTarang account: link it.
     // Path 2 — no account yet: provision a fresh Supabase login + users row and
     // return the one-time password.
     const userRows = await db
-      .select({ id: users.id })
+      .select({ id: users.id, phone: users.phone })
       .from(users)
       .where(eq(users.email, email))
       .limit(1);
@@ -107,6 +128,9 @@ export async function POST(req: NextRequest) {
 
     if (userRows[0]) {
       userId = userRows[0].id;
+      if (phone && !userRows[0].phone) {
+        await db.update(users).set({ phone, updated_at: new Date() }).where(eq(users.id, userId));
+      }
     } else {
       // Provision a brand-new login bound to this tenant.
       tempPassword = generatePortalPassword();
@@ -131,6 +155,7 @@ export async function POST(req: NextRequest) {
           email,
           // users.name is NOT NULL — fall back to the email when no name given.
           name: parsed.data.name ?? email,
+          phone,
           role: "nbfc_partner",
           must_change_password: true,
           is_active: true,
@@ -165,6 +190,8 @@ export async function POST(req: NextRequest) {
       role,
       role_id: roleId,
       notification_prefs: {},
+      parent_user_id: parentUserId,
+      delegated_steps: delegatedSteps,
     });
 
     return NextResponse.json({
