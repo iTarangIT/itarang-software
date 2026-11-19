@@ -1,4 +1,3 @@
--- migration-gate: held
 -- E-389 — CIBIL review: "Approve with conditions" + "Request additional documents"
 -- (Battery Pool workflow diagrams 1 + 3, 19 Nov 2026; follows E-387 / E-388).
 --
