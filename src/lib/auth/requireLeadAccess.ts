@@ -173,9 +173,11 @@ export async function requireLeadAccess(
   // uploader_id = the person who created it, so they can still finish its KYC.
   const isUploader = !!lead && lead.uploader_id === user.id;
   // 14 Oct: the house login keeps access to every file it pushed out, wherever
-  // the file is now (houseMayActOnLead). 16 Oct (ID 183): to SEE it only —
-  // every write route also runs requireLeadWriter / gateLeadActor, which
-  // refuses the house on a file that is with another dealer.
+  // the file is now (houseMayActOnLead). ID 183 (accepted 27 Oct): the house
+  // works such a file like the dealer, except Step 5, the cash sale and
+  // "delivered" — every write route also runs requireLeadWriter /
+  // gateLeadActor, which refuses those, applies the dealer-wins check and
+  // writes "Done by <name> for <dealer>".
   const houseFile =
     !!lead && !isUploader && !dealerOwnsLead(lead.dealer_id, dealerCode) && (await houseMayActOnLead(dealerCode, leadId));
 

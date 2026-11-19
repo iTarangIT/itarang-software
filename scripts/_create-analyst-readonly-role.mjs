@@ -148,12 +148,19 @@ const WITHHELD = [
   /reference|(^|_)ref$|transaction_id|esign_(certificate|error)|ocr_error/,
   // provider blobs and expense payees
   /telemetry_data|(^|_)metadata$|(^|_)vendor$/,
+  // ID 166 (19 Nov): error text carries what failed — storage keys and file paths (quote PDF),
+  // and whole failed INSERTs with their rows (scraper_runs.error_message on db-1 held a
+  // scraper_raw insert). Not a metric; withheld like esign_error / ocr_error above.
+  /(^|_)(error|errors|error_message|error_detail)$|_error(_message)?$/,
 ];
 // Column-specific withholdings the patterns above cannot name without catching too much.
 const WITHHELD_COLUMNS = new Set([
   "scraper_leads.name", // the scraped dealer's name
   "manual_dealer_sales.uploaded_by", // free-text name of whoever uploaded the sheet
   "dealer_lead_commercials.dealer_decision_actor", // the dealer's person who accepted a quote
+  // ID 166 (19 Nov): a list campaign's filter jsonb keeps the uploaded sheet's fileName
+  // (db-1: {"kind":"list","fileName":"Top_10_Leads.xlsx",…}); jsonb cannot be granted by key.
+  "dialer_campaigns.region_filter",
 ]);
 // Matches above that are not personal data: flags, counters, ids, city centroids, coded values.
 const KEPT = new Set([
@@ -336,6 +343,12 @@ const SAMPLE_WITHHELD = [
   ["inventory_events", "metadata"], ["deployed_assets", "deployment_location"], ["deployed_assets", "telemetry_data"],
   ["ecofy_lead_activities", "created_by_name"], ["scraper_leads", "name"], ["scraped_dealer_leads", "source_url"],
   ["manual_dealer_sales", "uploaded_by"], ["accounts", "gstin"], ["accounts", "contact_phone"], ["account_closures", "reason"],
+  // ID 166 — file links, paths and names on granted tables (bills, invoices, quotes, attachments)
+  ["expense_submissions", "bill_storage_path"], ["expense_submissions", "drive_file_id"], ["sales_invoices", "document_url"],
+  ["sales_invoices", "folder_path"], ["sales_invoices", "original_filename"], ["invoices", "pdf_s3"], ["orders", "invoice_url"],
+  ["deals", "invoice_url"], ["credit_notes", "document_url"], ["dealer_lead_commercials", "quote_document_url"],
+  ["dealer_lead_commercials", "quote_pdf_url"], ["dealer_lead_commercials", "quote_pdf_error"], ["service_tickets", "photos_urls"],
+  ["dialer_campaigns", "region_filter"], ["scraper_runs", "error_message"],
 ];
 const SAMPLE_KEPT = [
   ["dealer_leads", "city"], ["dealer_leads", "state"], ["dealer_leads", "current_owner_id"], ["dealer_leads", "last_worked_at"],

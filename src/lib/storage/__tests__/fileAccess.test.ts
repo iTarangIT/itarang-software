@@ -320,15 +320,19 @@ describe("fresh 15-minute links (ID 166)", () => {
         expect(fileLinkValid("documents", KYC, q.get("exp"), q.get("sig"), Date.now(), q.get("by"))).toBe(true);
     });
 
-    it("no signer gives a customer KYC file more than 15 minutes; other files keep their life", () => {
+    it("no signer gives ANY file more than 15 minutes (19 Nov: not only customer KYC)", () => {
         expect(linkTtl("documents", KYC, 7 * 24 * 3600)).toBe(FRESH_LINK_TTL_SECONDS);
         expect(linkTtl("documents", KYC, 300)).toBe(300);
-        expect(linkTtl("dealer-documents", "owner-photograph/a.jpg", 7 * 24 * 3600)).toBe(7 * 24 * 3600);
+        expect(linkTtl("dealer-documents", "owner-photograph/a.jpg", 7 * 24 * 3600)).toBe(FRESH_LINK_TTL_SECONDS);
+        expect(linkTtl("call-recordings", "bolna/c-1.mp3", 3600)).toBe(FRESH_LINK_TTL_SECONDS);
+        expect(linkTtl("nbfc-documents", "12/lsp-agreement/a.pdf", 300)).toBe(300);
         vi.stubEnv("FILE_LINK_SECRET", "test-secret-0123456789");
         const kyc = new URL(shareableFileUrl(`/api/files/documents/${KYC}`, { origin: "https://crm.test", ttlSeconds: 3600 })!);
         expect(Number(kyc.searchParams.get("exp")) * 1000 - Date.now()).toBeLessThanOrEqual(FRESH_LINK_TTL_SECONDS * 1000 + 1000);
         const week = new URL(signedFilePath(`/api/files/documents/${KYC}`, 7 * 24 * 3600)!, "https://x.test");
         expect(Number(week.searchParams.get("exp")) * 1000 - Date.now()).toBeLessThanOrEqual(FRESH_LINK_TTL_SECONDS * 1000 + 1000);
+        const gst = new URL(signedFilePath("/api/files/dealer-documents/gst-certificate/a.pdf", 7 * 24 * 3600, { by: "u-1" })!, "https://x.test");
+        expect(fileLinkTooLong(gst.searchParams.get("exp"))).toBe(false);
     });
 
     it("fileLinkTooLong spots a link minted for longer than 15 minutes", () => {
