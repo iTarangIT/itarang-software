@@ -2439,6 +2439,8 @@ export const nbfcDocRequests = pgTable(
     // is_required}]) so an auto-forward does not have to parse nbfc_comments.
     requested_items: jsonb("requested_items").default(sql`'[]'::jsonb`),
     item_count: integer("item_count").default(0).notNull(), // ≤10 for step4_extra_items
+    // E-389 — set when the parent raised this from the CIBIL review panel.
+    cibil_review_id: uuid("cibil_review_id"),
     raised_by: uuid("raised_by").notNull(), // NBFC actor
     reviewed_by: uuid("reviewed_by"), // admin who forwarded / pushed
     // Email "act from mail" (Change 5) — sha256-hashed token + expiry.
@@ -4907,6 +4909,8 @@ export const nbfcCibilReviews = pgTable(
     note: text("note").notNull(),
     status: varchar("status", { length: 16 }).default("pending").notNull(),
     decision_reason: text("decision_reason"),
+    // E-389 — "Approve with conditions": the conditions the parent recorded.
+    conditions: text("conditions"),
     decided_by: uuid("decided_by"),
     decided_at: timestamp("decided_at", { withTimezone: true }),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),

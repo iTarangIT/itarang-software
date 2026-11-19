@@ -1,10 +1,11 @@
 /**
  * POST /api/nbfc/acquire/[leadId]/cibil-review/decide
- *   body { decision: "approve" | "reject", reason?: string }
+ *   body { decision: "approve" | "approve_with_conditions" | "reject", reason?: string, conditions?: string }
  *
  * E-387 — the parent (or another NBFC admin, never the submitter) approves or
  * rejects the pending CIBIL report. Reject needs a reason and closes the file
- * for this NBFC (same as "Reject file").
+ * for this NBFC (same as "Reject file"). E-389: "approve_with_conditions"
+ * approves exactly like "approve" and keeps the (required) conditions text.
  */
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
@@ -26,8 +27,9 @@ function statusFromError(msg: string): number {
 }
 
 const Body = z.object({
-  decision: z.enum(["approve", "reject"]),
+  decision: z.enum(["approve", "approve_with_conditions", "reject"]),
   reason: z.string().trim().max(2000).optional().nullable(),
+  conditions: z.string().trim().max(2000).optional().nullable(),
 });
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
@@ -49,6 +51,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
       leadId,
       decision: parsed.data.decision,
       reason: parsed.data.reason ?? null,
+      conditions: parsed.data.conditions ?? null,
     });
     return NextResponse.json({ ok: true, ...result });
   } catch (e) {

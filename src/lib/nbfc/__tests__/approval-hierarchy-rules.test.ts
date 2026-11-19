@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   cleanDelegatedSteps,
   decideCibilDecision,
+  decideCibilDocRequest,
   decideCibilSubmit,
   decideStep,
   type HierarchyContext,
@@ -95,5 +96,26 @@ describe("cleanDelegatedSteps", () => {
   it("drops unknown keys, de-duplicates, keeps canonical order", () => {
     expect(cleanDelegatedSteps(["enach", "bogus", "kyc", "kyc"])).toEqual(["kyc", "enach"]);
     expect(cleanDelegatedSteps(null)).toEqual([]);
+  });
+});
+
+describe("E-389 — ask for documents on a pending CIBIL report", () => {
+  it("the parent may raise a document request while the report is pending", () => {
+    expect(decideStep(parent({ review: pending }), "docs").ok).toBe(true);
+    // ...but nothing else until it is approved
+    expect(decideStep(parent({ review: pending }), "offer").ok).toBe(false);
+  });
+  it("the child stays locked, even with 'docs' delegated", () => {
+    expect(decideStep(child({ review: pending, delegatedSteps: ["docs"] }), "docs").ok).toBe(false);
+  });
+  it("the approver and another NBFC admin may request; the submitter and others may not", () => {
+    expect(decideCibilDocRequest(pending, { userId: SALEEM, role: "nbfc_admin", isChild: false }).ok).toBe(true);
+    expect(decideCibilDocRequest(pending, { userId: RAJIV, role: "nbfc_admin", isChild: false }).ok).toBe(true);
+    expect(decideCibilDocRequest(pending, { userId: ABHISHEK, role: "credit_underwriting", isChild: true }).ok).toBe(false);
+    expect(decideCibilDocRequest(pending, { userId: RAJIV, role: "operations", isChild: false }).ok).toBe(false);
+  });
+  it("not once the report is decided", () => {
+    expect(decideCibilDocRequest(approved, { userId: SALEEM, role: "nbfc_admin", isChild: false }).ok).toBe(false);
+    expect(decideCibilDocRequest(null, { userId: SALEEM, role: "nbfc_admin", isChild: false }).ok).toBe(false);
   });
 });

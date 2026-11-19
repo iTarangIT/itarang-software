@@ -6,12 +6,15 @@
  * For one NBFC tenant (default: the first whose slug/name contains "battery"):
  * prints the switch, every member with who they report to and their delegated
  * steps, and — for up to 5 of its live Acquire leads — what each member may do
- * on that lead, using the real getHierarchyContext / decideStep. Writes nothing.
+ * on that lead, using the real getHierarchyContext / decideStep. E-389: also the
+ * review's conditions and the document requests raised from it (status), via
+ * the real getCibilReviewView. Writes nothing.
  */
 import { and, desc, eq, ilike, isNull, or } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { nbfcLeadAssignments, nbfcTenants, nbfcUsers, users } from "@/lib/db/schema";
 import { HIERARCHY_STEPS, decideStep, getHierarchyContext, type GatedStep } from "@/lib/nbfc/approval-hierarchy";
+import { getCibilReviewView } from "@/lib/nbfc/cibil-review";
 
 async function main() {
   const arg = process.argv[2] ?? "battery";
@@ -52,6 +55,15 @@ async function main() {
   const steps: GatedStep[] = [...HIERARCHY_STEPS.map((s) => s.key), "reject"];
   for (const l of leadsRows) {
     console.log(`\nLead ${l.lead_id} (${l.status})`);
+    const view = await getCibilReviewView(tenant.id, l.lead_id);
+    if (view) {
+      console.log(
+        `  CIBIL review: ${view.status}${view.conditions ? ` — conditions: ${view.conditions}` : ""}` +
+          (view.doc_requests.length
+            ? `; docs asked: ${view.doc_requests.map((d) => `[${d.items.join(", ")}] ${d.status_label}`).join(" | ")}`
+            : ""),
+      );
+    }
     for (const m of members) {
       const ctx = await getHierarchyContext(tenant.id, m.user_id, l.lead_id);
       const allowed = steps.filter((s) => decideStep(ctx, s).ok);

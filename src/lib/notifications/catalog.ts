@@ -251,6 +251,10 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "nbfc.cibil_approved": "NBFC Requests",
   "nbfc.cibil_rejected": "NBFC Requests",
   "nbfc.cibil_reminder": "NBFC Requests",
+  // E-389 — approve with conditions / documents asked before the CIBIL decision.
+  "nbfc.cibil_approved_conditions": "NBFC Requests",
+  "nbfc.cibil_docs_requested": "NBFC Requests",
+  "nbfc.cibil_docs_returned": "NBFC Requests",
   // Emitted by /api/admin/nbfc-requests/verdicts/[verdictId]/forward. Same
   // story as onboarding_initiated above — real, emitted, and unmapped until
   // E-231.r
@@ -513,6 +517,8 @@ const WARNING = new Set([
   "fi.requested",
   "nbfc.cibil_submitted",
   "nbfc.cibil_reminder",
+  "nbfc.cibil_docs_requested",
+  "nbfc.cibil_docs_returned",
   "fi.assigned",
   "fi.reinspection",
   "vkyc.initiated",

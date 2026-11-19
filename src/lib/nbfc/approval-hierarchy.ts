@@ -61,6 +61,7 @@ export interface CibilReviewRow {
   cibil_score: number | null;
   note: string;
   decision_reason: string | null;
+  conditions: string | null;
   decided_by: string | null;
   decided_at: Date | null;
   created_at: Date;
@@ -78,6 +79,7 @@ export async function getLatestCibilReview(tenantId: string, leadId: string): Pr
       cibil_score: nbfcCibilReviews.cibil_score,
       note: nbfcCibilReviews.note,
       decision_reason: nbfcCibilReviews.decision_reason,
+      conditions: nbfcCibilReviews.conditions,
       decided_by: nbfcCibilReviews.decided_by,
       decided_at: nbfcCibilReviews.decided_at,
       created_at: nbfcCibilReviews.created_at,
