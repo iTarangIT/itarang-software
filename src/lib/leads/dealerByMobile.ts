@@ -30,7 +30,8 @@ export type DealerByMobileResult =
   | { status: "found"; dealer: PushTargetDealer }
   | { status: "invalid_mobile" }
   | { status: "not_found" }
-  | { status: "ambiguous" };
+  /** E-390: the active dealers behind the number, so the caller can show a pick list. */
+  | { status: "ambiguous"; candidates: PushTargetDealer[] };
 
 /** The house dealer's code (users.dealer_id of dealer@itarang.com), or null. */
 export async function houseDealerCode(): Promise<string | null> {
@@ -131,7 +132,23 @@ export async function findActiveDealerByMobile(
       !closed.has(r.dealerId),
   );
   if (active.length === 0) return { status: "not_found" };
-  if (active.length > 1) return { status: "ambiguous" };
+  if (active.length > 1) {
+    const accs = await db
+      .select({ id: accounts.id, name: accounts.business_entity_name })
+      .from(accounts)
+      .where(inArray(accounts.id, active.map((r) => r.dealerId!)));
+    const nameOf = new Map(accs.map((a) => [a.id, a.name]));
+    return {
+      status: "ambiguous",
+      candidates: active
+        .map((r) => ({
+          dealerId: r.dealerId!,
+          name: nameOf.get(r.dealerId!) || r.companyName || r.dealerId!,
+          financeEnabled: Boolean(r.financeEnabled),
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    };
+  }
 
   const d = active[0];
   // Prefer the legal-entity name the rest of the CRM shows for this dealer.
@@ -203,7 +220,9 @@ export async function searchActiveDealers(
   const mobile = tenDigitMobile(q);
   if (mobile) {
     const r = await findActiveDealerByMobile(mobile);
-    return pickerDealers(r.status === "found" ? [r.dealer] : [], opts);
+    // E-390: a number shared by several dealers lists them all, so the
+    // initiator picks the right one instead of hitting "no dealer".
+    return pickerDealers(r.status === "found" ? [r.dealer] : r.status === "ambiguous" ? r.candidates : [], opts);
   }
 
   const house = await houseDealerCode();

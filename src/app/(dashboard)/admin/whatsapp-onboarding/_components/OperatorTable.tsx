@@ -4,10 +4,11 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { OperatorRow } from "./types";
+import type { OperatorRow, StaffOption } from "./types";
 
 export function OperatorTable({
     operators,
+    staff = [],
     loading,
     canWrite,
     selectedId,
@@ -15,6 +16,8 @@ export function OperatorTable({
     onChanged,
 }: {
     operators: OperatorRow[];
+    /** E-390 — iTarang team members a number can be linked to. */
+    staff?: StaffOption[];
     loading: boolean;
     canWrite: boolean;
     selectedId: string | null;
@@ -47,6 +50,27 @@ export function OperatorTable({
                     ? err.message
                     : "Couldn't update this operator",
             );
+        } finally {
+            setBusyId(null);
+        }
+    }
+
+    // E-390 — link the number to the sales person who uses it; Customer KYC on
+    // WhatsApp then lists the dealers that person owns (Account ownership).
+    async function setSalesPerson(op: OperatorRow, userId: string) {
+        setBusyId(op.id);
+        try {
+            const res = await fetch(`/api/admin/whatsapp-operators/${op.id}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ userId: userId || null }),
+            });
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(json?.error?.message || "Update failed");
+            toast.success(userId ? "Sales person linked" : "Sales person unlinked");
+            onChanged();
+        } catch (err) {
+            toast.error(err instanceof Error ? err.message : "Couldn't link the sales person");
         } finally {
             setBusyId(null);
         }
@@ -87,6 +111,9 @@ export function OperatorTable({
                         <th className="px-4 py-2 font-medium text-right">
                             Approved
                         </th>
+                        <th className="px-4 py-2 font-medium" title="Customer KYC lists the dealers this person owns">
+                            Sales person
+                        </th>
                         <th className="px-4 py-2 font-medium">Status</th>
                         <th className="px-4 py-2" />
                     </tr>
@@ -123,6 +150,28 @@ export function OperatorTable({
                             </td>
                             <td className="px-4 py-2.5 text-right tabular-nums">
                                 {op.counts.approved}
+                            </td>
+                            <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
+                                {canWrite ? (
+                                    <select
+                                        className="max-w-[12rem] rounded border border-border bg-surface px-2 py-1 text-xs"
+                                        value={op.userId ?? ""}
+                                        disabled={busyId === op.id}
+                                        onChange={(e) => void setSalesPerson(op, e.target.value)}
+                                    >
+                                        <option value="">— not linked —</option>
+                                        {staff.map((s) => (
+                                            <option key={s.id} value={s.id}>
+                                                {s.name}
+                                                {s.role ? ` (${s.role})` : ""}
+                                            </option>
+                                        ))}
+                                    </select>
+                                ) : (
+                                    <span className="text-xs text-ink-muted">
+                                        {staff.find((s) => s.id === op.userId)?.name ?? "—"}
+                                    </span>
+                                )}
                             </td>
                             <td className="px-4 py-2.5">
                                 <span

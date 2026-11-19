@@ -54,6 +54,7 @@ import {
   bajajCardText,
 } from "@/lib/leads/bajaj-fallback-text";
 import type { ExternalLenderId } from "@/lib/leads/bajaj-fallback-text";
+import DealerCheckBanner from "@/components/leads/DealerCheckBanner";
 
 // BRD V2 Part E §2.2 — Step 4 Product Selection (dealer side)
 //
@@ -694,6 +695,10 @@ export default function ProductSelectionPage() {
         )}
 
         <ErrorBanner message={error} onDismiss={() => setError(null)} />
+        {/* E-390: dealer-assignment check (initiator re-picks after a rejection). */}
+        <div className="mb-6 empty:hidden">
+          <DealerCheckBanner leadId={leadId} />
+        </div>
 
         {access.readOnly && (
           <div className="mb-6 flex items-start gap-3 px-5 py-4 rounded-2xl bg-blue-50 border border-blue-200 text-sm text-blue-900">

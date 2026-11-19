@@ -106,6 +106,7 @@ import {
 } from "./session-store";
 import type { InboundEvent, ListRow, ReplyButton } from "./types";
 import { oneLine } from "./window";
+import { nbfcRoutingBlock } from "@/lib/leads/dealer-assignment";
 
 /** "Up to how much loan do you want?" */
 export const DC_S4_AMT = "DC_S4_AMT";
@@ -259,6 +260,8 @@ export async function pushStep4ToWhatsApp(leadId: string): Promise<void> {
   if (!lead) return;
   if (String(lead.payment_method || "").toLowerCase() !== "finance") return;
   if (!STEP4_UNLOCKED_STATUSES.has(String(lead.kyc_status))) return;
+  // E-390 — wait for the iTarang admin's dealer check; approving it re-sends this.
+  if (await nbfcRoutingBlock(leadId)) return;
 
   await pushToLead(leadId, (t) => {
     const dealerSide = t.audience === "dealer";
@@ -473,6 +476,14 @@ async function onStep4Start(
         : "Your KYC verification isn't complete yet. We'll message you here the moment it is.",
     );
     return;
+  }
+  {
+    // E-390 — the dealer on the file is waiting for the iTarang admin.
+    const blocked = await nbfcRoutingBlock(leadId);
+    if (blocked) {
+      await reply(session, `⏳ ${blocked} We'll message you here as soon as it's done.`);
+      return;
+    }
   }
 
   await patchLeadSub(session.id, "s4", {

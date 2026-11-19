@@ -634,6 +634,13 @@ const ROLE_TRAILING_SECTIONS: Record<string, any[]> = {
           icon: UserPlus,
           href: "/admin/house-team-logins",
         },
+        {
+          // E-390 — Battery Pool diagram 1: the iTarang Admin dealer-assignment check.
+          id: "dealer-checks",
+          label: "Dealer checks",
+          icon: UserCheck,
+          href: "/admin/dealer-checks",
+        },
       ],
     },
   ],
@@ -1807,6 +1814,13 @@ const roleNavigation: Record<string, any[]> = {
           label: "House team logins",
           icon: UserPlus,
           href: "/admin/house-team-logins",
+        },
+        {
+          // E-390 — Battery Pool diagram 1: the iTarang Admin dealer-assignment check.
+          id: "dealer-checks",
+          label: "Dealer checks",
+          icon: UserCheck,
+          href: "/admin/dealer-checks",
         },
       ],
     },

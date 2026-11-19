@@ -149,6 +149,10 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "lead.reinquiry": "Leads",
   // 14 Oct — a customer file pushed between the iTarang house dealer and a dealer.
   "lead.pushed_to_dealer": "Leads",
+  // E-390 — iTarang Admin dealer-assignment check (Battery Pool diagram 1).
+  "lead.dealer_check_pending": "Leads",
+  "lead.dealer_check_approved": "Leads",
+  "lead.dealer_check_rejected": "Leads",
   "lead.dealer_progress": "Leads",
   // ID 33 / 183 (16 Oct) — the dealer a file was moved away from; iTarang
   // worked the dealer's file for him ("Done by <name> for <dealer>").
@@ -495,6 +499,7 @@ const WARNING = new Set([
   "lead.callback_overdue",
   // 14 Oct — a file iTarang pushed is waiting on the dealer to continue it.
   "lead.pushed_to_dealer",
+  "lead.dealer_check_pending",
   // Store R-15 — the customer is waiting for a call and the file for a dealer.
   "lead.online_store_finance",
   // ID 171 — someone has to drop the invoices into Drive / import the register.

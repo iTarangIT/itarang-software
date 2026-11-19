@@ -221,5 +221,16 @@ export const POST = withErrorHandler(async (req: Request, { params }: { params: 
   const { notifyDealerOfPushedLead } = await import("@/lib/whatsapp/pushedLeadNotice");
   await notifyDealerOfPushedLead(lead.id, { reason, fromDealerId: lead.dealerId });
 
+  // E-390 — Battery Pool diagram 1: a dealer the iTarang House admin assigned
+  // goes to the iTarang admin's dealer check before any lender. Best-effort.
+  const { openDealerReview } = await import("@/lib/leads/dealer-assignment");
+  await openDealerReview({
+    leadId: lead.id,
+    dealerId: target.dealerId,
+    reasonKind: "house_push",
+    channel: "web",
+    initiator: { userId: user.id, name: user.name ?? null },
+  });
+
   return successResponse({ dealer: { dealerId: target.dealerId, name: target.name }, history: await pushHistory(lead.id) });
 });

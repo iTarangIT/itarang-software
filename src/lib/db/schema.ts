@@ -14118,3 +14118,53 @@ export const onlineStoreFinanceLeads = pgTable(
     createdIdx: index("online_store_finance_leads_created_idx").on(t.created_at),
   }),
 );
+
+// E-390 — Battery Pool diagram 1: iTarang Admin checks an "uncertain" dealer
+// assignment before the file can be routed to an NBFC. While a check is open
+// the lead carries assignment_status = 'pending_verification' (or
+// 'dealer_rejected' after a rejection). One row per check.
+export const leadDealerReviews = pgTable(
+  "lead_dealer_reviews",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    lead_id: varchar("lead_id", { length: 50 }).notNull(),
+    dealer_id: varchar("dealer_id", { length: 255 }).notNull(),
+    // multi_pick | single_owned | manual_pick | house_push | dealer_salesperson | resubmit
+    reason_kind: varchar("reason_kind", { length: 24 }).notNull(),
+    candidates: jsonb("candidates")
+      .$type<Array<{ dealerId: string; name: string }>>()
+      .default(sql`'[]'::jsonb`)
+      .notNull(),
+    channel: varchar("channel", { length: 12 }).default("web").notNull(),
+    initiated_by_user_id: uuid("initiated_by_user_id"),
+    initiated_by_name: text("initiated_by_name"),
+    initiator_wa_phone: varchar("initiator_wa_phone", { length: 20 }),
+    // pending | approved | changed | rejected
+    status: varchar("status", { length: 16 }).default("pending").notNull(),
+    decided_by: uuid("decided_by"),
+    decided_at: timestamp("decided_at", { withTimezone: true }),
+    decision_reason: text("decision_reason"),
+    final_dealer_id: varchar("final_dealer_id", { length: 255 }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    leadIdx: index("lead_dealer_reviews_lead_idx").on(t.lead_id, t.created_at),
+    statusIdx: index("lead_dealer_reviews_status_idx").on(t.status, t.created_at),
+  }),
+);
+
+// E-390 — which iTarang sales person uses an iTarang House team login (ID 182),
+// so CRM Step 1 can offer the dealers he owns (account_ownership).
+export const houseLoginStaffLinks = pgTable(
+  "house_login_staff_links",
+  {
+    login_user_id: uuid("login_user_id").primaryKey().notNull(),
+    staff_user_id: uuid("staff_user_id").notNull(),
+    updated_by: uuid("updated_by"),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    staffIdx: index("house_login_staff_links_staff_idx").on(t.staff_user_id),
+  }),
+);

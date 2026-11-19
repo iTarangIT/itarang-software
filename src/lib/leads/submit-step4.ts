@@ -91,6 +91,10 @@ export async function submitStep4ProductSelection(opts: {
   if (body.selectedNbfcs && body.selectedNbfcs.length > 1) {
     throw new Error("Only one lending partner may be selected.");
   }
+  // E-390 — an "uncertain" dealer assignment must be approved by the iTarang
+  // admin before the file goes to any lender (web and WhatsApp both land here).
+  const { assertNbfcRoutingAllowed } = await import("./dealer-assignment");
+  await assertNbfcRoutingAllowed(leadId);
 
   const productSelectionId = await generateId("PS");
   const now = new Date();

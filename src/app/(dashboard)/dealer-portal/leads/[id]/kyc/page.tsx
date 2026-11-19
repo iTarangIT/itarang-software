@@ -19,6 +19,7 @@ import AskItarangHelp from '@/components/dealer-portal/lead-wizard/AskItarangHel
 import LeadWorkNote from '@/components/dealer-portal/lead-wizard/LeadWorkNote';
 import KycTimeline from '@/components/kyc/KycTimeline';
 import { onFreshFileClick } from '@/lib/storage/freshFileLink';
+import DealerCheckBanner from '@/components/leads/DealerCheckBanner';
 
 type UploadedDoc = {
     id?: string;
@@ -739,6 +740,10 @@ export default function KYCPage() {
                 />
 
                 <ErrorBanner message={apiError} onDismiss={() => setApiError(null)} />
+                {/* E-390: dealer-assignment check (initiator re-picks after a rejection). */}
+                <div className="mb-4 empty:hidden">
+                    <DealerCheckBanner leadId={leadId} />
+                </div>
 
                 {/* ID 183: the dealer may ask iTarang to work this file for him. */}
                 {/* ID 183 (21 Oct): "being worked by" — and the house login's dealer-wins check. */}

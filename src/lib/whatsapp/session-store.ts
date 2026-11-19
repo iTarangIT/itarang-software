@@ -243,7 +243,16 @@ export type Ctx = {
     /** ID 33: the operator is running a customer KYC (ctx.flow = "customer")
      *  for this onboarded dealer instead of the house dealer. Absent = house.
      *  byUserId / byName are the operator, for the push audit. */
-    customerDealer?: { dealerCode: string; name: string; byUserId: string | null; byName: string };
+    customerDealer?: {
+      dealerCode: string;
+      name: string;
+      byUserId: string | null;
+      byName: string;
+      /** E-390 — how the dealer was chosen, for the iTarang admin's dealer check. */
+      check?: { reasonKind: string; candidates: Array<{ dealerId: string; name: string }>; waPhone: string | null };
+    };
+    /** E-390 — paging cursor of the "your dealers" list (OP_CUST_DEALER_PICK). */
+    dealerPickPage?: number;
     /** ID 33: the "Which dealer is this for?" question was already re-asked
      *  once after an unknown mobile; the next miss falls back to the house. */
     dealerAskRetried?: boolean;
