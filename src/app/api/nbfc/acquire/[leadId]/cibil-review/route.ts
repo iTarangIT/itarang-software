@@ -21,7 +21,7 @@ import {
   getHierarchyContext,
   type GatedStep,
 } from "@/lib/nbfc/approval-hierarchy";
-import { CIBIL_MAX_BYTES, getCibilReviewView, submitCibilReview } from "@/lib/nbfc/cibil-review";
+import { CIBIL_MAX_BYTES, getCibilAwaitingView, getCibilReviewView, submitCibilReview } from "@/lib/nbfc/cibil-review";
 import { getActiveAssignment } from "@/lib/nbfc/vkyc";
 
 export const runtime = "nodejs";
@@ -57,6 +57,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
       ok: true,
       review: await getCibilReviewView(actor.tenant_id, leadId),
       gate_applies: ctx.gateApplies,
+      awaiting: isChild ? null : await getCibilAwaitingView(actor, leadId),
       me: {
         user_id: actor.user_id,
         is_child: isChild,
