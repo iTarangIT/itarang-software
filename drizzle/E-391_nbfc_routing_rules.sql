@@ -1,4 +1,3 @@
--- migration-gate: held
 -- E-391 — Battery Pool diagram 1, part 2: NBFC routing rules (19 Nov 2026).
 --
 -- An admin / sales head sets rules by any mix of dealer, customer state +
