@@ -3,6 +3,7 @@ import {
     callDefects,
     introRestarts,
     isCompleteConversation,
+    readoutHtml,
     readoutLines,
     readoutRow,
     readoutTurnsFromProvider,
@@ -152,5 +153,46 @@ describe("readoutLines", () => {
         expect(lines[0]).toBe("Version: v27 · Change tested: v27 opener");
         expect(lines.some((l) => l.startsWith("2026-11-05") && l.includes("100.0") && l.includes("1 of 2"))).toBe(true);
         expect(lines.some((l) => l.startsWith("Today's defects"))).toBe(true);
+    });
+});
+
+describe("readoutHtml", () => {
+    const row = readoutRow({ day: "2026-11-18", dials: [dial({ l2: "Warm", l3: "Information Collected", rule: "12" })], inbound: { total: 2, answered: 1 } });
+
+    it("is a table with one row per day, not a <pre> block", () => {
+        const older = readoutRow({ day: "2026-11-17", dials: [dial({})], inbound: { total: 0, answered: 0 } });
+        const html = readoutHtml([row, older], { version: "v27", changeTested: "v27 opener" });
+        expect(html).not.toContain("<pre");
+        expect(html).toContain("<table");
+        expect(html.match(/<tr>/g)?.length).toBe(1 + 2 + 4); // header + 2 days + 4 defect rows
+        expect(html).toContain(">18 Nov</td>");
+        expect(html).toContain(">17 Nov</td>");
+        expect(html).toContain("human calls, Wed 18 Nov");
+        expect(html).toContain("100.0");
+        expect(html).toContain("1 of 2");
+        expect(html).toContain("Today's defects");
+        expect(html).toContain("Target: 15 per 100 dials");
+    });
+
+    it("escapes what an admin typed into the version fields", () => {
+        const html = readoutHtml([row], { version: "<b>v28</b>", changeTested: "a & b" });
+        expect(html).toContain("&lt;b&gt;v28&lt;/b&gt;");
+        expect(html).toContain("a &amp; b");
+    });
+
+    it("blank version fields and a day with no dials show dashes", () => {
+        const empty = readoutRow({ day: "2026-11-13", dials: [], inbound: { total: 0, answered: 0 } });
+        const html = readoutHtml([empty], { version: "", changeTested: "" });
+        expect(html).toContain("<b>Version:</b> —");
+        expect(html).toContain(">—</td>");
+    });
+
+    it("leads with ZERO ANSWERED on a day nobody picked up", () => {
+        const silent = readoutRow({
+            day: "2026-11-19",
+            dials: Array.from({ length: 30 }, () => machine("Dead audio (no sound either way)")),
+            inbound: { total: 0, answered: 0 },
+        });
+        expect(readoutHtml([silent], { version: "", changeTested: "" })).toContain("ZERO ANSWERED today");
     });
 });
