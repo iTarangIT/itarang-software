@@ -149,6 +149,32 @@ describe("metricInstructions", () => {
         expect(margin).toMatch(/product_id \/ asset_type/);
         expect(margin).toMatch(/never join vyapar_item_map by item name/);
     });
+
+    it("ID 155: a team is dated — members count only for their days under the manager (effective_to exclusive)", () => {
+        const team = rule(/^Team = /);
+        expect(team).toMatch(/user_reporting_lines/);
+        expect(team).toMatch(/effective_from <= day < effective_to; NULL = open/);
+        expect(team).toMatch(/analyst_staff\.user_id/);
+        expect(metricInstructions("How did Sonu's team do last month?")).toContain(team);
+    });
+
+    it("ID 169: Lost by reason = lost_reason of Lost leads by closed_at, test leads out", () => {
+        const lost = rule(/^Lost by reason/);
+        expect(lost).toMatch(/lead_status 'Lost' with closed_at in the period/);
+        expect(lost).toMatch(/grouped by lost_reason/);
+        expect(lost).toMatch(/'test_lead' left out/);
+        expect(metricInstructions("Leads lost by reason this month")).toContain(lost);
+    });
+
+    it("ID 189: the final target follows finalTargetSql (CEO target + stretch), pushed / accepted, custom metrics by manual_actual", () => {
+        const t = rule(/^Targets = /);
+        expect(t).toMatch(/status 'pushed' or 'accepted'/);
+        expect(t).toMatch(/ceo_target \+ GREATEST\(COALESCE\(admin_addon, 0\), 0\)/);
+        expect(t).toMatch(/ignore sales_head_target/);
+        expect(t).toMatch(/company % of target uses ceo_target only/);
+        expect(t).toMatch(/custom_\* metrics use manual_actual/);
+        expect(metricInstructions("Each ASM against target this month")).toContain(t);
+    });
 });
 
 describe("stripMetricRules (runs asked before 13 Nov)", () => {

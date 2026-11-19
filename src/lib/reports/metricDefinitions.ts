@@ -300,16 +300,24 @@ export const ANALYST_RULES: ReadonlyArray<{ topics: readonly AnalystTopic[]; tex
     {
         topics: ["people"],
         text:
-            "Targets = sales_targets rows with status 'pushed' or 'accepted'; a person's target = ceo_target + admin_addon (the Sales Head stretch; " +
-            "ignore sales_head_target); company % of target uses ceo_target only; custom_* metrics use manual_actual.",
+            "Targets = sales_targets rows with status 'pushed' or 'accepted'; a person's target = ceo_target + GREATEST(COALESCE(admin_addon, 0), 0) " +
+            "(admin_addon is the Sales Head stretch; ignore sales_head_target and the draft_/next_ columns); " +
+            "company % of target uses ceo_target only, over status 'pending_approval', 'pushed', 'accepted' or 'rejected' (never 'draft'); " +
+            "custom_* metrics use manual_actual.",
     },
     { topics: ["won", "leads"], text: "A Lost to Lost history row is a reason change, not a loss." },
     // ID 169 (22 Oct) — as the Lost report (src/lib/admin/reports.ts): lost_reason is a fixed code.
-    { topics: ["won"], text: "Lost by reason = dealer_leads.lead_status 'Lost' grouped by lost_reason, dated by closed_at." },
+    // lost_reason is granted to analyst_ro (KEPT in scripts/_create-analyst-readonly-role.mjs); lost_reason_notes is not.
+    {
+        topics: ["won"],
+        text: "Lost by reason = dealer_leads.lead_status 'Lost' with closed_at in the period, grouped by lost_reason (NULL = unspecified; 'test_lead' left out).",
+    },
     // ID 155 — dated teams, as the Performance page (teamPerformance.ts teamStints / teamWindows).
     {
         topics: ["people"],
-        text: "Team = the manager + user_reporting_lines members on each day (effective_from <= day < effective_to; NULL = open).",
+        text:
+            "Team = the manager + user_reporting_lines members on each day (effective_from <= day < effective_to; NULL = open): " +
+            "a member's numbers count only for those days; user_id / manager_id::text = analyst_staff.user_id.",
     },
     // ID 185 — Fresh / Repeat / New to iTarang, as salesDashboard.ts queryTotals (fv / rv) counts them.
     // Topic "visits" only: a people question not about visits should not spend its room here.

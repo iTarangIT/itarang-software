@@ -206,17 +206,20 @@ export function fileLinkTooLong(
 
 /**
  * The life a new link to bucket/key gets: what the caller asked for, but never
- * more than 15 minutes for a customer KYC file (ID 166), whoever signs it.
+ * more than 15 minutes, for ANY file, whoever signs it (ID 166, 19 Nov). The
+ * file routes refuse every link that expires further out (fileLinkTooLong), so
+ * a longer link would only be a link that never opens. bucket/key are kept so
+ * callers do not change.
  */
-export function linkTtl(bucket: string, key: string, ttlSeconds: number): number {
-    return isShortLinkFile(bucket, key) ? Math.min(ttlSeconds, FRESH_LINK_TTL_SECONDS) : ttlSeconds;
+export function linkTtl(_bucket: string, _key: string, ttlSeconds: number): number {
+    return Math.min(ttlSeconds, FRESH_LINK_TTL_SECONDS);
 }
 
 /**
- * Files whose links never live longer than 15 minutes, whoever signs them:
- * customer KYC, and the NBFC store's identity files (field visit photos,
- * video KYC, signer ID papers, per-lead files). Onboarding papers are logged
- * but keep their 7-day form link (ID 119).
+ * Identity files (customer KYC, and the NBFC store's field visit photos,
+ * video KYC, signer ID papers, per-lead files). Since 19 Nov every link is
+ * capped at 15 minutes (linkTtl), so this only classifies; it no longer
+ * changes a link's life.
  */
 export function isShortLinkFile(bucket: string, key: string): boolean {
     const kind = classifyFile(bucket, key);
