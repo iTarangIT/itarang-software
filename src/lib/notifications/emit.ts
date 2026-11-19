@@ -20,7 +20,7 @@
  * and `emit()` itself never throws. Callers may still wrap it; they don't have
  * to.
  */
-import { and, eq, isNotNull, sql, type SQL } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, sql, type SQL } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import {
@@ -33,6 +33,7 @@ import {
   users,
 } from "@/lib/db/schema";
 import { sendEmail } from "@/lib/email/mailer";
+import { CHILD_DEFAULT_NAV, cleanAllowedNav, isNavAllowed, navIdForPath } from "@/lib/nbfc/portal-nav";
 import { blockedDashboardsFor } from "@/lib/notifications/access";
 import { resolveEmailChannel } from "@/lib/notifications/catalog";
 import { emailOverrideFor } from "@/lib/notifications/email-access";
@@ -305,6 +306,38 @@ async function resolve(audience: Audience): Promise<ResolvedTarget[]> {
   }
 }
 
+/**
+ * E-388 — an NBFC login only hears about pages its NBFC admin opened for it.
+ * When this copy deep-links into an NBFC portal menu (/nbfc/acquire/...,
+ * /nbfc/risk, ...), seats whose allowed_nav does not include that menu are
+ * dropped — a Credit Verifier with only "Acquire" gets the Acquire file
+ * events, not Risk Alerts or Recovery. Ticking the menu in Settings -> Users
+ * turns those notifications on from the next event. Rows with no href, or an
+ * href outside the NBFC menus, are not filtered. Non-NBFC logins pass through.
+ */
+async function filterByNbfcMenus(targets: ResolvedTarget[], href: string | null | undefined): Promise<ResolvedTarget[]> {
+  if (!href || !href.startsWith("/nbfc/") || targets.length === 0) return targets;
+  const navId = navIdForPath(href.split(/[?#]/)[0]);
+  if (!navId) return targets;
+  const rows = await db
+    .select({
+      user_id: nbfcUsers.user_id,
+      tenant_id: nbfcUsers.tenant_id,
+      parent: nbfcUsers.parent_user_id,
+      nav: nbfcUsers.allowed_nav,
+    })
+    .from(nbfcUsers)
+    .where(inArray(nbfcUsers.user_id, targets.map((t) => t.userId)));
+  if (rows.length === 0) return targets;
+  return targets.filter((t) => {
+    const mine = rows.filter((r) => r.user_id === t.userId);
+    if (mine.length === 0) return true; // not an NBFC seat
+    const m = (t.tenantId && mine.find((r) => r.tenant_id === t.tenantId)) || mine[0];
+    const allowed = cleanAllowedNav(m.nav ?? null) ?? (m.parent ? [...CHILD_DEFAULT_NAV] : null);
+    return isNavAllowed(allowed, navId);
+  });
+}
+
 /** De-dupe rows for the same person across overlapping audiences. */
 function dedupe(targets: ResolvedTarget[]): ResolvedTarget[] {
   const seen = new Set<string>();
@@ -340,8 +373,9 @@ export async function emit(input: EmitInput): Promise<void> {
 
   for (const recipient of input.to) {
     try {
-      const targets = dedupe(await resolve(recipient.audience)).filter(
-        (t) => !alreadyNotified.has(t.userId),
+      const targets = await filterByNbfcMenus(
+        dedupe(await resolve(recipient.audience)).filter((t) => !alreadyNotified.has(t.userId)),
+        recipient.href,
       );
       if (targets.length === 0) continue;
       // Marked BEFORE the E-231 filter, deliberately, and on the full list. A

@@ -246,6 +246,11 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "nbfc.doc_rejected": "NBFC Requests",
   "nbfc.verdict_raised": "NBFC Requests",
   "nbfc.verdict_responded": "NBFC Requests",
+  // NBFC parent/child CIBIL review (E-387) - credit verifier <-> approver.
+  "nbfc.cibil_submitted": "NBFC Requests",
+  "nbfc.cibil_approved": "NBFC Requests",
+  "nbfc.cibil_rejected": "NBFC Requests",
+  "nbfc.cibil_reminder": "NBFC Requests",
   // Emitted by /api/admin/nbfc-requests/verdicts/[verdictId]/forward. Same
   // story as onboarding_initiated above — real, emitted, and unmapped until
   // E-231.r
@@ -469,6 +474,7 @@ const CRITICAL = new Set([
   "onboarding.rejected",
   "nbfc.doc_rejected",
   "vkyc.rejected",
+  "nbfc.cibil_rejected",
   "enach.failed",
   // E-298 — money the dealer was promised is missing; admin + lender act today.
   "loan.payment_not_received",
@@ -505,6 +511,8 @@ const WARNING = new Set([
   "nbfc.doc_req_direct",
   "nbfc.verdict_raised",
   "fi.requested",
+  "nbfc.cibil_submitted",
+  "nbfc.cibil_reminder",
   "fi.assigned",
   "fi.reinspection",
   "vkyc.initiated",

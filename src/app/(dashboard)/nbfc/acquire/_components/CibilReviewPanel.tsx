@@ -28,6 +28,13 @@ type Review = {
 type State = {
   review: Review | null;
   gate_applies: boolean;
+  /** Approver view: the credit verifier(s) who should upload the report on this file. */
+  awaiting: {
+    verifiers: Array<{ id: string; name: string }>;
+    assigned_at: string | null;
+    last_reminder_at: string | null;
+    can_remind: boolean;
+  } | null;
   me: {
     user_id: string;
     is_child: boolean;
@@ -65,6 +72,10 @@ export default function CibilReviewPanel({ leadId, closed }: { leadId: string; c
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
+  const [fileName, setFileName] = useState<string | null>(null);
+  const [reminding, setReminding] = useState(false);
+  const [reminder, setReminder] = useState("");
+  const [reminderSent, setReminderSent] = useState<string | null>(null);
 
   const base = `/api/nbfc/acquire/${encodeURIComponent(leadId)}/cibil-review`;
 
@@ -100,9 +111,33 @@ export default function CibilReviewPanel({ leadId, closed }: { leadId: string; c
       if (!res.ok) throw new Error(j.error ?? `HTTP ${res.status}`);
       setNote("");
       setScore("");
+      setFileName(null);
       if (fileRef.current) fileRef.current.value = "";
       await load();
       router.refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message.replace(/^(CONFLICT|BAD_REQUEST|FORBIDDEN): /, "") : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remind() {
+    setBusy(true);
+    setError(null);
+    setReminderSent(null);
+    try {
+      const res = await fetch(`${base}/remind`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ message: reminder.trim() || null }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j.error ?? `HTTP ${res.status}`);
+      setReminding(false);
+      setReminder("");
+      setReminderSent(`Reminder sent to ${(j.sent_to as string[] | undefined)?.join(", ") ?? "the credit verifier"}.`);
+      await load();
     } catch (e) {
       setError(e instanceof Error ? e.message.replace(/^(CONFLICT|BAD_REQUEST|FORBIDDEN): /, "") : String(e));
     } finally {
@@ -142,14 +177,16 @@ export default function CibilReviewPanel({ leadId, closed }: { leadId: string; c
   }
   if (!state) return null;
 
-  const { review, me, gate_applies } = state;
+  const { review, me, gate_applies, awaiting } = state;
+  const waitingOnVerifier = !review && !me.is_child && !!awaiting && awaiting.verifiers.length > 0;
   // Nothing to show for a tenant not using the hierarchy on this lead.
-  if (!review && !me.is_child && !gate_applies) return null;
+  if (!review && !me.is_child && !gate_applies && !waitingOnVerifier) return null;
+  const verifierNames = awaiting?.verifiers.map((v) => v.name).join(", ") ?? "";
 
   const parent = me.parent_name ?? "your approver";
 
   return (
-    <section className="border border-slate-200 rounded-xl bg-white p-5 space-y-3">
+    <section id="cibil-review" className="scroll-mt-24 border border-slate-200 rounded-xl bg-white p-5 space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500">CIBIL review</h2>
@@ -209,6 +246,63 @@ export default function CibilReviewPanel({ leadId, closed }: { leadId: string; c
         </div>
       ) : null}
 
+      {/* Approver view — the credit verifier has not sent the report yet */}
+      {waitingOnVerifier && !closed ? (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 space-y-2">
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div className="text-sm text-amber-900">
+              <p className="font-semibold">
+                CIBIL report not uploaded yet by {verifierNames}
+                {awaiting!.verifiers.length > 1 ? " (credit verifiers)" : " (credit verifier)"}.
+              </p>
+              <p className="text-xs text-amber-800 mt-0.5">
+                File assigned {fmt(awaiting!.assigned_at)}
+                {awaiting!.last_reminder_at ? ` · last reminder sent ${fmt(awaiting!.last_reminder_at)}` : ""}
+              </p>
+            </div>
+            {awaiting!.can_remind && !reminding ? (
+              <button
+                onClick={() => {
+                  setReminding(true);
+                  setReminderSent(null);
+                  setError(null);
+                }}
+                disabled={busy}
+                className="px-3 py-1.5 text-sm font-bold rounded border border-amber-400 bg-white text-amber-900 hover:bg-amber-100 disabled:opacity-50"
+              >
+                Send reminder
+              </button>
+            ) : null}
+          </div>
+          {reminding ? (
+            <div className="space-y-2">
+              <textarea
+                value={reminder}
+                onChange={(e) => setReminder(e.target.value)}
+                disabled={busy}
+                rows={2}
+                maxLength={500}
+                className="w-full border border-amber-300 rounded px-2 py-1.5 text-sm bg-white"
+                placeholder={`Message for ${verifierNames} (optional) — e.g. "CIBIL report for this file is not delivered yet, please upload today."`}
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={remind}
+                  disabled={busy}
+                  className="px-4 py-1.5 text-sm font-bold rounded bg-[color:var(--color-brand-navy)] text-white disabled:opacity-50"
+                >
+                  {busy ? "Sending…" : "Send"}
+                </button>
+                <button onClick={() => setReminding(false)} disabled={busy} className="text-xs text-slate-500 hover:underline">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : null}
+          {reminderSent ? <p className="text-xs text-emerald-700">{reminderSent}</p> : null}
+        </div>
+      ) : null}
+
       {/* Child / sender view */}
       {me.can_submit && !closed ? (
         <div className="rounded-lg border border-dashed border-slate-300 px-4 py-3 space-y-2.5">
@@ -216,10 +310,51 @@ export default function CibilReviewPanel({ leadId, closed }: { leadId: string; c
             {me.is_child ? `Send the CIBIL report to ${parent}` : "Upload the CIBIL report (recorded as approved by you)"}
           </p>
           <div className="flex flex-wrap items-end gap-3">
-            <label className="text-xs text-slate-600">
+            <div className="text-xs text-slate-600">
               <span className="block mb-1 font-bold uppercase tracking-wider text-[10px] text-slate-500">CIBIL report (PDF)</span>
-              <input ref={fileRef} type="file" accept="application/pdf,.pdf" disabled={busy} className="text-xs" />
-            </label>
+              <input
+                ref={fileRef}
+                id={`cibil-file-${leadId}`}
+                type="file"
+                accept="application/pdf,.pdf"
+                disabled={busy}
+                className="sr-only"
+                onChange={(e) => setFileName(e.target.files?.[0]?.name ?? null)}
+              />
+              <div className="flex items-center gap-2">
+                <label
+                  htmlFor={`cibil-file-${leadId}`}
+                  className={`inline-flex items-center gap-1.5 rounded-md border border-[color:var(--color-brand-sky)] bg-sky-50 px-3 py-1.5 text-sm font-semibold text-[color:var(--color-brand-navy)] hover:bg-sky-100 ${
+                    busy ? "pointer-events-none opacity-50" : "cursor-pointer"
+                  }`}
+                >
+                  <svg aria-hidden viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 16V4m0 0l-4 4m4-4l4 4M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2" />
+                  </svg>
+                  {fileName ? "Change PDF" : "Choose PDF"}
+                </label>
+                <span
+                  className={`max-w-[16rem] truncate text-xs ${fileName ? "font-medium text-slate-800" : "text-slate-400"}`}
+                  title={fileName ?? undefined}
+                >
+                  {fileName ?? "No file chosen"}
+                </span>
+                {fileName ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (fileRef.current) fileRef.current.value = "";
+                      setFileName(null);
+                    }}
+                    disabled={busy}
+                    className="text-xs text-slate-400 hover:text-red-600"
+                    aria-label="Remove file"
+                  >
+                    ✕
+                  </button>
+                ) : null}
+              </div>
+            </div>
             <label className="text-xs text-slate-600">
               <span className="block mb-1 font-bold uppercase tracking-wider text-[10px] text-slate-500">Score (optional)</span>
               <input
@@ -229,7 +364,7 @@ export default function CibilReviewPanel({ leadId, closed }: { leadId: string; c
                 value={score}
                 onChange={(e) => setScore(e.target.value)}
                 disabled={busy}
-                className="w-24 border border-slate-300 rounded px-2 py-1 text-sm"
+                className="w-24 border border-slate-300 rounded-md px-2 py-1.5 text-sm"
                 placeholder="e.g. 742"
               />
             </label>
