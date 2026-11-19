@@ -15,7 +15,7 @@ import { hasDialDispositionTables } from "@/lib/ai/storage/dialDisposition";
 import { hasInboundTable } from "../inbound";
 import { getDialerAlertSettings } from "../dialerAlerts";
 import { isZeroAnswerDay } from "../zeroAnswer";
-import { readoutLines, readoutRow, readoutTurnsFromProvider, type ReadoutDial, type ReadoutRow } from "./readout";
+import { readoutHtml, readoutLines, readoutRow, readoutTurnsFromProvider, type ReadoutDial, type ReadoutRow } from "./readout";
 
 function rowsOf<T>(r: unknown): T[] {
     return Array.isArray(r) ? (r as T[]) : ((r as { rows?: T[] }).rows ?? []);
@@ -104,11 +104,12 @@ async function readoutRecipients(): Promise<string[]> {
 export async function runNightlyReadout(now: Date = new Date()): Promise<Record<string, unknown>> {
     const rows = await buildReadout(now, 7);
     const settings = await getDialerAlertSettings();
-    const lines = readoutLines(rows, {
+    const meta = {
         version: settings.agentVersion,
         changeTested: settings.changeTested,
         zeroAnswerMinDials: settings.zeroAnswerMinDials,
-    });
+    };
+    const lines = readoutLines(rows, meta);
     const today = rows[0];
     const to = await readoutRecipients();
     if (to.length === 0) return { rows: rows.length, sent: 0, note: "no recipients" };
@@ -117,12 +118,13 @@ export async function runNightlyReadout(now: Date = new Date()): Promise<Record<
         ? `AI dialer readout ${today.day}: ${today.per100 == null ? "no dials" : `${today.per100.toFixed(1)} complete per 100 dials`}` +
           (isZeroAnswerDay(today, settings.zeroAnswerMinDials) ? " — ZERO ANSWERED" : "")
         : "AI dialer readout";
-    const escape = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    // A real table, not a <pre> block: on a phone the fixed-width lines wrapped
+    // and the columns stopped lining up. The text lines stay as the fallback.
     await sendEmail({
         to,
         subject,
         text: lines.join("\n"),
-        html: `<pre style="font-family:Consolas,Menlo,monospace;font-size:13px">${escape(lines.join("\n"))}</pre>`,
+        html: readoutHtml(rows, meta),
     });
     return {
         rows: rows.length,
