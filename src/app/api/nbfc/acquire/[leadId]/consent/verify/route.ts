@@ -12,6 +12,7 @@ import { z } from "zod";
 
 import { clientError } from "@/lib/nbfc/http-error";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
+import { hierarchyBlock } from "@/lib/nbfc/approval-hierarchy-http";
 import { getActiveAssignment } from "@/lib/nbfc/vkyc";
 import { verifyConsentOtp } from "@/lib/kyc/consent-service";
 
@@ -50,6 +51,9 @@ export async function POST(
     const d = parsed.data;
 
     const actor = await resolveActor(req.headers);
+    // E-387 — parent/child CIBIL approval hierarchy gate.
+    const hierarchyBlocked = await hierarchyBlock(actor, leadId, "kyc");
+    if (hierarchyBlocked) return hierarchyBlocked;
     if (actor.role !== "credit_underwriting" && actor.role !== "nbfc_admin") {
       return NextResponse.json(
         { ok: false, error: `FORBIDDEN: role '${actor.role}' cannot verify consent` },

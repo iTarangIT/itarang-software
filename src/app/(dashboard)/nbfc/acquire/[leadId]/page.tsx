@@ -11,7 +11,10 @@ import {
   nbfcLoanProducts,
   productSelections,
 } from "@/lib/db/schema";
-import { getCurrentTenant } from "@/lib/nbfc/tenant";
+import { getCurrentTenant, getSessionUser } from "@/lib/nbfc/tenant";
+import { decideStep, getHierarchyContext, type GatedStep } from "@/lib/nbfc/approval-hierarchy";
+import CibilReviewPanel from "../_components/CibilReviewPanel";
+import StepLock from "../_components/StepLock";
 import { getFiTrack } from "@/lib/nbfc/fi";
 import { getVkycTrack } from "@/lib/nbfc/vkyc";
 import { evaluateEnachGate } from "@/lib/nbfc/enach";
@@ -244,6 +247,19 @@ export default async function AcquireLeadDetailPage({
   // (the APIs 409) until it is resubmitted.
   const recalled = isLeadRecalled(lead);
 
+  // E-387 — parent/child CIBIL approval hierarchy: which steps this login may
+  // act on. Locked steps stay visible but read-only (StepLock); the API routes
+  // enforce the same rule.
+  const sessionUser = await getSessionUser();
+  const hierarchy = sessionUser
+    ? await getHierarchyContext(tenant.id, sessionUser.id, leadId)
+    : null;
+  const lockReason = (step: GatedStep): string | null => {
+    if (!hierarchy) return null;
+    const d = decideStep(hierarchy, step);
+    return d.ok ? null : d.reason;
+  };
+
   const verificationRequired = fiRequired || vkycRequired;
   const verificationComplete = fiComplete && vkycComplete;
   const verificationFailed = fiFailed || vkycFailed;
@@ -396,13 +412,17 @@ export default async function AcquireLeadDetailPage({
             </>
           }
           actionsExtra={
-            !closed && !won && !lost && !recalled ? <RejectFileButton leadId={leadId} /> : null
+            !closed && !won && !lost && !recalled && !lockReason("reject") ? <RejectFileButton leadId={leadId} /> : null
           }
         />
       ) : null}
       {/* Change 1 & 2 — the NBFC's own per-document verification + the
           correction / additional-document request loop (routes to the admin). */}
-      <NbfcVerificationPanel leadId={leadId} />
+      {/* Holds both per-document verification (kyc) and document requests
+          (docs) — greyed only when neither is open to this login. */}
+      <StepLock reason={lockReason("kyc") && lockReason("docs") ? lockReason("kyc") : null}>
+        <NbfcVerificationPanel leadId={leadId} />
+      </StepLock>
     </div>
   );
 
@@ -490,8 +510,16 @@ export default async function AcquireLeadDetailPage({
       ) : null}
       {won ? (
         <>
-          {fiRequired ? <FiTrackPanel leadId={leadId} /> : null}
-          {vkycRequired ? <VkycTrackPanel leadId={leadId} /> : null}
+          {fiRequired ? (
+            <StepLock reason={lockReason("fi")}>
+              <FiTrackPanel leadId={leadId} />
+            </StepLock>
+          ) : null}
+          {vkycRequired ? (
+            <StepLock reason={lockReason("vkyc")}>
+              <VkycTrackPanel leadId={leadId} />
+            </StepLock>
+          ) : null}
           {verificationComplete ? (
             <GoToStepButton
               stepKey={nextLiveStep("fivkyc")}
@@ -556,7 +584,9 @@ export default async function AcquireLeadDetailPage({
 
   const offerContent = (
     <div className="space-y-4">
-      <OfferPanel leadId={leadId} disabled={recalled} />
+      <StepLock reason={lockReason("offer")}>
+        <OfferPanel leadId={leadId} disabled={recalled} />
+      </StepLock>
       {offerSubmitted && !rejected ? winnerBanner : null}
       {won ? (
         <GoToStepButton
@@ -606,8 +636,16 @@ export default async function AcquireLeadDetailPage({
           Settings → Service Opt-In — handled off-platform.
         </p>
       ) : null}
-      {enachRequired ? <EnachTrackPanel leadId={leadId} /> : null}
-      {agreementRequired ? <AgreementTrackPanel leadId={leadId} /> : null}
+      {enachRequired ? (
+        <StepLock reason={lockReason("enach")}>
+          <EnachTrackPanel leadId={leadId} />
+        </StepLock>
+      ) : null}
+      {agreementRequired ? (
+        <StepLock reason={lockReason("agreement")}>
+          <AgreementTrackPanel leadId={leadId} />
+        </StepLock>
+      ) : null}
       <p className="text-[11px] leading-relaxed text-slate-500 border-t border-slate-100 pt-3">
         <b className="text-slate-600">Agreement &amp; documents (§11).</b>{" "}
         iTarang facilitates and files the sanction letter / loan agreement but is
@@ -619,7 +657,9 @@ export default async function AcquireLeadDetailPage({
   );
 
   const disburseContent = won ? (
-    <SanctionPanel leadId={leadId} />
+    <StepLock reason={lockReason("sanction")}>
+      <SanctionPanel leadId={leadId} />
+    </StepLock>
   ) : (
     <p className="text-sm text-slate-500">
       Disbursal unlocks for the winning lead once the E-NACH mandate and
@@ -889,6 +929,8 @@ export default async function AcquireLeadDetailPage({
           </div>
         </div>
       </header>
+
+      <CibilReviewPanel leadId={leadId} closed={closed || lost || recalled} />
 
       <LeadStageStepper stages={stages} nextAction={nextAction} leadId={leadId} />
 

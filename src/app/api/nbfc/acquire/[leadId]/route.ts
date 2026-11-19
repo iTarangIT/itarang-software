@@ -14,6 +14,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { nbfcLeadAssignments } from "@/lib/db/schema";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
+import { hierarchyBlock } from "@/lib/nbfc/approval-hierarchy-http";
 import { markLeadDeleted } from "@/lib/leads/multi-party-delete";
 
 export const runtime = "nodejs";
@@ -34,6 +35,9 @@ export async function DELETE(
   try {
     const { leadId } = await params;
     const actor = await resolveActor(req.headers);
+    // E-387 — parent/child CIBIL approval hierarchy gate.
+    const hierarchyBlocked = await hierarchyBlock(actor, leadId, "reject");
+    if (hierarchyBlocked) return hierarchyBlocked;
 
     if (actor.role !== "nbfc_admin" && actor.role !== "credit_underwriting") {
       return NextResponse.json(

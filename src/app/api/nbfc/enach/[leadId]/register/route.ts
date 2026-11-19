@@ -22,6 +22,7 @@ import {
   productSelections,
 } from "@/lib/db/schema";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
+import { hierarchyBlock } from "@/lib/nbfc/approval-hierarchy-http";
 import { resolveServiceOptIn } from "@/lib/nbfc/service-opt-in";
 import { generateEnachRef, getWinningAssignment } from "@/lib/nbfc/enach";
 import { assertNotHaltedByFailure } from "@/lib/nbfc/track-gate";
@@ -43,6 +44,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
   try {
     const { leadId } = await params;
     const actor = await resolveActor(req.headers);
+    // E-387 — parent/child CIBIL approval hierarchy gate.
+    const hierarchyBlocked = await hierarchyBlock(actor, leadId, "enach");
+    if (hierarchyBlocked) return hierarchyBlocked;
     if (actor.role !== "operations" && actor.role !== "nbfc_admin") {
       return NextResponse.json(
         { ok: false, error: `FORBIDDEN: role '${actor.role}' cannot trigger E-NACH; operations or nbfc_admin required` },

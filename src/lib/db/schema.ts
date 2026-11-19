@@ -4824,6 +4824,9 @@ export const nbfcTenants = pgTable("nbfc_tenants", {
   rbi_registration_no: varchar("rbi_registration_no", { length: 64 }),
   grievance_url: text("grievance_url"),
   grievance_helpline: varchar("grievance_helpline", { length: 32 }),
+  // E-387 — set ⇒ "CIBIL approval required before any other step" for leads
+  // assigned on/after this time (parent/child approval hierarchy).
+  cibil_review_enabled_at: timestamp("cibil_review_enabled_at", { withTimezone: true }),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -4867,11 +4870,47 @@ export const nbfcUsers = pgTable(
     // nbfc_role_permissions. role still drives the legacy coarse checks.
     role_id: uuid("role_id"),
     notification_prefs: jsonb("notification_prefs").default({}).notNull(),
+    // E-387 — parent/child approval hierarchy. parent_user_id set ⇒ this login
+    // is a CHILD of that user (same tenant): it uploads the CIBIL report and
+    // sends it to the parent for approval. delegated_steps = the post-approval
+    // steps the NBFC admin lets the child act on (src/lib/nbfc/approval-hierarchy.ts).
+    parent_user_id: uuid("parent_user_id"),
+    delegated_steps: jsonb("delegated_steps").$type<string[]>().default([]).notNull(),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
     userTenantIdx: index("nbfc_users_user_tenant_idx").on(table.user_id, table.tenant_id),
     tenantIdx: index("nbfc_users_tenant_idx").on(table.tenant_id),
+  }),
+);
+
+// E-387 — one row per CIBIL submission on an Acquire lead. A child uploads the
+// report + note → status 'pending' for approver_user_id (his parent); the parent
+// (or any nbfc_admin) approves or rejects with a reason. A rejection also
+// declines this NBFC's assignment (same path as "Reject file").
+export const nbfcCibilReviews = pgTable(
+  "nbfc_cibil_reviews",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull().references(() => nbfcTenants.id),
+    lead_id: varchar("lead_id", { length: 50 }).notNull(),
+    assignment_id: uuid("assignment_id").notNull(),
+    submitted_by: uuid("submitted_by").notNull(),
+    approver_user_id: uuid("approver_user_id").notNull(),
+    report_url: text("report_url").notNull(),
+    report_file_name: text("report_file_name"),
+    cibil_score: integer("cibil_score"),
+    note: text("note").notNull(),
+    status: varchar("status", { length: 16 }).default("pending").notNull(),
+    decision_reason: text("decision_reason"),
+    decided_by: uuid("decided_by"),
+    decided_at: timestamp("decided_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    leadIdx: index("nbfc_cibil_reviews_lead_idx").on(table.tenant_id, table.lead_id, table.created_at),
+    approverIdx: index("nbfc_cibil_reviews_approver_idx").on(table.approver_user_id, table.status),
   }),
 );
 

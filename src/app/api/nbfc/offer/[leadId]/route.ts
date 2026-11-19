@@ -19,6 +19,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { dualApprovalRequests, leads, nbfcFinancingOffers, nbfcLeadAssignments, nbfcLoanProducts } from "@/lib/db/schema";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
+import { hierarchyBlock } from "@/lib/nbfc/approval-hierarchy-http";
 import { createDualApprovalRequest, FINANCING_OFFER_DEVIATION_ACTION } from "@/lib/nbfc/dual-approval/service";
 import { computeOfferDeviation, type DeviationResult } from "@/lib/nbfc/offer-deviation";
 import {
@@ -194,6 +195,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
     const d = parsed.data;
 
     const actor = await resolveActor(req.headers);
+    // E-387 — parent/child CIBIL approval hierarchy gate.
+    const hierarchyBlocked = await hierarchyBlock(actor, leadId, "offer");
+    if (hierarchyBlocked) return hierarchyBlocked;
     if (actor.role !== "credit_underwriting" && actor.role !== "nbfc_admin") {
       return NextResponse.json(
         { ok: false, error: `FORBIDDEN: role '${actor.role}' cannot submit a financing offer; credit_underwriting or nbfc_admin required` },

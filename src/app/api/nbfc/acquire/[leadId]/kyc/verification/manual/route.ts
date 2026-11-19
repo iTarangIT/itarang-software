@@ -11,6 +11,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
+import { hierarchyBlock } from "@/lib/nbfc/approval-hierarchy-http";
 import { getActiveAssignment } from "@/lib/nbfc/vkyc";
 import { upsertNbfcVerdict, verdictFromAction } from "@/lib/nbfc/doc-verdict";
 
@@ -25,6 +26,9 @@ export async function POST(
     const { leadId } = await params;
 
     const actor = await resolveActor(req.headers);
+    // E-387 — parent/child CIBIL approval hierarchy gate.
+    const hierarchyBlocked = await hierarchyBlock(actor, leadId, "kyc", "success");
+    if (hierarchyBlocked) return hierarchyBlocked;
     if (actor.role !== "credit_underwriting" && actor.role !== "nbfc_admin") {
       return NextResponse.json(
         { success: false, error: { message: `Role '${actor.role}' cannot verify documents` } },

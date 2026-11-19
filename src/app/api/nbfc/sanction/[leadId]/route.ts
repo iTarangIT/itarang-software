@@ -19,6 +19,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { leads, loanSanctions, nbfc, nbfcFinancingOffers, productSelections } from "@/lib/db/schema";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
+import { hierarchyBlock } from "@/lib/nbfc/approval-hierarchy-http";
 import { getActiveAssignment } from "@/lib/nbfc/vkyc";
 import { evaluateTrackGate } from "@/lib/nbfc/track-gate";
 import { evaluateAgreementGate, type AgreementMethod } from "@/lib/nbfc/agreement";
@@ -115,6 +116,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
   try {
     const { leadId } = await params;
     const actor = await resolveActor(req.headers);
+    // E-387 — parent/child CIBIL approval hierarchy gate.
+    const hierarchyBlocked = await hierarchyBlock(actor, leadId, "sanction");
+    if (hierarchyBlocked) return hierarchyBlocked;
     if (actor.role !== "credit_underwriting" && actor.role !== "nbfc_admin") {
       return NextResponse.json(
         { ok: false, error: `FORBIDDEN: role '${actor.role}' cannot sanction; credit_underwriting or nbfc_admin required` },
