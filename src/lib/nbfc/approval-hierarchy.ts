@@ -17,7 +17,39 @@ import {
   type HierarchyContext,
 } from "./approval-hierarchy-rules";
 
+import {
+  CHILD_DEFAULT_NAV,
+  CHILD_DEFAULT_TITLE,
+  DEFAULT_TITLE,
+  cleanAllowedNav,
+  type NbfcNavId,
+} from "./portal-nav";
+
 export * from "./approval-hierarchy-rules";
+
+/**
+ * E-388 — what the logged-in user sees in the NBFC portal: which sidebar menus
+ * (null ⇒ all) and the designation for the header / profile. A child with no
+ * explicit menu list gets Acquire only; a child with no title is a
+ * "Credit Verifier".
+ */
+export async function getPortalAccess(
+  tenantId: string,
+  userId: string,
+): Promise<{ allowedNav: NbfcNavId[] | null; title: string; isChild: boolean }> {
+  const [m] = await db
+    .select({ parent: nbfcUsers.parent_user_id, nav: nbfcUsers.allowed_nav, title: nbfcUsers.title })
+    .from(nbfcUsers)
+    .where(and(eq(nbfcUsers.user_id, userId), eq(nbfcUsers.tenant_id, tenantId)))
+    .limit(1);
+  const isChild = !!m?.parent;
+  const explicit = cleanAllowedNav(m?.nav ?? null);
+  return {
+    allowedNav: explicit ?? (isChild ? [...CHILD_DEFAULT_NAV] : null),
+    title: m?.title?.trim() || (isChild ? CHILD_DEFAULT_TITLE : DEFAULT_TITLE),
+    isChild,
+  };
+}
 
 export interface CibilReviewRow {
   id: string;

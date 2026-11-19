@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { redirect } from "next/navigation";
-import { getCurrentTenant, getCurrentNbfcRole } from "@/lib/nbfc/tenant";
+import { getCurrentTenant, getCurrentNbfcRole, getSessionUser } from "@/lib/nbfc/tenant";
+import { getPortalAccess } from "@/lib/nbfc/approval-hierarchy";
 import NbfcPortalShell from "@/components/nbfc-portal/NbfcPortalShell";
 
 /**
@@ -22,8 +23,16 @@ export default async function NbfcLayout({ children }: { children: ReactNode }) 
     redirect("/risk-head");
   }
 
+  // E-388 — menus this login may open + the designation in the header.
+  const session = await getSessionUser();
+  const access = session
+    ? await getPortalAccess(tenant.id, session.id)
+    : { allowedNav: null, title: "NBFC Partner" };
+
   return (
     <NbfcPortalShell
+      allowedNav={access.allowedNav}
+      userTitle={access.title}
       tenantName={tenant.display_name}
       activeLoans={tenant.active_loans}
       aumInr={tenant.aum_inr ? Number(tenant.aum_inr) : null}

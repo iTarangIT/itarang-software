@@ -74,6 +74,9 @@ export default async function SettingsPage() {
       // E-387 — parent/child CIBIL approval hierarchy.
       parent_user_id: nbfcUsers.parent_user_id,
       delegated_steps: nbfcUsers.delegated_steps,
+      // E-388 — menus + designation.
+      allowed_nav: nbfcUsers.allowed_nav,
+      title: nbfcUsers.title,
     })
     .from(nbfcUsers)
     .leftJoin(usersTable, eq(usersTable.id, nbfcUsers.user_id))
@@ -184,6 +187,8 @@ export default async function SettingsPage() {
           phone: m.phone ?? null,
           parent_user_id: m.parent_user_id ?? null,
           delegated_steps: Array.isArray(m.delegated_steps) ? m.delegated_steps : [],
+          allowed_nav: Array.isArray(m.allowed_nav) ? m.allowed_nav : null,
+          title: m.title ?? null,
           created_at: m.created_at?.toISOString() ?? null,
         }))}
       />
