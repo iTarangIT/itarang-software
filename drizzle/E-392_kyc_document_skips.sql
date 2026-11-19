@@ -1,4 +1,3 @@
--- migration-gate: held
 -- E-392 — Battery Pool diagram 1, part 3: customer KYC document skips (19 Nov 2026).
 --
 -- The iTarang sales head chooses which customer KYC documents are asked
