@@ -398,6 +398,15 @@ interface CaseData {
   digilocker: DigilockerEntry[];
   supportingDocs: SupportingDoc[];
   coBorrower: CoBorrowerData | CoBorrowerGated | null;
+  // E-392 — customer documents skipped with a reason.
+  skippedDocs?: Array<{
+    docType: string;
+    label: string;
+    reason: string;
+    skippedByName: string | null;
+    channel: string;
+    skippedAt: string;
+  }>;
   // E-247 — a read-only echo of /admin/settings, used to draw the consent
   // timeline and to explain a countdown that is not running.
   kycAutomation?: KycAutomation | null;
@@ -1057,7 +1066,10 @@ export default function CaseReview({ leadId, canRegenerateConsent = true }: Case
     data.coBorrower && "verificationCards" in data.coBorrower
       ? (data.coBorrower.verificationCards as Array<{ type: string; adminAction: string | null }>)
       : [];
+  // E-392 — a skipped RC copy waives the RC verification card.
+  const rcSkipped = (data.skippedDocs ?? []).some((d) => d.docType === "rc_copy");
   for (const t of verifTypes) {
+    if (t === "rc" && rcSkipped) continue;
     const primaryCard = data.verificationCards.find((c) => c.type === t);
     const coBorrowerCard = cbCards.find((c) => c.type === t);
 
@@ -1956,6 +1968,25 @@ export default function CaseReview({ leadId, canRegenerateConsent = true }: Case
                 </div>
               ) : (
                 <p className="text-sm text-gray-400 italic">No primary documents uploaded yet.</p>
+              )}
+              {(data.skippedDocs ?? []).length > 0 && (
+                <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-amber-800 mb-2">
+                    Skipped documents ({data.skippedDocs!.length})
+                  </p>
+                  <ul className="space-y-1.5">
+                    {data.skippedDocs!.map((d) => (
+                      <li key={d.docType} className="text-sm text-amber-900">
+                        <b>{d.label}</b> — {d.reason}
+                        <span className="block text-xs text-amber-700">
+                          {d.skippedByName ?? "—"} · {d.channel === "whatsapp" ? "WhatsApp" : "CRM"} ·{" "}
+                          {new Date(d.skippedAt).toLocaleString("en-IN")}
+                          {d.docType === "rc_copy" ? " · RC verification not needed" : ""}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               )}
             </section>
 

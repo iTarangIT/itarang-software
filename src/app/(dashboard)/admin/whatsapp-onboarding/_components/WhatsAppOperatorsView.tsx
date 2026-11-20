@@ -8,7 +8,7 @@ import { AddOperatorModal } from "./AddOperatorModal";
 import { OperatorTable } from "./OperatorTable";
 import { OperatorPipelinePanel } from "./OperatorPipelinePanel";
 import { TranscriptDrawer } from "./TranscriptDrawer";
-import type { OperatorRow, TranscriptTarget } from "./types";
+import type { OperatorRow, StaffOption, TranscriptTarget } from "./types";
 
 const WRITE_ROLES = new Set(["admin", "sales_head"]);
 
@@ -20,7 +20,7 @@ export function WhatsAppOperatorsView({ viewerRole }: { viewerRole: string }) {
     const [selected, setSelected] = useState<OperatorRow | null>(null);
     const [transcript, setTranscript] = useState<TranscriptTarget | null>(null);
 
-    const query = useQuery<{ success: true; data: { operators: OperatorRow[] } }>({
+    const query = useQuery<{ success: true; data: { operators: OperatorRow[]; staff?: StaffOption[] } }>({
         queryKey: ["admin-whatsapp-operators"],
         queryFn: async () => {
             const res = await fetch("/api/admin/whatsapp-operators", {
@@ -33,6 +33,7 @@ export function WhatsAppOperatorsView({ viewerRole }: { viewerRole: string }) {
     });
 
     const operators = query.data?.data.operators ?? [];
+    const staff = query.data?.data.staff ?? [];
 
     const refresh = () => {
         qc.invalidateQueries({ queryKey: ["admin-whatsapp-operators"] });
@@ -78,6 +79,7 @@ export function WhatsAppOperatorsView({ viewerRole }: { viewerRole: string }) {
                 ) : (
                     <OperatorTable
                         operators={operators}
+                        staff={staff}
                         loading={query.isLoading}
                         canWrite={canWrite}
                         selectedId={selected?.id ?? null}

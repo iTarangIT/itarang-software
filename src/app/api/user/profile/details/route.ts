@@ -89,6 +89,12 @@ export const GET = withErrorHandler(async () => {
     try {
       const tenant = await getCurrentTenant();
       const nbfcRole = await getCurrentNbfcRole(tenant.id);
+      // E-388 — the designation the NBFC admin set (a child defaults to
+      // "Credit Verifier") wins over the system role label.
+      const { getPortalAccess } = await import("@/lib/nbfc/approval-hierarchy");
+      const access = await getPortalAccess(tenant.id, dbUser.id).catch(() => null);
+      const customTitle =
+        access && (access.isChild || access.title !== "NBFC Partner") ? access.title : null;
       return successResponse({
         kind: "nbfc" as const,
         nbfc: {
@@ -97,7 +103,7 @@ export const GET = withErrorHandler(async () => {
           contactEmail: tenant.contact_email ?? null,
           // The REAL job title. users.role is always the flat "nbfc_partner".
           nbfcRole: nbfcRole ?? null,
-          nbfcRoleLabel: nbfcRole ? (NBFC_ROLE_LABELS[nbfcRole] ?? null) : null,
+          nbfcRoleLabel: customTitle ?? (nbfcRole ? (NBFC_ROLE_LABELS[nbfcRole] ?? null) : null),
         },
       });
     } catch (err) {

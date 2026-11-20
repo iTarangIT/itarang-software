@@ -109,25 +109,24 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             docRows.filter((d) => d.file_url).map((d) => d.doc_type),
         );
 
-        // Required doc keys must match the keys persisted by /upload-document
-        // (which mirror FINANCE_DOCUMENTS in the dealer-portal constants).
-        // Address Proof, Bank Statement, and the 4 undated cheques are optional;
-        // the 4 identity documents plus the vehicle RC Copy block submission.
-        const requiredDocTypes = [
-            'aadhaar_front',
-            'aadhaar_back',
-            'pan_card',
-            'passport_photo',
-            'rc_copy',
-        ];
-        const docsAllUploaded = requiredDocTypes.every((t) => uploadedTypes.has(t));
+        // E-392 — the documents the iTarang sales head asks for: Aadhaar
+        // front/back + PAN always, the rest per Settings › Customer KYC
+        // documents. An asked document is met by an upload, or (never for
+        // Aadhaar / PAN) a skip with a reason.
+        const { getCustomerDocConfig, askedDocs, listSkips, docsSatisfied } = await import('@/lib/kyc/customer-doc-config');
+        const [docConfig, docSkips] = await Promise.all([getCustomerDocConfig(), listSkips(leadId)]);
+        const docsAllUploaded = docsSatisfied({
+            asked: askedDocs(docConfig),
+            uploaded: uploadedTypes,
+            skipped: docSkips.map((s) => s.docType),
+        });
 
         const couponReserved = (lead[0].coupon_status || '').toLowerCase() === 'reserved';
 
         if (!consentAdminVerified || !docsAllUploaded || !couponReserved) {
             const missing: string[] = [];
             if (!consentAdminVerified) missing.push('consent must be admin-verified before submission');
-            if (!docsAllUploaded) missing.push('all required documents must be uploaded');
+            if (!docsAllUploaded) missing.push('every asked document must be uploaded or skipped with a reason (Aadhaar and PAN cannot be skipped)');
             if (!couponReserved) missing.push('coupon must be validated');
             return NextResponse.json(
                 {

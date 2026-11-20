@@ -45,7 +45,15 @@ import {
   startOperatorCustomerFlow,
 } from "./orchestrator";
 import { loadApplication, resolveHouseDealer, resolvePushedCustomerDealer } from "./customer-lead";
-import { findActiveDealerByMobile } from "@/lib/leads/dealerByMobile";
+import { findActiveDealerByMobile, type PushTargetDealer } from "@/lib/leads/dealerByMobile";
+import {
+  DealerCheckError,
+  eligibleDealersForStaff,
+  kindForSalespersonPick,
+  parseDealerFixRowId,
+  pickOutcome,
+  resubmitDealer,
+} from "@/lib/leads/dealer-assignment";
 import {
   NO_ACTIVE_DEALER_MESSAGE,
   OPERATOR_DEALER_SKIP_ID,
@@ -147,6 +155,11 @@ export async function runOperatorTurn(
     const text = (event.text ?? "").trim();
     const isEscape = event.type === "text" && OP_ESCAPE.test(text);
 
+    // E-390 — the operator tapped a dealer in the "admin rejected the dealer"
+    // message. Works from any state: it answers that message, not the menu.
+    const fix = parseDealerFixRowId(text);
+    if (fix) return await onDealerFix(hub, operator, fix);
+
     // The operator is browsing their OWN dealer console (only possible when
     // their number is also an approved dealer). Hand the message straight over,
     // and let an escape word bring them back to the operator menu.
@@ -174,6 +187,8 @@ export async function runOperatorTurn(
         return await onMenuChoice(hub, event, operator);
       case "OP_CUST_DEALER":
         return await onCustomerDealer(hub, event, operator);
+      case "OP_CUST_DEALER_PICK":
+        return await onCustomerDealerPick(hub, event, operator);
       case "OP_NEW_PHONE":
         return await onNewDealerPhone(hub, event, operator);
       case "OP_NEW_NAME":
@@ -270,7 +285,7 @@ async function onMenuChoice(
   }
 
   if (choice === "op_customer_kyc" || /^(customer|kyc)$/.test(choice)) {
-    return await askCustomerDealer(hub);
+    return await askCustomerDealer(hub, operator);
   }
 
   if (choice === "op_my_console") {
@@ -324,15 +339,166 @@ const CUSTOMER_DEALER_QUESTION =
 
 const SKIP_BUTTON = [{ id: OPERATOR_DEALER_SKIP_ID, title: "Skip" }];
 
-async function askCustomerDealer(hub: SessionRow): Promise<void> {
+async function askCustomerDealer(hub: SessionRow, operator?: WhatsAppOperator): Promise<void> {
   await mergeContext(hub, (ctx) => {
     if (ctx.op) {
       ctx.op.customerDealer = undefined;
       ctx.op.dealerAskRetried = false;
+      ctx.op.dealerPickPage = 0;
     }
   });
+
+  // E-390 — Battery Pool diagram 1: the dealers this iTarang salesperson owns
+  // (Account ownership). One → tagged automatically; several → pick from a
+  // list; none (or no sales person linked to this number) → ask for a mobile.
+  if (operator) {
+    const owned = await eligibleDealersForStaff(operator.userId).catch(() => [] as PushTargetDealer[]);
+    const outcome = pickOutcome(owned.length);
+    if (outcome === "auto") {
+      return await startWithCustomerDealer(hub, operator, owned[0], {
+        reasonKind: kindForSalespersonPick({ eligibleCount: 1, pickedFromOwned: true }),
+        candidates: owned,
+        note: `🏪 Tagged to *${owned[0].name}* — the dealer you look after. The iTarang admin confirms the dealer before the file goes to a lender.`,
+      });
+    }
+    if (outcome === "pick") return await showCustomerDealerPick(hub, owned, 0);
+  }
+
   await setSession(hub.id, { current_state: "OP_CUST_DEALER" });
   return await reply(await loadSession(hub.id), CUSTOMER_DEALER_QUESTION, SKIP_BUTTON);
+}
+
+const DEALER_PICK_PAGE = 7;
+const PICK_MOBILE_ID = "opdl_mobile";
+const PICK_MORE_ID = "opdl_more";
+
+/** E-390 — "Which dealer is this for?" as a list of the dealers the operator owns (or a shared number matches). */
+async function showCustomerDealerPick(hub: SessionRow, dealers: PushTargetDealer[], page: number): Promise<void> {
+  const start = page * DEALER_PICK_PAGE;
+  const slice = dealers.slice(start, start + DEALER_PICK_PAGE);
+  if (!slice.length && page > 0) return await showCustomerDealerPick(hub, dealers, 0);
+  const rows: ListRow[] = slice.map((d) => ({
+    id: `opdl_${d.dealerId}`,
+    title: truncate(d.name, 24),
+    description: d.financeEnabled ? "Finance + cash" : "Cash only",
+  }));
+  if (start + DEALER_PICK_PAGE < dealers.length) rows.push({ id: PICK_MORE_ID, title: "➡️ More", description: "Next page" });
+  rows.push({ id: PICK_MOBILE_ID, title: "📱 Other dealer", description: "Type the dealer's mobile" });
+  rows.push({ id: OPERATOR_DEALER_SKIP_ID, title: "⏭️ Skip", description: "Keep with iTarang House" });
+  await mergeContext(hub, (ctx) => {
+    if (ctx.op) ctx.op.dealerPickPage = page;
+  });
+  await setSession(hub.id, { current_state: "OP_CUST_DEALER_PICK" });
+  await replyList(
+    await loadSession(hub.id),
+    "👤 *Customer KYC*\n\nWhich dealer is this customer for? Pick one of your dealers.",
+    "Pick dealer",
+    rows,
+  );
+}
+
+async function onCustomerDealerPick(hub: SessionRow, event: InboundEvent, operator: WhatsAppOperator): Promise<void> {
+  const choice = (event.text ?? "").trim();
+  const ctx = (hub.context ?? {}) as Ctx;
+  const owned = await eligibleDealersForStaff(operator.userId).catch(() => [] as PushTargetDealer[]);
+
+  if (choice === PICK_MORE_ID) return await showCustomerDealerPick(hub, owned, (ctx.op?.dealerPickPage ?? 0) + 1);
+  if (choice === PICK_MOBILE_ID) {
+    await setSession(hub.id, { current_state: "OP_CUST_DEALER" });
+    return await reply(await loadSession(hub.id), "Send the dealer's 10-digit mobile, or Skip.", SKIP_BUTTON);
+  }
+  if (choice === OPERATOR_DEALER_SKIP_ID) {
+    await setSession(hub.id, { current_state: "OP_CUST_DEALER" });
+    return await onCustomerDealer(await loadSession(hub.id), event, operator);
+  }
+  if (choice.startsWith("opdl_")) {
+    const code = choice.slice("opdl_".length);
+    const fromOwned = owned.find((d) => d.dealerId === code);
+    // A shared-number list (ambiguous mobile) is not "owned" — re-resolve it.
+    const target = fromOwned ?? (await findDealerForPick(code));
+    if (target) {
+      return await startWithCustomerDealer(hub, operator, target, {
+        reasonKind: kindForSalespersonPick({ eligibleCount: owned.length, pickedFromOwned: !!fromOwned }),
+        candidates: fromOwned ? owned : [],
+      });
+    }
+  }
+  // Anything else: show the list again.
+  if (owned.length) return await showCustomerDealerPick(hub, owned, ctx.op?.dealerPickPage ?? 0);
+  return await askCustomerDealer(hub);
+}
+
+async function findDealerForPick(code: string): Promise<PushTargetDealer | null> {
+  const { findActiveDealerById } = await import("@/lib/leads/dealerByMobile");
+  return await findActiveDealerById(code);
+}
+
+/** Start the customer KYC under the chosen dealer, flagged for the admin's dealer check. */
+async function startWithCustomerDealer(
+  hub: SessionRow,
+  operator: WhatsAppOperator,
+  target: PushTargetDealer,
+  check: { reasonKind: string; candidates: PushTargetDealer[]; note?: string },
+): Promise<void> {
+  const picked = {
+    dealerCode: target.dealerId,
+    name: target.name,
+    byUserId: operator.userId,
+    byName: operator.displayName,
+    check: {
+      reasonKind: check.reasonKind,
+      candidates: check.candidates.map((d) => ({ dealerId: d.dealerId, name: d.name })),
+      waPhone: hub.wa_phone ?? null,
+    },
+  };
+  const dealer = await resolvePushedCustomerDealer(picked);
+  if (!dealer) {
+    await reply(hub, `Sorry, ${target.name} can't take this customer right now. Send another dealer's mobile, or Skip.`, SKIP_BUTTON);
+    await setSession(hub.id, { current_state: "OP_CUST_DEALER" });
+    return;
+  }
+  await mergeContext(hub, (c) => {
+    c.op = { ...(c.op ?? { operatorId: operator.id }), customerDealer: picked, dealerAskRetried: undefined };
+  });
+  if (check.note) await reply(hub, check.note);
+  if (!dealer.financeEnabled) {
+    await reply(hub, `ℹ️ ${dealer.dealerName} is not enabled for finance leads — only *cash* is offered for this customer.`);
+  }
+  return await startOperatorCustomerFlow(await loadSession(hub.id), dealer);
+}
+
+/** E-390 — the operator re-picks the dealer after the iTarang admin rejected it. */
+async function onDealerFix(
+  hub: SessionRow,
+  operator: WhatsAppOperator,
+  fix: { reviewId: string; dealerId: string },
+): Promise<void> {
+  const { leadDealerReviews } = await import("@/lib/db/schema");
+  const [review] = await db
+    .select({ lead_id: leadDealerReviews.lead_id, initiator: leadDealerReviews.initiator_wa_phone })
+    .from(leadDealerReviews)
+    .where(eq(leadDealerReviews.id, fix.reviewId))
+    .limit(1);
+  // Only the operator who started the file may answer for it.
+  if (!review || review.initiator !== hub.wa_phone) {
+    return await reply(hub, "That dealer list isn't for you, or it is out of date.");
+  }
+  try {
+    const r = await resubmitDealer({
+      leadId: review.lead_id,
+      dealerId: fix.dealerId,
+      reviewId: fix.reviewId,
+      channel: "whatsapp",
+      initiator: { userId: operator.userId, name: operator.displayName, waPhone: hub.wa_phone ?? null },
+    });
+    return await reply(
+      hub,
+      `✅ Sent back to the iTarang admin with *${r.dealer.name}*. We'll tell you here once it's confirmed.`,
+    );
+  } catch (err) {
+    const msg = err instanceof DealerCheckError ? err.message : "Sorry, that didn't go through — try again in a moment.";
+    return await reply(hub, msg);
+  }
 }
 
 /**
@@ -352,22 +518,20 @@ async function onCustomerDealer(
   if (answer.kind === "mobile") {
     const found = await findActiveDealerByMobile(answer.mobile);
     if (found.status === "found") {
-      const picked = {
-        dealerCode: found.dealer.dealerId,
-        name: found.dealer.name,
-        byUserId: operator.userId,
-        byName: operator.displayName,
-      };
-      const dealer = await resolvePushedCustomerDealer(picked);
-      if (dealer) {
-        await mergeContext(hub, (c) => {
-          c.op = { ...(c.op ?? { operatorId: operator.id }), customerDealer: picked, dealerAskRetried: undefined };
-        });
-        if (!dealer.financeEnabled) {
-          await reply(hub, `ℹ️ ${dealer.dealerName} is not enabled for finance leads — only *cash* is offered for this customer.`);
-        }
-        return await startOperatorCustomerFlow(await loadSession(hub.id), dealer);
-      }
+      // E-390 — a dealer named by mobile goes to the admin's dealer check.
+      const owned = await eligibleDealersForStaff(operator.userId).catch(() => [] as PushTargetDealer[]);
+      return await startWithCustomerDealer(hub, operator, found.dealer, {
+        reasonKind: kindForSalespersonPick({
+          eligibleCount: owned.length,
+          pickedFromOwned: owned.some((d) => d.dealerId === found.dealer.dealerId),
+        }),
+        candidates: owned,
+      });
+    }
+    // E-390 — one number, several dealers: let the operator pick instead of failing.
+    if (found.status === "ambiguous" && found.candidates.length) {
+      await reply(hub, "That mobile belongs to more than one dealer — pick the right one.");
+      return await showCustomerDealerPick(hub, found.candidates, 0);
     }
   }
 

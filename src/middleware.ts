@@ -38,6 +38,16 @@ function addNoStoreHeaders(response: NextResponse): NextResponse {
 }
 
 export async function middleware(request: NextRequest) {
+  // E-388 — the NBFC portal page guard (src/app/(dashboard)/nbfc/template.tsx)
+  // needs the path being rendered; server components cannot read it otherwise.
+  // Always overwritten here, so a client-sent value is never trusted.
+  if (request.nextUrl.pathname.startsWith("/nbfc")) {
+    try {
+      request.headers.set("x-nbfc-pathname", request.nextUrl.pathname);
+    } catch {
+      /* read-only headers: the guard then falls back to "allowed" */
+    }
+  }
   // Logout route clears cookies itself and must not pay for getUser() / DB
   // profile lookups — short-circuit before any Supabase calls.
   if (request.nextUrl.pathname === "/api/auth/logout") {

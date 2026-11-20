@@ -1,6 +1,7 @@
 import CaseReview from "@/components/kyc/CaseReview";
 import ProductReviewLinkBanner from "@/components/kyc/ProductReviewLinkBanner";
 import PushToDealerPanel from "@/components/kyc/PushToDealerPanel";
+import DealerCheckBanner from "@/components/leads/DealerCheckBanner";
 import ActForDealerPanel from "@/components/kyc/ActForDealerPanel";
 import KycTimeline from "@/components/kyc/KycTimeline";
 import DealerPaymentChip from "@/components/loans/DealerPaymentChip";
@@ -22,6 +23,10 @@ export default async function CaseReviewPage({
       {/* E-298 — renders only once the loan is disbursed and the dealer was asked. */}
       <div className="mb-3 empty:hidden">
         <DealerPaymentChip leadId={leadId} />
+      </div>
+      {/* E-390: the dealer-assignment check, while it is open or rejected. */}
+      <div className="mb-3 empty:hidden">
+        <DealerCheckBanner leadId={leadId} admin />
       </div>
       {/* ID 33: Push to dealer (Admin / Sales Head) + push history. */}
       <PushToDealerPanel leadId={leadId} />

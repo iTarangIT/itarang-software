@@ -15,10 +15,20 @@ interface Login {
   createdAt: string;
   mustChangePassword: boolean;
   shared: boolean;
+  /** E-390 — the iTarang sales person who uses this login (his owned dealers show at Step 1). */
+  staffUserId: string | null;
+  staffName: string | null;
+}
+
+interface Staff {
+  id: string;
+  name: string;
+  role: string | null;
 }
 
 export default function HouseTeamLogins() {
   const [logins, setLogins] = useState<Login[] | null>(null);
+  const [staff, setStaff] = useState<Staff[]>([]);
   const [houseCode, setHouseCode] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState("");
@@ -33,6 +43,7 @@ export default function HouseTeamLogins() {
       const json = await res.json();
       if (!json.success) throw new Error(json.error?.message || "Could not load the logins");
       setLogins(json.data.logins);
+      setStaff(json.data.staff ?? []);
       setHouseCode(json.data.houseDealerCode);
       setError(null);
     } catch (e) {
@@ -79,6 +90,20 @@ export default function HouseTeamLogins() {
     else await load();
   }
 
+  async function setStaffLink(l: Login, staffUserId: string) {
+    const res = await fetch("/api/admin/house-team-logins", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: l.id, staffUserId: staffUserId || null }),
+    });
+    const json = await res.json().catch(() => null);
+    if (!json?.success) toast.error(json?.error?.message || "Could not link the sales person");
+    else {
+      toast.success(staffUserId ? "Sales person linked" : "Sales person unlinked");
+      await load();
+    }
+  }
+
   return (
     <div className="space-y-5">
       <form onSubmit={create} className="rounded-lg border border-gray-200 bg-white p-4 space-y-3">
@@ -112,6 +137,9 @@ export default function HouseTeamLogins() {
                 <th className="px-4 py-2">Name</th>
                 <th className="px-4 py-2">Email</th>
                 <th className="px-4 py-2">Mobile</th>
+                <th className="px-4 py-2" title="Step 1 lists the dealers this sales person owns (Account ownership)">
+                  Sales person
+                </th>
                 <th className="px-4 py-2">Since</th>
                 <th className="px-4 py-2">Status</th>
                 <th className="px-4 py-2" />
@@ -126,6 +154,21 @@ export default function HouseTeamLogins() {
                   </td>
                   <td className="px-4 py-2">{l.email}</td>
                   <td className="px-4 py-2">{l.phone ?? "—"}</td>
+                  <td className="px-4 py-2">
+                    <select
+                      className="max-w-[14rem] rounded border border-gray-300 px-2 py-1 text-xs"
+                      value={l.staffUserId ?? ""}
+                      onChange={(e) => void setStaffLink(l, e.target.value)}
+                    >
+                      <option value="">— not linked —</option>
+                      {staff.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                          {s.role ? ` (${s.role})` : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
                   <td className="px-4 py-2">{new Date(l.createdAt).toLocaleDateString("en-IN")}</td>
                   <td className="px-4 py-2">{l.isActive ? "Active" : "Off"}</td>
                   <td className="px-4 py-2 text-right">

@@ -13,19 +13,8 @@ type RouteContext = {
     params: Promise<{ leadId: string }>;
 };
 
-const FINANCE_DOCUMENTS = [
-    { key: "aadhaar_front", label: "Aadhaar Front", required: true },
-    { key: "aadhaar_back", label: "Aadhaar Back", required: true },
-    { key: "pan_card", label: "PAN Card", required: true },
-    { key: "passport_photo", label: "Passport Size Photo", required: true },
-    { key: "address_proof", label: "Address Proof", required: false },
-    { key: "rc_copy", label: "RC Copy", required: true },
-    { key: "bank_statement", label: "Bank Statement", required: true },
-    { key: "cheque_1", label: "Undated Cheque 1", required: false },
-    { key: "cheque_2", label: "Undated Cheque 2", required: false },
-    { key: "cheque_3", label: "Undated Cheque 3", required: false },
-    { key: "cheque_4", label: "Undated Cheque 4", required: false },
-] as const;
+// E-392 — the finance document list now comes from Settings › Customer KYC
+// documents (src/lib/kyc/customer-doc-config.ts).
 
 const UPFRONT_DOCUMENTS = [
     { key: "aadhaar_front", label: "Aadhaar Front", required: true },
@@ -111,9 +100,13 @@ export async function POST(_req: NextRequest, { params }: RouteContext) {
             paymentMethod
         );
 
-        const requiredDocs = (isFinance ? FINANCE_DOCUMENTS : UPFRONT_DOCUMENTS)
-            .filter((doc) => doc.required)
-            .map((doc) => doc.key);
+        // E-392 — a finance lead asks what the iTarang sales head configured
+        // (Aadhaar front/back + PAN always); skipped-with-reason counts as met.
+        const docCfg = await import("@/lib/kyc/customer-doc-config");
+        const skippedDocs = isFinance ? (await docCfg.listSkips(leadId)).map((s) => s.docType) : [];
+        const requiredDocs = isFinance
+            ? docCfg.askedDocs(await docCfg.getCustomerDocConfig()).filter((k) => !(docCfg.canSkip(k) && skippedDocs.includes(k)))
+            : UPFRONT_DOCUMENTS.filter((doc) => doc.required).map((doc) => doc.key);
 
         // ---------------------------
         // Load documents

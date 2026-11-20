@@ -29,8 +29,9 @@ import type {
     LeadDetailLead,
     LeadDetailStatusHistory,
     LeadDetailTouchpoint,
-} from "@/lib/inside-sales/types";
+} from "@/lib/inside-sales/types";
 import { onboardingClockSql } from "@/lib/onboarding/clock";
+import { nextBookingJoin } from "@/lib/asm/nextBooking";
 import { dealCardJson } from "@/lib/leads/dealCard";
 import { dealCardLockedBy, parseDealCard } from "@/lib/leads/dealCardRules";
 import { dealCardActualsSql } from "@/lib/leads/dealCardActuals";
@@ -109,13 +110,29 @@ export async function fetchLeadDetailBundle(leadId: string): Promise<LeadDetailB
             to_jsonb(dl) ->> 'won_at' AS won_at,
             (to_jsonb(dl) ->> 'won_without_approved_quote')::boolean AS won_without_approved_quote,
             -- ID 124: shown by Correct GSTIN on a Won lead.
-            dl.gstin
+            dl.gstin,
+            -- ID 246 (lead page header, display only): Last action as ID 244's
+            -- My visits reads it (TEAM_REVIEW_SELECT) ...
+            dl.last_disposition AS last_action,
+            dl.last_worked_at::text AS last_action_at,
+            -- ... the ONE open booking (ID 247, lib/asm/nextBooking.ts) ...
+            (nb.visit_id IS NOT NULL) AS has_open_booking,
+            nb.scheduled_date::text AS next_booking_date,
+            nb.overdue_days AS next_booking_overdue_days,
+            nbv.created_at::text AS next_booking_booked_at,
+            -- ... and the attempts line (visits made, calls made).
+            (SELECT count(*)::int FROM lead_visits v
+              WHERE v.dealer_lead_id = dl.id AND v.visit_status = 'visited') AS visits_done,
+            (SELECT count(*)::int FROM lead_touchpoints t
+              WHERE t.dealer_lead_id = dl.id AND t.touchpoint_type = 'inside_sales_call') AS calls_made
         FROM dealer_leads dl
         LEFT JOIN users owner ON owner.id::text = dl.current_owner_id
         LEFT JOIN users originator ON originator.id::text = dl.originator_id
         LEFT JOIN users closer ON closer.id::text = dl.closing_owner_id
         LEFT JOIN users asm ON asm.id::text = dl.asm_id
         LEFT JOIN dealer_onboarding_applications app ON app.id = dl.dealer_onboarding_application_id
+        ${nextBookingJoin("nb")}
+        LEFT JOIN lead_visits nbv ON nbv.visit_id = nb.visit_id
         WHERE dl.id = ${leadId}
         LIMIT 1
     `);

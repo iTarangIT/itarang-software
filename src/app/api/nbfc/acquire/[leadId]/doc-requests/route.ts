@@ -17,22 +17,14 @@
  * repliable through the [id]/reply route — only new ones are refused.
  */
 import { NextRequest, NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
 import { z } from "zod";
 
-import { db } from "@/lib/db";
-import { leads } from "@/lib/db/schema";
-import { dealerDisplayName } from "@/lib/notifications/emit";
 import { clientError } from "@/lib/nbfc/http-error";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
+import { hierarchyBlock } from "@/lib/nbfc/approval-hierarchy-http";
 import { getActiveAssignment } from "@/lib/nbfc/vkyc";
-import {
-  createNbfcDocRequest,
-  listThreadForLead,
-  NBFC_DOC_STATUS,
-} from "@/lib/nbfc/doc-requests";
-import { notifyAdminsOfNbfcRequest } from "@/lib/nbfc/doc-request-notify";
-import { sendNbfcEventEmail } from "@/lib/nbfc/event-mailer";
+import { listThreadForLead } from "@/lib/nbfc/doc-requests";
+import { raiseNbfcDocRequest } from "@/lib/nbfc/raise-doc-request";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -136,6 +128,9 @@ export async function POST(
     }
 
     const actor = await resolveActor(req.headers);
+    // E-387 — parent/child CIBIL approval hierarchy gate.
+    const hierarchyBlocked = await hierarchyBlock(actor, leadId, "docs");
+    if (hierarchyBlocked) return hierarchyBlocked;
     if (actor.role !== "credit_underwriting" && actor.role !== "nbfc_admin") {
       return NextResponse.json(
         {
@@ -154,70 +149,19 @@ export async function POST(
       );
     }
 
-    const { id } = await createNbfcDocRequest({
+    const { id } = await raiseNbfcDocRequest({
       leadId,
-      assignmentId: assignment.id,
-      nbfcId: assignment.nbfc_id,
+      assignment,
       tenantId: actor.tenant_id,
+      nbfcName: actor.tenant_slug,
+      raisedBy: actor.user_id,
       requestType: d.request_type,
       docFor: d.doc_for,
       targetDocKey: d.target_doc_key ?? null,
       comments: d.comments ?? null,
-      raisedBy: actor.user_id,
-      initialStatus: NBFC_DOC_STATUS.RAISED,
-      requestedItems: d.items?.map((it) => ({
-        doc_label: it.doc_label,
-        reason: it.reason ?? undefined,
-        is_required: it.is_required ?? true,
-      })),
-    });
-
-    // Best-effort: notify + email the admins (act link).
-    await notifyAdminsOfNbfcRequest({
-      leadId,
-      requestId: id,
-      requestType: d.request_type,
-      nbfcName: actor.tenant_slug,
-      comments: d.comments ?? null,
+      items: d.items,
       req,
-    }).catch(() => {});
-
-    // E-276 — confirmation copy to the raising NBFC (+ global monitoring CC).
-    const requestLabel =
-      d.request_type === "correction"
-        ? "Correction request"
-        : d.request_type === "additional_docs"
-          ? "Additional documents request"
-          : d.request_type === "co_borrower"
-            ? "Co-borrower request"
-            : "Document request";
-    (async () => {
-      const [leadRow] = await db
-        .select({
-          full_name: leads.full_name,
-          owner_name: leads.owner_name,
-          dealer_id: leads.dealer_id,
-        })
-        .from(leads)
-        .where(eq(leads.id, leadId))
-        .limit(1);
-      await sendNbfcEventEmail({
-        tenantId: actor.tenant_id,
-        leadId,
-        subject: `iTarang — ${requestLabel} raised for Lead ${leadId}`,
-        eventLabel: `Your ${requestLabel.toLowerCase()} for Lead ${leadId} has been raised and routed to the iTarang admin.`,
-        customerName: leadRow?.full_name ?? leadRow?.owner_name ?? null,
-        dealerName: await dealerDisplayName(leadRow?.dealer_id),
-        files: (d.items ?? []).map((it) =>
-          it.reason ? `${it.doc_label} — ${it.reason}` : it.doc_label,
-        ),
-        extraRows: [
-          ["Request type", requestLabel],
-          ["Comments", d.comments],
-        ],
-        bodyHtml: `<p>Update: the admin will either fulfil the request himself or forward it to the dealer; you will be emailed again when the documents are pushed back to your dashboard.</p>`,
-      });
-    })().catch(() => {});
+    });
 
     return NextResponse.json({ ok: true, id, routed_to: "admin" });
   } catch (e) {

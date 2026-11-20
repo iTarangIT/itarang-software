@@ -88,6 +88,8 @@ export interface ActiveDealer {
     byName: string;
     /** ID 182: the operator's users.role, for the push history. */
     byRole?: string | null;
+    /** E-390 — open the iTarang admin's dealer check when the lead is created. */
+    dealerCheck?: { reasonKind: string; candidates: Array<{ dealerId: string; name: string }>; waPhone: string | null };
   };
 }
 
@@ -188,6 +190,7 @@ export async function resolvePushedCustomerDealer(target: {
   name: string;
   byUserId: string | null;
   byName: string;
+  check?: { reasonKind: string; candidates: Array<{ dealerId: string; name: string }>; waPhone: string | null };
 }): Promise<ActiveDealer | null> {
   const house = await resolveHouseDealer();
   if (!house) return null;
@@ -231,6 +234,7 @@ export async function resolvePushedCustomerDealer(target: {
       byUserId: target.byUserId,
       byName: target.byName,
       byRole: op?.role ?? null,
+      dealerCheck: target.check,
     },
   };
 }
@@ -373,6 +377,33 @@ export async function createCustomerLead(
   if (dealer.pushedBy) {
     const { notifyDealerOfPushedLead } = await import("./pushedLeadNotice");
     await notifyDealerOfPushedLead(leadId, { reason: ITARANG_TEAM_PUSH_REASON });
+  }
+
+  // E-390 — Battery Pool diagram 1: an "uncertain" dealer goes to the iTarang
+  // admin's dealer check before the file can reach a lender. An operator
+  // (iTarang salesperson) naming the dealer, or a dealer sales-team member.
+  // Never throws (openDealerReview is best-effort).
+  {
+    const { openDealerReview, isDealerCheckKind } = await import("@/lib/leads/dealer-assignment");
+    const chk = dealer.pushedBy?.dealerCheck;
+    if (dealer.pushedBy) {
+      await openDealerReview({
+        leadId,
+        dealerId: dealer.dealerCode,
+        reasonKind: chk && isDealerCheckKind(chk.reasonKind) ? chk.reasonKind : "manual_pick",
+        candidates: chk?.candidates ?? [],
+        channel: "whatsapp",
+        initiator: { userId: dealer.pushedBy.byUserId, name: dealer.pushedBy.byName, waPhone: chk?.waPhone ?? null },
+      });
+    } else if (dealer.actor?.role === "salesperson") {
+      await openDealerReview({
+        leadId,
+        dealerId: dealer.dealerCode,
+        reasonKind: "dealer_salesperson",
+        channel: "whatsapp",
+        initiator: { userId: null, name: dealer.actor.displayName ?? "Dealer sales team", waPhone: null },
+      });
+    }
   }
 
   // E-278 — the "created by X" line of the lead's history. Explicit rather than

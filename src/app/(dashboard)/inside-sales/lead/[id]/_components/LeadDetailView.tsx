@@ -10,6 +10,7 @@ import { LeadDetailHeader } from "./LeadDetailHeader";
 import { LeadActivityPanes } from "./LeadActivityPanes";
 import { LeadDetailRightPane } from "./LeadDetailRightPane";
 import { LeadActionBar } from "./LeadActionBar";
+import { LeadNextStepBox } from "./LeadNextStepBox";
 import { ConcurrencyBanner } from "../../../_components/ConcurrencyBanner";
 import { LogTouchpointModal } from "../../../_components/modals/LogTouchpointModal";
 import { UpdateCommercialsModal } from "../../../_components/modals/UpdateCommercialsModal";
@@ -156,7 +157,7 @@ export function LeadDetailView({ leadId, viewerId, viewerRole, backHref = "/insi
     const updatedAt = lead.updated_at;
 
     return (
-        <div className="flex flex-col h-[calc(100vh-68px)]">
+        <div className="flex flex-col h-[calc(100vh-68px)] overflow-y-auto bg-gray-50">
             <LeadDetailHeader
                 bundle={bundle}
                 viewerId={viewerId}
@@ -165,6 +166,19 @@ export function LeadDetailView({ leadId, viewerId, viewerRole, backHref = "/insi
                 onUpdated={invalidate}
                 statusModalActions={["mark_converted", "mark_lost", "transfer_asm"]}
                 onStatusModal={(a) => setActiveModal(a)}
+            />
+
+            {/* ID 246: what to do now, by stage — the same actions as the bar below. */}
+            <LeadNextStepBox
+                bundle={bundle}
+                view="isr"
+                isOwner={isOwner}
+                viewerRole={viewerRole}
+                // The Inside Sales page has no visit form; the box never offers one here.
+                onAction={(m) => {
+                    if (m !== "visit") setActiveModal(m);
+                }}
+                onChanged={invalidate}
             />
 
             {/* D8 — the promised callback and its brief, before anything else. */}
@@ -184,29 +198,36 @@ export function LeadDetailView({ leadId, viewerId, viewerRole, backHref = "/insi
                 </div>
             )}
 
-            <div className="flex-1 overflow-hidden grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-0">
-                <LeadActivityPanes
-                    leadId={leadId}
-                    bundle={bundle}
-                    canExportHistory={canExportLeadHistory({
-                        role: viewerRole,
-                        userId: viewerId,
-                        currentOwnerId: lead.current_owner_id,
-                    })}
-                />
-                <LeadDetailRightPane
-                    bundle={bundle}
-                    viewerRole={viewerRole}
-                    focusQuoteId={focusQuoteId}
-                    onReviseQuote={
-                        isOwner
-                            ? (c) => {
-                                  setReviseFrom(c);
-                                  setActiveModal("commercials");
-                              }
-                            : undefined
-                    }
-                />
+            {/* ID 246: the page scrolls as one; each pane keeps its own scroll at
+                about a screen's height, and the action bar stays at the bottom. */}
+            <div className="shrink-0 grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-3 px-4 sm:px-6 py-3 auto-rows-[minmax(520px,calc(100vh-150px))]">
+                <div className="grid min-h-0 overflow-hidden rounded-xl border border-gray-200 bg-white">
+                    <LeadActivityPanes
+                        leadId={leadId}
+                        bundle={bundle}
+                        canExportHistory={canExportLeadHistory({
+                            role: viewerRole,
+                            userId: viewerId,
+                            currentOwnerId: lead.current_owner_id,
+                        })}
+                    />
+                </div>
+                <div className="grid min-h-0 overflow-hidden rounded-xl border border-gray-200">
+                    <LeadDetailRightPane
+                        bundle={bundle}
+                        viewerRole={viewerRole}
+                        focusQuoteId={focusQuoteId}
+                        onReviseQuote={
+                            isOwner
+                                ? (c) => {
+                                      setReviseFrom(c);
+                                      setActiveModal("commercials");
+                                  }
+                                : undefined
+                        }
+                        onUpdateQuote={isOwner ? () => setActiveModal("commercials") : undefined}
+                    />
+                </div>
             </div>
 
             <LeadActionBar

@@ -21,8 +21,14 @@ export default function NbfcPortalShell({
   tenantName,
   activeLoans,
   aumInr,
+  allowedNav = null,
+  userTitle = "NBFC Partner",
   children,
 }: {
+  /** E-388 — sidebar menus this login may open; null ⇒ all. */
+  allowedNav?: string[] | null;
+  /** E-388 — designation shown instead of "NBFC Partner" (e.g. Credit Verifier). */
+  userTitle?: string;
   tenantName: string;
   activeLoans: number;
   aumInr: number | null;
@@ -62,12 +68,15 @@ export default function NbfcPortalShell({
         tenantName={tenantName}
         activeLoans={activeLoans}
         aumInr={aumInr}
+        allowedNav={allowedNav}
+        userTitle={userTitle}
         mobileOpen={drawerOpen}
         onClose={() => setDrawerOpen(false)}
       />
       <div className="flex-1 md:ml-64 flex flex-col min-h-screen min-w-0">
         <NbfcPortalHeader
           tenantName={tenantName}
+          userTitle={userTitle}
           onMenuClick={() => setDrawerOpen(true)}
         />
         <main className="flex-1 p-4 sm:p-6 md:p-8 overflow-y-auto">

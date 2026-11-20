@@ -1,22 +1,32 @@
 "use client";
 
 import Link from "next/link";
-import { Phone, MapPin, AlarmCheck, AlertCircle, RotateCcw, ShieldAlert, CheckCircle2 } from "lucide-react";
+import { Phone, MessageCircle, AlertCircle, RotateCcw, ShieldAlert } from "lucide-react";
 import { wonWithoutQuote, type LeadDetailBundle } from "@/lib/inside-sales/types";
 import { WonWithoutQuoteChip } from "@/components/leads/won-without-quote-chip";
-import { IntentBadge } from "../../../_components/IntentBadge";
 import { InterestLevelEditor } from "../../../_components/InterestLevelEditor";
 import { LeadStatusEditor, type StatusModalAction } from "../../../_components/LeadStatusEditor";
-import { OwnerIndicator } from "../../../_components/OwnerIndicator";
 import { NeodoveTag } from "@/components/leads/neodove-tag";
 import { IvrTag } from "@/components/leads/ivr-tag";
-import { SentByStamp } from "@/components/leads/sent-by-stamp";
+import { AssignedByAiBadge } from "@/components/leads/sent-by-stamp";
 import { ReactivateLeadButton } from "@/components/leads/ReactivateLeadButton";
 import { ChangeLostReasonButton } from "@/components/leads/ChangeLostReasonButton";
 import { WonUndoControl } from "@/components/leads/WonUndoControl";
 import { InfoTip } from "@/components/ui/info-tip";
 import { BackToPrevious } from "@/components/layout/BackToPrevious";
 import { capabilitiesFor, canMarkUnownedLeadLost, canReactivateLead } from "@/lib/leads/access";
+import {
+    aiScoreWords,
+    attemptsWords,
+    dayWords,
+    handoverNoteInWords,
+    istDateTimeWords,
+    istDay,
+    lastActionFact,
+    nextVisitFact,
+    paymentFact,
+    quoteFact,
+} from "@/lib/leads/leadPage246";
 
 // Roles permitted to override a lead's temperature (mirrors the PATCH route).
 const INTEREST_EDIT_ROLES = ["inside_sales_rep", "asm", "admin", "partner", "sales_head"];
@@ -32,16 +42,6 @@ type Props = {
     statusModalActions?: StatusModalAction[];
     onStatusModal?: (action: StatusModalAction) => void;
 };
-
-function daysAgo(iso: string | null): string {
-    if (!iso) return "never";
-    const ms = Date.now() - new Date(iso).getTime();
-    const days = Math.floor(ms / 86_400_000);
-    if (days <= 0) return "today";
-    if (days === 1) return "1 day ago";
-    return `${days} days ago`;
-}
-
 
 // ID 245 item 4: in IST whatever the viewer's computer clock is set to ("14 Nov 2026, 2:27 pm").
 const IST_DATE_TIME = new Intl.DateTimeFormat("en-IN", {
@@ -59,17 +59,29 @@ function formatDateTime(iso: string | null): string {
     return Number.isNaN(d.getTime()) ? "—" : IST_DATE_TIME.format(d);
 }
 
-// Short, human-friendly application reference (BRD §0.13 "Application ID: APP-XXXX").
-function shortAppId(id: string | null): string {
-    if (!id) return "—";
-    return `APP-${id.slice(0, 8).toUpperCase()}`;
+function senderRole(role: string | null | undefined): string {
+    if (!role) return "";
+    const r = role.toLowerCase();
+    if (r === "ceo") return "CEO";
+    if (r === "asm") return "ASM";
+    if (r === "inside_sales_rep") return "ISR";
+    return role.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function formatOnboardingStatus(s: string | null): string {
-    if (!s) return "Draft";
-    return s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, " ");
+/** wa.me wants the number with its country code and digits only. */
+function whatsappHref(phone: string): string | null {
+    let d = phone.replace(/\D/g, "");
+    if (d.length === 11 && d.startsWith("0")) d = d.slice(1);
+    if (d.length === 10) d = `91${d}`;
+    return d.length >= 11 ? `https://wa.me/${d}` : null;
 }
 
+/**
+ * ID 246 — the lead page header (mock-up "Page 2"): name and chips, owner and
+ * who handed it over, then the facts row (phone, last action, next visit,
+ * quote, payment, attempts, AI score) and the hand-over note in words. Every
+ * control the header had keeps its rule; only the layout and labels changed.
+ */
 export function LeadDetailHeader({
     bundle,
     viewerId,
@@ -85,114 +97,182 @@ export function LeadDetailHeader({
     const isUnassigned = !lead.current_owner_id;
     const isEscalated = lead.escalation_status === "pending_review";
     const wasReactivated = Boolean(lead.previous_lost_reason);
-    // ID 74: Mark Won is what opens the onboarding application, so a Won lead is
-    // the one actually onboarding; Converted keeps the banner as its record.
-    const onboardingInitiated =
-        (lead.lead_status === "Won" || lead.lead_status === "Converted") &&
-        Boolean(lead.dealer_onboarding_application_id);
+    const todayIst = istDay(new Date()) ?? "";
+
+    const lastAction = lastActionFact(lead.last_action, lead.last_action_at);
+    const nextVisit = nextVisitFact({
+        hasOpenBooking: Boolean(lead.has_open_booking),
+        nextBookingDate: lead.next_booking_date ?? null,
+        nextBookingOverdueDays: lead.next_booking_overdue_days ?? null,
+        todayIst,
+    });
+    const quote = quoteFact(bundle.commercials_history);
+    const payment = paymentFact(bundle.current_commercials, lead.preliminary_payment_intent);
+    // The newest hand-over to the field (asm_transfer), read in words.
+    const handover = bundle.touchpoints.find((t) => t.touchpoint_type === "asm_transfer" && t.remarks);
+    const assignedBy = lead.assigned_by;
+    const handedBy =
+        assignedBy && assignedBy.via !== "ai" && assignedBy.id !== lead.current_owner_id ? assignedBy : null;
+    const wa = lead.phone ? whatsappHref(lead.phone) : null;
 
     return (
-        <div className="border-b border-gray-200 bg-white sticky top-0 z-10">
-            <div className="px-6 py-4 flex items-start justify-between gap-6">
-                <div className="min-w-0 flex-1">
-                    {/* ID 232: back to the page this lead was opened from, filters kept;
-                        else the person's own home queue (backHref). */}
-                    <BackToPrevious
-                        homeHref={backHref}
-                        className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 mb-2"
-                    />
-                    <div className="flex items-center gap-3 flex-wrap">
-                        <h1 className="text-xl font-semibold text-gray-900 truncate">
-                            {lead.dealer_name || lead.shop_name || "(unnamed dealer)"}
-                        </h1>
-                        {/* ID 136: nobody picks a status by hand — the chip opens
-                            Mark Won / Mark Lost / Transfer for the owner only. */}
-                        <LeadStatusEditor
-                            status={lead.lead_status}
-                            editable={isOwner}
-                            modalActions={statusModalActions}
-                            onModalAction={onStatusModal}
-                        />
-                        <InterestLevelEditor
-                            leadId={lead.id}
-                            value={lead.interest_level}
-                            editable={canEditInterest}
-                            onUpdated={onUpdated}
-                        />
-                        <IntentBadge score={lead.final_intent_score} />
-                        {/* Same chip as the queue row, so a lead does not gain or
-                            lose its NeoDove provenance by being opened. */}
-                        <NeodoveTag syncStatus={lead.neodove_sync_status} />
-                        <IvrTag isIvr={lead.is_ivr} />
-                        {wonWithoutQuote(lead) && <WonWithoutQuoteChip />}
-                        {/* ID 158: Admin, Sales Head, CEO — not partner. */}
-                        {lead.lead_status === "Lost" && canReactivateLead(viewerRole) && (
+        <div className="px-4 sm:px-6 pt-3">
+            {/* ID 232: back to the page this lead was opened from, filters kept;
+                else the person's own home queue (backHref). */}
+            <BackToPrevious
+                homeHref={backHref}
+                className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 hover:underline mb-2"
+            />
+            <div className="rounded-xl border border-gray-200 bg-white px-4 sm:px-6 py-4">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                            <h1 className="text-xl font-semibold text-gray-900 truncate">
+                                {lead.dealer_name || lead.shop_name || "(unnamed dealer)"}
+                            </h1>
+                            {/* ID 136: nobody picks a status by hand — the chip opens
+                                Mark Won / Mark Lost / Transfer for the owner only. */}
+                            <LeadStatusEditor
+                                status={lead.lead_status}
+                                editable={isOwner}
+                                modalActions={statusModalActions}
+                                onModalAction={onStatusModal}
+                            />
+                            <InterestLevelEditor
+                                leadId={lead.id}
+                                value={lead.interest_level}
+                                editable={canEditInterest}
+                                onUpdated={onUpdated}
+                            />
+                            {/* Same chip as the queue row, so a lead does not gain or
+                                lose its NeoDove provenance by being opened. */}
+                            <NeodoveTag syncStatus={lead.neodove_sync_status} />
+                            <IvrTag isIvr={lead.is_ivr} />
+                            {wonWithoutQuote(lead) && <WonWithoutQuoteChip />}
+                            {/* ID 158: Admin, Sales Head, CEO — not partner. */}
+                            {lead.lead_status === "Lost" && canReactivateLead(viewerRole) && (
                                 <ReactivateLeadButton leadId={lead.id} onDone={onUpdated} compact />
                             )}
-                        {/* ID 136: a wrong Lost reason is fixed here, not by a status change. */}
-                        {/* ID 168: a drop-out Lost reason changes only through a new drop-out review decision. */}
-                        {lead.lead_status === "Lost" &&
-                            lead.lost_reason !== "onboarding_dropout" &&
-                            capabilitiesFor(viewerRole).canChangeLostReason && (
-                            <ChangeLostReasonButton
-                                leadId={lead.id}
-                                currentReason={lead.lost_reason}
-                                onDone={onUpdated}
-                                compact
-                            />
-                        )}
-                        {/* ID 233: a lead with no owner (test rows, broken imports) can be
-                            closed by Admin, Sales Head or CEO; the server checks the same. */}
-                        {isUnassigned &&
-                            canMarkUnownedLeadLost(viewerRole) &&
-                            lead.lead_status !== "Lost" &&
-                            lead.lead_status !== "Won" &&
-                            lead.lead_status !== "Converted" &&
-                            statusModalActions?.includes("mark_lost") &&
-                            onStatusModal && (
-                                <button
-                                    type="button"
-                                    onClick={() => onStatusModal("mark_lost")}
-                                    className="inline-flex items-center rounded-md border border-red-200 bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700 hover:bg-red-100"
-                                >
-                                    Mark lost
-                                </button>
-                            )}
-                        {/* ID 134: a Won marked by mistake, before onboarding is submitted. */}
-                        {lead.lead_status === "Won" && <WonUndoControl leadId={lead.id} onDone={onUpdated} />}
+                            {/* ID 136: a wrong Lost reason is fixed here, not by a status change. */}
+                            {/* ID 168: a drop-out Lost reason changes only through a new drop-out review decision. */}
+                            {lead.lead_status === "Lost" &&
+                                lead.lost_reason !== "onboarding_dropout" &&
+                                capabilitiesFor(viewerRole).canChangeLostReason && (
+                                    <ChangeLostReasonButton
+                                        leadId={lead.id}
+                                        currentReason={lead.lost_reason}
+                                        onDone={onUpdated}
+                                        compact
+                                    />
+                                )}
+                            {/* ID 233: a lead with no owner (test rows, broken imports) can be
+                                closed by Admin, Sales Head or CEO; the server checks the same. */}
+                            {isUnassigned &&
+                                canMarkUnownedLeadLost(viewerRole) &&
+                                lead.lead_status !== "Lost" &&
+                                lead.lead_status !== "Won" &&
+                                lead.lead_status !== "Converted" &&
+                                statusModalActions?.includes("mark_lost") &&
+                                onStatusModal && (
+                                    <button
+                                        type="button"
+                                        onClick={() => onStatusModal("mark_lost")}
+                                        className="inline-flex items-center rounded-md border border-red-200 bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700 hover:bg-red-100"
+                                    >
+                                        Mark lost
+                                    </button>
+                                )}
+                            {/* ID 134: a Won marked by mistake, before onboarding is submitted. */}
+                            {lead.lead_status === "Won" && <WonUndoControl leadId={lead.id} onDone={onUpdated} />}
+                        </div>
+                        <div className="text-sm text-gray-600 mt-1">
+                            {[
+                                lead.dealer_name && lead.shop_name ? lead.shop_name : null,
+                                [lead.city, lead.state].filter(Boolean).join(", ") || null,
+                                lead.language,
+                            ]
+                                .filter(Boolean)
+                                .join(" · ") || "—"}
+                        </div>
                     </div>
-                    {lead.shop_name && lead.dealer_name && (
-                        <div className="text-xs text-gray-500 mt-0.5">{lead.shop_name}</div>
-                    )}
-                    <div className="flex items-center gap-4 mt-2 text-xs text-gray-600 flex-wrap">
-                        <span className="inline-flex items-center gap-1">
-                            <Phone className="h-3 w-3 text-gray-400" />
-                            {lead.phone || "—"}
-                        </span>
-                        <span className="inline-flex items-center gap-1">
-                            <MapPin className="h-3 w-3 text-gray-400" />
-                            {[lead.city, lead.state].filter(Boolean).join(", ") || "—"}
-                        </span>
-                        <span className="inline-flex items-center gap-1">
-                            <AlarmCheck className="h-3 w-3 text-gray-400" />
-                            Last activity: {daysAgo(lead.last_touchpoint_at)}
-                        </span>
-                        <OwnerIndicator
-                            currentOwnerId={lead.current_owner_id}
-                            currentOwnerName={lead.current_owner_name}
-                            viewerId={viewerId}
-                            asmName={lead.asm_name}
-                        />
-                        <SentByStamp
-                            assignedBy={lead.assigned_by}
-                            currentOwnerId={lead.current_owner_id}
-                        />
+                    <div className="text-right text-xs text-gray-500 shrink-0">
+                        <div>Owner</div>
+                        <div className={`text-sm font-semibold ${isOwner ? "text-emerald-700" : "text-gray-900"}`}>
+                            {isUnassigned
+                                ? "Unassigned"
+                                : `${lead.current_owner_name ?? lead.asm_name ?? "Other rep"}${isOwner ? " (you)" : ""}`}
+                        </div>
+                        {handedBy ? (
+                            <div className="mt-0.5" title={handedBy.at ? formatDateTime(handedBy.at) : undefined}>
+                                Handed over by {handedBy.name ?? "a user"}
+                                {handedBy.role ? ` (${senderRole(handedBy.role)})` : ""}
+                                {handedBy.at ? ` · ${dayWords(handedBy.at, false)}` : ""}
+                            </div>
+                        ) : assignedBy?.via === "ai" ? (
+                            <div className="flex justify-end">
+                                <AssignedByAiBadge assignedBy={assignedBy} />
+                            </div>
+                        ) : lead.originator_name ? (
+                            <div className="mt-0.5">
+                                Created by {lead.originator_id === viewerId ? "you" : lead.originator_name}
+                                {lead.created_at ? ` · ${dayWords(lead.created_at, false)}` : ""}
+                            </div>
+                        ) : null}
                     </div>
                 </div>
+
+                <dl className="mt-4 border-t border-gray-100 pt-4 grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-4">
+                    <Fact label="Phone">
+                        <div className="text-base font-semibold text-gray-900 tabular-nums">{lead.phone || "—"}</div>
+                        {lead.phone && (
+                            <div className="mt-1 flex items-center gap-3 text-xs">
+                                <a href={`tel:${lead.phone}`} className="inline-flex items-center gap-1 font-medium text-emerald-700 hover:underline">
+                                    <Phone className="h-3 w-3" />
+                                    Call
+                                </a>
+                                {wa && (
+                                    <a
+                                        href={wa}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="inline-flex items-center gap-1 font-medium text-emerald-700 hover:underline"
+                                    >
+                                        <MessageCircle className="h-3 w-3" />
+                                        WhatsApp
+                                    </a>
+                                )}
+                            </div>
+                        )}
+                    </Fact>
+                    <Fact label="Last action" sub={lastAction.sub}>
+                        {lastAction.main}
+                    </Fact>
+                    <Fact label="Next visit" sub={nextVisit.sub} late={nextVisit.late}>
+                        {nextVisit.main}
+                    </Fact>
+                    <Fact label="Quote" sub={quote.sub} warn={quote.warn}>
+                        {quote.main}
+                    </Fact>
+                    <Fact label="Payment" sub={payment.sub}>
+                        {payment.main}
+                    </Fact>
+                    <Fact label="Attempts">{attemptsWords(lead.visits_done ?? 0, lead.calls_made ?? 0)}</Fact>
+                    <Fact label="AI score">{aiScoreWords(lead.final_intent_score)}</Fact>
+                </dl>
+
+                {handover?.remarks && (
+                    <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
+                        <div className="text-xs font-semibold text-gray-700">
+                            Hand-over note{handover.performed_by_name ? ` from ${handover.performed_by_name}` : ""} ·{" "}
+                            {istDateTimeWords(handover.performed_at)}
+                        </div>
+                        <p className="mt-1 text-sm text-gray-900 whitespace-pre-wrap">{handoverNoteInWords(handover.remarks)}</p>
+                    </div>
+                )}
             </div>
 
             {/* Conditional banners (BRD §0.5) */}
-            <div className="px-6 pb-3 space-y-2">
+            <div className="pt-2 space-y-2">
                 {!isOwner && !isUnassigned && (
                     <Banner tone="gray" icon={ShieldAlert}>
                         You are not the current owner — view only.
@@ -225,35 +305,30 @@ export function LeadDetailHeader({
                         Reactivated from Lost{lead.previous_lost_reason ? ` (was ${lead.previous_lost_reason})` : ""}. Review prior history before calling.
                     </Banner>
                 )}
-                {onboardingInitiated && (
-                    <Banner tone="emerald" icon={CheckCircle2}>
-                        <span className="font-medium">Onboarding started</span>
-                        {" — Application "}
-                        <span className="font-medium">{shortAppId(lead.dealer_onboarding_application_id)}</span>
-                        {" · Status: "}
-                        {formatOnboardingStatus(lead.onboarding_status)}
-                        {lead.onboarding_created_at
-                            ? ` · Created ${formatDateTime(lead.onboarding_created_at)}`
-                            : ""}
-                        {/* 17 Nov: the form opens only while it is a draft. Once
-                            submitted it is a Dealer Validation file, which the
-                            ASM and ISR do not open (mayOpenOnboardingApplication). */}
-                        {(lead.onboarding_status ?? "draft").toLowerCase() === "draft" ? (
-                            <>
-                                {" · "}
-                                <Link
-                                    href={`/dealer-onboarding?applicationId=${lead.dealer_onboarding_application_id}`}
-                                    className="font-semibold underline underline-offset-2 hover:text-emerald-900"
-                                >
-                                    Continue onboarding →
-                                </Link>
-                            </>
-                        ) : (
-                            " · With the Sales Head for review"
-                        )}
-                    </Banner>
-                )}
             </div>
+        </div>
+    );
+}
+
+function Fact({
+    label,
+    sub,
+    late,
+    warn,
+    children,
+}: {
+    label: string;
+    sub?: string | null;
+    late?: boolean;
+    warn?: boolean;
+    children: React.ReactNode;
+}) {
+    const tone = late ? "text-rose-700" : warn ? "text-amber-700" : "text-gray-900";
+    return (
+        <div className="min-w-0">
+            <dt className="text-xs text-gray-500">{label}</dt>
+            <dd className={`mt-0.5 text-sm font-semibold break-words ${tone}`}>{children}</dd>
+            {sub && <dd className={`text-xs mt-0.5 ${late ? "text-rose-700 font-medium" : "text-gray-500"}`}>{sub}</dd>}
         </div>
     );
 }

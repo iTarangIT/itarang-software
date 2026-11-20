@@ -19,6 +19,8 @@ import { ReassignLeadModal, type TeamTarget } from "@/app/(dashboard)/inside-sal
 import { EscalateModal } from "@/app/(dashboard)/inside-sales/_components/modals/EscalateModal";
 import { LogVisitModal } from "@/app/(dashboard)/asm/_components/modals/LogVisitModal";
 import { AsmLeadActionBar } from "./AsmLeadActionBar";
+import { useVisitNotNeeded } from "./useVisitNotNeeded";
+import { LeadNextStepBox } from "@/app/(dashboard)/inside-sales/lead/[id]/_components/LeadNextStepBox";
 import type { VisitNextAction } from "@/lib/asm/types";
 import { canExportLeadHistory } from "@/lib/leads/access";
 import { LEAD_NOT_ACCESSIBLE } from "@/app/(dashboard)/inside-sales/lead/[id]/_components/LeadDetailView";
@@ -104,6 +106,8 @@ export function AsmLeadDetailView({ leadId, viewerId, viewerRole }: Props) {
         setStaleInfo(null);
         invalidate();
     }, [invalidate]);
+    // ID 77 Visit not needed — one handler for the action bar and the Next step box (ID 246).
+    const { visitNotNeeded, savingNotNeeded } = useVisitNotNeeded(leadId, onActionSuccess);
 
     // Visit save chains into the lifecycle modal per BRD §0.8.
     const onVisitSuccess = useCallback(
@@ -161,7 +165,7 @@ export function AsmLeadDetailView({ leadId, viewerId, viewerRole }: Props) {
     const updatedAt = lead.updated_at;
 
     return (
-        <div className="flex flex-col h-[calc(100vh-68px)]">
+        <div className="flex flex-col h-[calc(100vh-68px)] overflow-y-auto bg-gray-50">
             <LeadDetailHeader
                 bundle={bundle}
                 viewerId={viewerId}
@@ -173,6 +177,18 @@ export function AsmLeadDetailView({ leadId, viewerId, viewerRole }: Props) {
                 onStatusModal={(a) => {
                     if (a !== "transfer_asm") setActiveModal(a);
                 }}
+            />
+
+            {/* ID 246: what to do now, by stage — the same actions as the bar below. */}
+            <LeadNextStepBox
+                bundle={bundle}
+                view="asm"
+                isOwner={isOwner}
+                viewerRole={viewerRole}
+                onAction={setActiveModal}
+                onChanged={onActionSuccess}
+                onVisitNotNeeded={visitNotNeeded}
+                savingNotNeeded={savingNotNeeded}
             />
 
             {staleInfo && (
@@ -188,32 +204,39 @@ export function AsmLeadDetailView({ leadId, viewerId, viewerRole }: Props) {
                 </div>
             )}
 
-            <div className="flex-1 overflow-hidden grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-0">
+            {/* ID 246: the page scrolls as one; each pane keeps its own scroll at
+                about a screen's height, and the action bar stays at the bottom. */}
+            <div className="shrink-0 grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-3 px-4 sm:px-6 py-3 auto-rows-[minmax(520px,calc(100vh-150px))]">
                 {/* leadId now reaches the pane, which it did not before — the
                     Export-to-Excel href in Touchpoint History was being built
                     against `undefined` on this view. */}
-                <LeadActivityPanes
-                    leadId={leadId}
-                    bundle={bundle}
-                    canExportHistory={canExportLeadHistory({
-                        role: viewerRole,
-                        userId: viewerId,
-                        currentOwnerId: lead.current_owner_id,
-                    })}
-                />
-                <LeadDetailRightPane
-                    bundle={bundle}
-                    viewerRole={viewerRole}
-                    focusQuoteId={focusQuoteId}
-                    onReviseQuote={
-                        isOwner
-                            ? (c) => {
-                                  setReviseFrom(c);
-                                  setActiveModal("commercials");
-                              }
-                            : undefined
-                    }
-                />
+                <div className="grid min-h-0 overflow-hidden rounded-xl border border-gray-200 bg-white">
+                    <LeadActivityPanes
+                        leadId={leadId}
+                        bundle={bundle}
+                        canExportHistory={canExportLeadHistory({
+                            role: viewerRole,
+                            userId: viewerId,
+                            currentOwnerId: lead.current_owner_id,
+                        })}
+                    />
+                </div>
+                <div className="grid min-h-0 overflow-hidden rounded-xl border border-gray-200">
+                    <LeadDetailRightPane
+                        bundle={bundle}
+                        viewerRole={viewerRole}
+                        focusQuoteId={focusQuoteId}
+                        onReviseQuote={
+                            isOwner
+                                ? (c) => {
+                                      setReviseFrom(c);
+                                      setActiveModal("commercials");
+                                  }
+                                : undefined
+                        }
+                        onUpdateQuote={isOwner ? () => setActiveModal("commercials") : undefined}
+                    />
+                </div>
             </div>
 
             <AsmLeadActionBar
@@ -222,6 +245,8 @@ export function AsmLeadDetailView({ leadId, viewerId, viewerRole }: Props) {
                 viewerRole={viewerRole}
                 onAction={setActiveModal}
                 onChanged={onActionSuccess}
+                onVisitNotNeeded={visitNotNeeded}
+                savingNotNeeded={savingNotNeeded}
                 canTeamReassign={!isOwner && canTeamReassign}
                 canOwnerReassign={isOwner && canOwnerReassign}
             />

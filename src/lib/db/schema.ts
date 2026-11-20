@@ -2439,6 +2439,8 @@ export const nbfcDocRequests = pgTable(
     // is_required}]) so an auto-forward does not have to parse nbfc_comments.
     requested_items: jsonb("requested_items").default(sql`'[]'::jsonb`),
     item_count: integer("item_count").default(0).notNull(), // ≤10 for step4_extra_items
+    // E-389 — set when the parent raised this from the CIBIL review panel.
+    cibil_review_id: uuid("cibil_review_id"),
     raised_by: uuid("raised_by").notNull(), // NBFC actor
     reviewed_by: uuid("reviewed_by"), // admin who forwarded / pushed
     // Email "act from mail" (Change 5) — sha256-hashed token + expiry.
@@ -4824,6 +4826,9 @@ export const nbfcTenants = pgTable("nbfc_tenants", {
   rbi_registration_no: varchar("rbi_registration_no", { length: 64 }),
   grievance_url: text("grievance_url"),
   grievance_helpline: varchar("grievance_helpline", { length: 32 }),
+  // E-387 — set ⇒ "CIBIL approval required before any other step" for leads
+  // assigned on/after this time (parent/child approval hierarchy).
+  cibil_review_enabled_at: timestamp("cibil_review_enabled_at", { withTimezone: true }),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -4867,11 +4872,53 @@ export const nbfcUsers = pgTable(
     // nbfc_role_permissions. role still drives the legacy coarse checks.
     role_id: uuid("role_id"),
     notification_prefs: jsonb("notification_prefs").default({}).notNull(),
+    // E-387 — parent/child approval hierarchy. parent_user_id set ⇒ this login
+    // is a CHILD of that user (same tenant): it uploads the CIBIL report and
+    // sends it to the parent for approval. delegated_steps = the post-approval
+    // steps the NBFC admin lets the child act on (src/lib/nbfc/approval-hierarchy.ts).
+    parent_user_id: uuid("parent_user_id"),
+    delegated_steps: jsonb("delegated_steps").$type<string[]>().default([]).notNull(),
+    // E-388 — sidebar menus this user may open (NULL ⇒ all; src/lib/nbfc/portal-nav.ts)
+    // and the designation shown instead of "NBFC Partner" (e.g. "Credit Verifier").
+    allowed_nav: jsonb("allowed_nav").$type<string[] | null>(),
+    title: varchar("title", { length: 64 }),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
     userTenantIdx: index("nbfc_users_user_tenant_idx").on(table.user_id, table.tenant_id),
     tenantIdx: index("nbfc_users_tenant_idx").on(table.tenant_id),
+  }),
+);
+
+// E-387 — one row per CIBIL submission on an Acquire lead. A child uploads the
+// report + note → status 'pending' for approver_user_id (his parent); the parent
+// (or any nbfc_admin) approves or rejects with a reason. A rejection also
+// declines this NBFC's assignment (same path as "Reject file").
+export const nbfcCibilReviews = pgTable(
+  "nbfc_cibil_reviews",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull().references(() => nbfcTenants.id),
+    lead_id: varchar("lead_id", { length: 50 }).notNull(),
+    assignment_id: uuid("assignment_id").notNull(),
+    submitted_by: uuid("submitted_by").notNull(),
+    approver_user_id: uuid("approver_user_id").notNull(),
+    report_url: text("report_url").notNull(),
+    report_file_name: text("report_file_name"),
+    cibil_score: integer("cibil_score"),
+    note: text("note").notNull(),
+    status: varchar("status", { length: 16 }).default("pending").notNull(),
+    decision_reason: text("decision_reason"),
+    // E-389 — "Approve with conditions": the conditions the parent recorded.
+    conditions: text("conditions"),
+    decided_by: uuid("decided_by"),
+    decided_at: timestamp("decided_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    leadIdx: index("nbfc_cibil_reviews_lead_idx").on(table.tenant_id, table.lead_id, table.created_at),
+    approverIdx: index("nbfc_cibil_reviews_approver_idx").on(table.approver_user_id, table.status),
   }),
 );
 
@@ -14069,5 +14116,104 @@ export const onlineStoreFinanceLeads = pgTable(
     storeRefUniq: uniqueIndex("online_store_finance_leads_store_ref_uniq").on(t.store_ref),
     leadIdx: index("online_store_finance_leads_lead_idx").on(t.lead_id),
     createdIdx: index("online_store_finance_leads_created_idx").on(t.created_at),
+  }),
+);
+
+// E-390 — Battery Pool diagram 1: iTarang Admin checks an "uncertain" dealer
+// assignment before the file can be routed to an NBFC. While a check is open
+// the lead carries assignment_status = 'pending_verification' (or
+// 'dealer_rejected' after a rejection). One row per check.
+export const leadDealerReviews = pgTable(
+  "lead_dealer_reviews",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    lead_id: varchar("lead_id", { length: 50 }).notNull(),
+    dealer_id: varchar("dealer_id", { length: 255 }).notNull(),
+    // multi_pick | single_owned | manual_pick | house_push | dealer_salesperson | resubmit
+    reason_kind: varchar("reason_kind", { length: 24 }).notNull(),
+    candidates: jsonb("candidates")
+      .$type<Array<{ dealerId: string; name: string }>>()
+      .default(sql`'[]'::jsonb`)
+      .notNull(),
+    channel: varchar("channel", { length: 12 }).default("web").notNull(),
+    initiated_by_user_id: uuid("initiated_by_user_id"),
+    initiated_by_name: text("initiated_by_name"),
+    initiator_wa_phone: varchar("initiator_wa_phone", { length: 20 }),
+    // pending | approved | changed | rejected
+    status: varchar("status", { length: 16 }).default("pending").notNull(),
+    decided_by: uuid("decided_by"),
+    decided_at: timestamp("decided_at", { withTimezone: true }),
+    decision_reason: text("decision_reason"),
+    final_dealer_id: varchar("final_dealer_id", { length: 255 }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    leadIdx: index("lead_dealer_reviews_lead_idx").on(t.lead_id, t.created_at),
+    statusIdx: index("lead_dealer_reviews_status_idx").on(t.status, t.created_at),
+  }),
+);
+
+// E-390 — which iTarang sales person uses an iTarang House team login (ID 182),
+// so CRM Step 1 can offer the dealers he owns (account_ownership).
+export const houseLoginStaffLinks = pgTable(
+  "house_login_staff_links",
+  {
+    login_user_id: uuid("login_user_id").primaryKey().notNull(),
+    staff_user_id: uuid("staff_user_id").notNull(),
+    updated_by: uuid("updated_by"),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    staffIdx: index("house_login_staff_links_staff_idx").on(t.staff_user_id),
+  }),
+);
+
+// E-391 — Battery Pool diagram 1, part 2: NBFC routing rules. Any mix of
+// dealer, customer state + city and product category → one NBFC + loan
+// product; the most specific active rule wins. When Step 4 opens and the rule's
+// product passes the BRE, the file is sent to that NBFC automatically.
+export const nbfcRoutingRules = pgTable(
+  "nbfc_routing_rules",
+  {
+    id: serial("id").primaryKey().notNull(),
+    dealer_code: varchar("dealer_code", { length: 255 }),
+    state: varchar("state", { length: 100 }),
+    city: varchar("city", { length: 100 }),
+    product_category: varchar("product_category", { length: 50 }),
+    nbfc_id: integer("nbfc_id").notNull(),
+    loan_product_id: integer("loan_product_id").notNull(),
+    is_active: boolean("is_active").default(true).notNull(),
+    notes: text("notes"),
+    created_by: uuid("created_by"),
+    updated_by: uuid("updated_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    activeIdx: index("nbfc_routing_rules_active_idx").on(t.is_active, t.id),
+  }),
+);
+
+// E-392 — Battery Pool diagram 1, part 3: a customer KYC document the dealer /
+// salesperson / customer skipped, with the reason. Aadhaar front/back and PAN
+// are never skippable. cleared_at is set when the document is uploaded later.
+export const kycDocumentSkips = pgTable(
+  "kyc_document_skips",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    lead_id: varchar("lead_id", { length: 50 }).notNull(),
+    doc_for: varchar("doc_for", { length: 20 }).default("customer").notNull(),
+    doc_type: varchar("doc_type", { length: 50 }).notNull(),
+    reason: text("reason").notNull(),
+    skipped_by: uuid("skipped_by"),
+    skipped_by_name: text("skipped_by_name"),
+    // web | whatsapp
+    channel: varchar("channel", { length: 12 }).default("web").notNull(),
+    skipped_at: timestamp("skipped_at", { withTimezone: true }).defaultNow().notNull(),
+    cleared_at: timestamp("cleared_at", { withTimezone: true }),
+  },
+  (t) => ({
+    leadIdx: index("kyc_document_skips_lead_idx").on(t.lead_id),
   }),
 );

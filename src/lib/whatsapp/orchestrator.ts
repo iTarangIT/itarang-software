@@ -145,6 +145,7 @@ import { loadLeadPhases } from "./lead-phases";
 import type { InboundEvent, ListRow, ReplyButton } from "./types";
 import {
   DOC_NEXT_PROMPT,
+  DOC_SEND_ID,
   docBatchButtons,
   docGotIt,
   docMissingButtons,
@@ -955,6 +956,10 @@ export async function runCustomerTurn(
         return await onLeadDocsMode(session, event, houseDealer);
       case "DC_LEAD_DOCS":
         return await onLeadDocs(session, event, houseDealer, false);
+      case "DC_LEAD_DOC_SKIP_PICK":
+        return await onCustomerDocSkipPick(session, event, houseDealer, false);
+      case "DC_LEAD_DOC_SKIP_REASON":
+        return await onCustomerDocSkipReason(session, event, houseDealer, false);
       case "DC_LEAD_CONSENT_CHANNEL":
         return await onConsentChannel(session, event, houseDealer);
       case "DC_LEAD_CONSENT_WAIT":
@@ -3496,6 +3501,10 @@ async function dispatchConsoleTurn(
         return await onLeadDocsMode(session, event, dealer);
       case "DC_LEAD_DOCS":
         return await onLeadDocs(session, event, dealer);
+      case "DC_LEAD_DOC_SKIP_PICK":
+        return await onCustomerDocSkipPick(session, event, dealer);
+      case "DC_LEAD_DOC_SKIP_REASON":
+        return await onCustomerDocSkipReason(session, event, dealer);
       case "DC_LEAD_CONSENT_CHANNEL":
         return await onConsentChannel(session, event, dealer);
       case "DC_LEAD_CONSENT_WAIT":
@@ -4001,7 +4010,7 @@ export async function resumeDraft(
   }
 
   // 1) Documents incomplete → back to the documents step.
-  if (!REQUIRED_CUSTOMER_DOCS.every((d) => docs[d])) {
+  if ((await customerDocsOutstanding(draft.leadId, Object.keys(docs))).length) {
     await startDocs(session);
     return;
   }
@@ -5044,6 +5053,10 @@ export async function pushConsentFailureToWhatsApp(
 
 // ── Console: customer KYC documents + extraction ─────────────────────────────
 
+// E-392 — every customer doc type the WhatsApp reader recognises. WHICH of
+// them are asked comes from Settings › Customer KYC documents (the sales head):
+// Aadhaar front/back + PAN always; the rest may be skipped with a reason. See
+// customerDocsOutstanding below.
 const REQUIRED_CUSTOMER_DOCS = [
   "aadhaar_front",
   "aadhaar_back",
@@ -5051,6 +5064,57 @@ const REQUIRED_CUSTOMER_DOCS = [
   "rc_copy",
   "customer_photo",
 ] as const;
+
+/** E-392 — WhatsApp types that can never be skipped. */
+const MANDATORY_WA_DOCS = new Set(["aadhaar_front", "aadhaar_back", "pan_card"]);
+
+/**
+ * E-392 — what is still outstanding on this lead, as KYC doc keys: asked
+ * documents (mandatory + the sales head's list) that are neither uploaded on
+ * WhatsApp (`have`, WhatsApp type names) nor on the portal, nor skipped with a
+ * reason. Web-only documents (address proof, bank statement) can only be
+ * skipped here or added on the portal.
+ */
+async function customerDocsOutstanding(leadId: string | undefined, have: Iterable<string>): Promise<string[]> {
+  const cfg = await import("@/lib/kyc/customer-doc-config");
+  const config = await cfg.getCustomerDocConfig();
+  const asked = cfg.askedDocs(config);
+  const uploaded = new Set<string>([...have].map((w) => cfg.kycKeyForWa(w)));
+  let skipped: string[] = [];
+  if (leadId) {
+    const [skips, rows] = await Promise.all([
+      cfg.listSkips(leadId),
+      db
+        .select({ doc_type: kycDocuments.doc_type, file_url: kycDocuments.file_url })
+        .from(kycDocuments)
+        .where(and(eq(kycDocuments.lead_id, leadId), eq(kycDocuments.doc_for, "customer"))),
+    ]);
+    skipped = skips.map((x) => x.docType);
+    for (const r of rows) if (r.file_url) uploaded.add(r.doc_type);
+  }
+  return cfg.outstandingDocs({ asked, uploaded, skipped });
+}
+
+function outstandingLabel(key: string): string {
+  switch (key) {
+    case "passport_photo":
+      return customerDocLabel("customer_photo");
+    case "cheque_1":
+      return customerDocLabel("cancelled_cheque");
+    case "address_proof":
+      return "Address proof (portal)";
+    case "bank_statement":
+      return "Bank statement (portal)";
+    default:
+      return customerDocLabel(key);
+  }
+}
+
+/** Skip (only when something skippable is missing) + Send. */
+function missingButtonsFor(outstanding: string[]) {
+  const canSkipAny = outstanding.some((k) => !MANDATORY_WA_DOCS.has(k));
+  return canSkipAny ? docMissingButtons() : [{ id: DOC_SEND_ID, title: "📎 Send document" }];
+}
 
 // Documents the customer MAY send but that never block completion. The bank
 // cheque / passbook is optional — a lead can be submitted without it, but if
@@ -5086,24 +5150,26 @@ function customerDocLabel(type: string): string {
   }
 }
 
-function customerDocsChecklistMessage(): string {
-  return [
-    "📎 *Customer documents needed*",
+async function customerDocsChecklistMessage(): Promise<string> {
+  // E-392 — built from Settings › Customer KYC documents.
+  const cfg = await import("@/lib/kyc/customer-doc-config");
+  const config = await cfg.getCustomerDocConfig();
+  const asked = cfg.askedDocs(config);
+  const optional = asked.filter((k) => !cfg.MANDATORY_CUSTOMER_DOCS.includes(k));
+  const lines = [
+    "📎 *Customer documents*",
     "",
-    "Please send these (one by one, or all together — photos, PDFs, or a ZIP):",
-    "",
-    "*Required:*",
+    "*Mandatory:*",
     "1️⃣ Aadhaar — *front*",
     "2️⃣ Aadhaar — *back*",
     "3️⃣ PAN card",
-    "4️⃣ *RC copy* (vehicle Registration Certificate)",
-    "5️⃣ Passport-size *photo*",
-    "",
-    "*Optional* (send if you have them):",
-    "▫️ *Bank cheque* (cancelled cheque) or *passbook photo*",
-    "",
-    "Tap *Done* when you've sent everything.",
-  ].join("\n");
+  ];
+  if (optional.length) {
+    lines.push("", "*Also needed* (tap *Skip* if the customer doesn't have one — you'll be asked why):");
+    for (const k of optional) lines.push(`▫️ ${outstandingLabel(k)}`);
+  }
+  lines.push("", "Tap *Done* when you've sent everything.");
+  return lines.join("\n");
 }
 
 async function startDocs(session: SessionRow): Promise<void> {
@@ -5113,7 +5179,7 @@ async function startDocs(session: SessionRow): Promise<void> {
   // Show the required-document list, then ask HOW they want to send them —
   // one at a time or all together in a folder (ZIP).
   await setSession(session.id, { current_state: "DC_LEAD_DOCS_MODE" });
-  await reply(session, customerDocsChecklistMessage());
+  await reply(session, await customerDocsChecklistMessage());
   await reply(
     session,
     "How would you like to send them? Put *all documents in one folder (ZIP)* and upload together, or send them *one at a time*. 👇",
@@ -5205,15 +5271,18 @@ async function onLeadDocs(
     // "Skip" under a Still-needed list: move on without the remaining
     // documents (proceedToConsent surfaces them as a heads-up; they can be
     // added later on the portal).
+    // E-392 — Done / Skip: Aadhaar + PAN can never be skipped; any other
+    // missing document is skipped only with a typed reason.
     if (isDocDone(t) || isDocSkip(t)) {
-      return await proceedToConsent(session, dealer);
+      return await onCustomerDocsSkipOrDone(session, dealer, consoleUpload);
     }
     // "Send" under a Still-needed list: restate exactly what is missing and
     // stay here waiting for it.
     if (isDocSend(t)) {
-      const missing = await missingCustomerDocLabels(session);
-      if (missing.length === 0) return await proceedToConsent(session, dealer);
-      await reply(session, docSendPrompt(missing), docMissingButtons());
+      const lead = await getLeadCtx(session);
+      const outstanding = await customerDocsOutstanding(lead.leadId, Object.keys(lead.docs ?? {}));
+      if (outstanding.length === 0) return await proceedToConsent(session, dealer);
+      await reply(session, docSendPrompt(outstanding.map(outstandingLabel)), missingButtonsFor(outstanding));
       return;
     }
     if (isDocNext(t)) {
@@ -5261,7 +5330,7 @@ async function onLeadDocs(
 
     const lead = await getLeadCtx(session);
     const have = Object.keys(lead.docs ?? {});
-    if (REQUIRED_CUSTOMER_DOCS.every((d) => have.includes(d))) {
+    if ((await customerDocsOutstanding(lead.leadId, have)).length === 0) {
       return await proceedToConsent(session, dealer);
     }
     return;
@@ -5274,10 +5343,143 @@ async function onLeadDocs(
   );
 }
 
-/** Labels of the REQUIRED customer documents not yet on the lead. */
+/** Labels of the asked customer documents still outstanding (E-392). */
 async function missingCustomerDocLabels(session: SessionRow): Promise<string[]> {
-  const have = Object.keys((await getLeadCtx(session)).docs ?? {});
-  return REQUIRED_CUSTOMER_DOCS.filter((d) => !have.includes(d)).map(customerDocLabel);
+  const lead = await getLeadCtx(session);
+  return (await customerDocsOutstanding(lead.leadId, Object.keys(lead.docs ?? {}))).map(outstandingLabel);
+}
+
+const SKIP_PICK_ALL = "skipdoc:all";
+
+/**
+ * E-392 — Done / Skip while documents are outstanding. Aadhaar front/back and
+ * PAN are refused; one skippable document → ask why; several → pick which
+ * (or all), then ask why.
+ */
+async function onCustomerDocsSkipOrDone(session: SessionRow, dealer: ActiveDealer, consoleUpload: boolean): Promise<void> {
+  const lead = await getLeadCtx(session);
+  const outstanding = await customerDocsOutstanding(lead.leadId, Object.keys(lead.docs ?? {}));
+  if (outstanding.length === 0) return await proceedToConsent(session, dealer);
+
+  const mandatoryMissing = outstanding.filter((k) => MANDATORY_WA_DOCS.has(k));
+  if (mandatoryMissing.length) {
+    await reply(
+      session,
+      `⚠️ *${mandatoryMissing.map(outstandingLabel).join(", ")}* can't be skipped — Aadhaar (front and back) and PAN are mandatory. Please send ${mandatoryMissing.length > 1 ? "them" : "it"}.`,
+      [{ id: DOC_SEND_ID, title: "📎 Send document" }],
+    );
+    return;
+  }
+
+  await mergeContext(session, (ctx) => {
+    if (ctx.lead) {
+      ctx.lead.skipDocs = undefined;
+      ctx.lead.skipByCustomer = !consoleUpload;
+    }
+  });
+  if (outstanding.length === 1) return await askSkipReason(session, outstanding);
+
+  await setSession(session.id, { current_state: "DC_LEAD_DOC_SKIP_PICK" });
+  await replyList(
+    await loadSession(session.id),
+    "Which document can't be sent? You'll be asked why next.",
+    "Pick document",
+    [
+      ...outstanding.slice(0, 9).map((k) => ({ id: `skipdoc:${k}`, title: outstandingLabel(k).slice(0, 24) })),
+      { id: SKIP_PICK_ALL, title: "All of these", description: outstanding.map(outstandingLabel).join(", ").slice(0, 72) },
+    ],
+  );
+}
+
+async function askSkipReason(session: SessionRow, docs: string[]): Promise<void> {
+  await mergeContext(session, (ctx) => {
+    if (ctx.lead) ctx.lead.skipDocs = docs;
+  });
+  await setSession(session.id, { current_state: "DC_LEAD_DOC_SKIP_REASON" });
+  await reply(
+    await loadSession(session.id),
+    `Why can't you send the *${docs.map(outstandingLabel).join(", ")}*? Type the reason — the iTarang team and the lender will see it.`,
+  );
+}
+
+/** DC_LEAD_DOC_SKIP_PICK — which outstanding document to skip. A file sent here is just an upload. */
+async function onCustomerDocSkipPick(
+  session: SessionRow,
+  event: InboundEvent,
+  dealer: ActiveDealer,
+  consoleUpload = true,
+): Promise<void> {
+  if (event.type === "document" || event.type === "image") {
+    await setSession(session.id, { current_state: "DC_LEAD_DOCS" });
+    return await onLeadDocs(await loadSession(session.id), event, dealer, consoleUpload);
+  }
+  const t = (event.text ?? "").trim();
+  const lead = await getLeadCtx(session);
+  const outstanding = (await customerDocsOutstanding(lead.leadId, Object.keys(lead.docs ?? {}))).filter(
+    (k) => !MANDATORY_WA_DOCS.has(k),
+  );
+  if (t === SKIP_PICK_ALL && outstanding.length) return await askSkipReason(session, outstanding);
+  if (t.startsWith("skipdoc:")) {
+    const key = t.slice("skipdoc:".length);
+    if (outstanding.includes(key)) return await askSkipReason(session, [key]);
+  }
+  await setSession(session.id, { current_state: "DC_LEAD_DOCS" });
+  return await onCustomerDocsSkipOrDone(await loadSession(session.id), dealer, consoleUpload);
+}
+
+/** DC_LEAD_DOC_SKIP_REASON — the typed reason; records the skip(s) and moves on. */
+async function onCustomerDocSkipReason(
+  session: SessionRow,
+  event: InboundEvent,
+  dealer: ActiveDealer,
+  consoleUpload = true,
+): Promise<void> {
+  if (event.type === "document" || event.type === "image") {
+    await setSession(session.id, { current_state: "DC_LEAD_DOCS" });
+    return await onLeadDocs(await loadSession(session.id), event, dealer, consoleUpload);
+  }
+  const reason = (event.text ?? "").trim();
+  const lead = await getLeadCtx(session);
+  const docs = lead.skipDocs ?? [];
+  if (!lead.leadId || !docs.length) {
+    await setSession(session.id, { current_state: "DC_LEAD_DOCS" });
+    return await onCustomerDocsSkipOrDone(await loadSession(session.id), dealer, consoleUpload);
+  }
+  if (reason.length < 3 || isDocSkip(reason) || isDocSend(reason)) {
+    await reply(session, "Please type the reason in a few words (for example: *RC not issued yet — new vehicle*).");
+    return;
+  }
+  const { recordSkip } = await import("@/lib/kyc/customer-doc-config");
+  const byCustomer = !!lead.skipByCustomer;
+  const actor = byCustomer
+    ? { id: null, name: "Customer (WhatsApp)" }
+    : {
+        id: dealer.actor?.role === "salesperson" ? null : dealer.uploaderId,
+        name: dealer.actor?.displayName
+          ? `${dealer.actor.displayName} (${dealer.dealerName})`
+          : dealer.pushedBy?.byName ?? dealer.dealerName,
+      };
+  for (const k of docs) {
+    try {
+      await recordSkip({ leadId: lead.leadId, docType: k, reason, actor, channel: "whatsapp" });
+    } catch (err) {
+      console.warn("[WhatsApp/console] skip not recorded", k, err instanceof Error ? err.message : String(err));
+    }
+  }
+  await mergeContext(session, (ctx) => {
+    if (ctx.lead) ctx.lead.skipDocs = undefined;
+  });
+  await setSession(session.id, { current_state: "DC_LEAD_DOCS" });
+  await reply(session, `⏭ Skipped *${docs.map(outstandingLabel).join(", ")}* — reason noted.`);
+
+  const fresh = await getLeadCtx(session);
+  const outstanding = await customerDocsOutstanding(fresh.leadId, Object.keys(fresh.docs ?? {}));
+  if (outstanding.length === 0) return await proceedToConsent(await loadSession(session.id), dealer);
+  await reply(
+    session,
+    `Still needed:\n${outstanding.map((k) => `• ${outstandingLabel(k)}`).join("\n")}`,
+    missingButtonsFor(outstanding),
+  );
 }
 
 /** Save a customer document, link it to the lead, and fill its extracted
@@ -5311,6 +5513,12 @@ async function persistCustomerDoc(
     url: saved.fileUrl,
     file_url: saved.fileUrl,
   });
+
+  // E-392 — a document that arrives is no longer "skipped".
+  {
+    const { clearSkip, kycKeyForWa } = await import("@/lib/kyc/customer-doc-config");
+    await clearSkip(leadId, kycKeyForWa(docType));
+  }
 
   // Also surface the file to the admin KYC review, which reads kyc_documents
   // (NOT the `documents` table above). doc_type is kept identical to the web KYC
@@ -5492,10 +5700,9 @@ async function ingestCustomerZip(
   });
 
   // Build the consolidated result message.
-  const have = Object.keys((await getLeadCtx(session)).docs ?? {});
-  const missing = REQUIRED_CUSTOMER_DOCS.filter((d) => !have.includes(d)).map(
-    customerDocLabel,
-  );
+  const zipLead = await getLeadCtx(session);
+  const outstandingZip = await customerDocsOutstanding(zipLead.leadId, Object.keys(zipLead.docs ?? {}));
+  const missing = outstandingZip.map(outstandingLabel);
 
   const parts: string[] = [];
   if (acceptedLabels.size) {
@@ -5531,7 +5738,7 @@ async function ingestCustomerZip(
   // (which restates the missing documents and waits). A mismatch has its own
   // resend instruction; a complete set auto-advances from the caller.
   const buttons =
-    !mismatched.length && missing.length > 0 ? docMissingButtons() : undefined;
+    !mismatched.length && missing.length > 0 ? missingButtonsFor(outstandingZip) : undefined;
   await reply(session, parts.join("\n\n"), buttons);
 }
 
@@ -5600,18 +5807,18 @@ async function ingestCustomerDoc(
 
   // Progress counts REQUIRED docs only — an optional cheque/passbook shouldn't
   // push the tally past the denominator (e.g. "6/5").
-  const haveDocs = Object.keys((await getLeadCtx(session)).docs ?? {});
-  const haveCount = REQUIRED_CUSTOMER_DOCS.filter((d) => haveDocs.includes(d)).length;
-  const missing = REQUIRED_CUSTOMER_DOCS.filter((d) => !haveDocs.includes(d)).map(
-    customerDocLabel,
-  );
-  let msg = `${docGotIt(haveCount)} *${customerDocLabel(docType)}* — ${haveCount}/${REQUIRED_CUSTOMER_DOCS.length} required.`;
+  // E-392 — progress against the asked list (Settings › Customer KYC documents).
+  const progLead = await getLeadCtx(session);
+  const haveDocs = Object.keys(progLead.docs ?? {});
+  const outstandingNow = await customerDocsOutstanding(progLead.leadId, haveDocs);
+  const missing = outstandingNow.map(outstandingLabel);
+  let msg = `${docGotIt(haveDocs.length)} *${customerDocLabel(docType)}*.`;
   if (missing.length) {
     msg += `\n\nStill needed:\n${missing.map((l) => `• ${l}`).join("\n")}`;
   }
   // Same Skip / Send choice as the batch summary while documents are still
   // missing; a complete set auto-advances from the caller.
-  await reply(session, msg, missing.length ? docMissingButtons() : docBatchButtons());
+  await reply(session, msg, missing.length ? missingButtonsFor(outstandingNow) : docBatchButtons());
 }
 
 // ID documents that print the customer's name — used for the cross-document
@@ -5831,10 +6038,7 @@ async function proceedToConsent(
     await showDealerMenu(session, dealer);
     return;
   }
-  const have = Object.keys(lead.docs ?? {});
-  const missing = REQUIRED_CUSTOMER_DOCS.filter((d) => !have.includes(d)).map(
-    customerDocLabel,
-  );
+  const missing = (await customerDocsOutstanding(lead.leadId, Object.keys(lead.docs ?? {}))).map(outstandingLabel);
   let ack = "Thanks — documents received and details extracted. ✅";
   if (missing.length) {
     ack += `\n\n⚠️ Still missing: ${missing.join(", ")}. You can add these later on the dealer portal.`;

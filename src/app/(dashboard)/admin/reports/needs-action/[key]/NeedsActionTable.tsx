@@ -12,6 +12,17 @@ import { useRouter } from "next/navigation";
 import { Phone } from "lucide-react";
 import { BulkActionBar } from "@/app/(dashboard)/admin/_components/BulkActionBar";
 import type { ActionRow } from "@/lib/dashboard/salesHeadActions";
+import { SortableTh, sortRows, useUrlTableSort, type SortSpec } from "@/components/shared/TableSort";
+
+// ID 243 — header sort over the tile's rows (one capped list, no paging),
+// kept in the page link (?sort=&dir=) so Back from a lead keeps the order.
+const ACTION_SORT: SortSpec<ActionRow>[] = [
+    { key: "dealer", type: "text" },
+    { key: "location", type: "text", value: (r) => [r.city, r.state].filter(Boolean).join(", ") },
+    { key: "owner", type: "text", value: (r) => r.owner_name },
+    { key: "why", type: "text", value: (r) => r.detail },
+    { key: "value", type: "number" },
+];
 
 const inr = (n: number) =>
     n >= 1e7 ? `₹${(n / 1e7).toFixed(2)} Cr` : n >= 1e5 ? `₹${(n / 1e5).toFixed(2)} L` : `₹${Math.round(n).toLocaleString("en-IN")}`;
@@ -51,7 +62,7 @@ function CallLink({ phone }: { phone: string }) {
 }
 
 export function NeedsActionTable({
-    rows,
+    rows: rowsIn,
     phones,
     ownerHeading,
     hasValue,
@@ -66,6 +77,8 @@ export function NeedsActionTable({
     canAssign: boolean;
 }) {
     const router = useRouter();
+    const { sort, toggle: toggleSort, comparator } = useUrlTableSort(ACTION_SORT);
+    const rows = sortRows(rowsIn, comparator);
     const [selected, setSelected] = useState<Set<string>>(new Set());
     const [reassignSignal, setReassignSignal] = useState(0);
     const toggle = (id: string) =>
@@ -113,11 +126,11 @@ export function NeedsActionTable({
                                     />
                                 </th>
                             )}
-                            <th className="px-4 py-3">Dealer</th>
-                            <th className="px-4 py-3">Location</th>
-                            <th className="px-4 py-3">{ownerHeading}</th>
-                            <th className="px-4 py-3">Why it is here</th>
-                            {hasValue && <th className="px-4 py-3 text-right">Value</th>}
+                            <SortableTh label="Dealer" sortKey="dealer" sort={sort} onToggle={toggleSort} className="px-4 py-3" />
+                            <SortableTh label="Location" sortKey="location" sort={sort} onToggle={toggleSort} className="px-4 py-3" />
+                            <SortableTh label={ownerHeading} sortKey="owner" sort={sort} onToggle={toggleSort} className="px-4 py-3" />
+                            <SortableTh label="Why it is here" sortKey="why" sort={sort} onToggle={toggleSort} className="px-4 py-3" />
+                            {hasValue && <SortableTh label="Value" sortKey="value" sort={sort} onToggle={toggleSort} align="right" className="px-4 py-3 text-right" />}
                             <th className="px-4 py-3 text-right">Action</th>
                         </tr>
                     </thead>

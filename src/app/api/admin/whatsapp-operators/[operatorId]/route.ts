@@ -7,10 +7,11 @@
 // onboarded a dealer). A deactivated number simply falls through the operator
 // gate and gets the ordinary dealer greeting again.
 
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db/index";
-import { whatsappOperators } from "@/lib/db/schema";
+import { users, whatsappOperators } from "@/lib/db/schema";
+import { isStaffRole } from "@/lib/users/staff-options";
 import { requireRole } from "@/lib/auth-utils";
 import {
   errorResponse,
@@ -36,6 +37,19 @@ export const PATCH = withErrorHandler(
     }
     if (typeof body?.notes === "string") {
       patch.notes = body.notes.trim() || null;
+    }
+    // E-390 — link the number to the iTarang sales person who uses it (null =
+    // unlink). Customer KYC then lists the dealers that person owns.
+    if (body?.userId === null) {
+      patch.user_id = null;
+    } else if (typeof body?.userId === "string" && body.userId) {
+      const [u] = await db
+        .select({ id: users.id, role: users.role })
+        .from(users)
+        .where(and(eq(users.id, body.userId), eq(users.is_active, true)))
+        .limit(1);
+      if (!u || !isStaffRole(u.role)) return errorResponse("Pick an active iTarang team member.", 400);
+      patch.user_id = u.id;
     }
     if (typeof body?.isActive === "boolean") {
       patch.is_active = body.isActive;

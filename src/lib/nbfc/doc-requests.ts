@@ -160,6 +160,8 @@ export interface CreateWrapperInput {
    * create the exact children a human would have (instead of parsing comments).
    */
   requestedItems?: ForwardItem[];
+  /** E-389 — set when the parent raised this from the CIBIL review panel. */
+  cibilReviewId?: string | null;
 }
 
 export interface ForwardItem {
@@ -204,6 +206,7 @@ export async function createNbfcDocRequest(
     raised_by: input.raisedBy,
     sla_due_at: slaDueAt,
     requested_items: input.requestedItems ?? [],
+    cibil_review_id: input.cibilReviewId ?? null,
     created_at: now,
     updated_at: now,
   });
@@ -778,6 +781,8 @@ export async function fulfilNbfcDocRequestByAdmin(opts: {
     })
     .where(eq(nbfcDocRequests.id, opts.requestId));
 
+  signalCibilDocsReturned(wrapper);
+
   return {
     leadId: wrapper.lead_id,
     tenantId: wrapper.tenant_id,
@@ -1018,6 +1023,34 @@ export async function pushNbfcDocRequest(opts: {
       updated_at: now,
     })
     .where(eq(nbfcDocRequests.id, opts.requestId));
+  signalCibilDocsReturned(wrapper);
+}
+
+/**
+ * E-389 — a request raised from the CIBIL review panel just came back to the
+ * NBFC: tell the approver the documents are in and the report is waiting for
+ * his decision. Fire-and-forget; lazy import because cibil-review.ts depends
+ * on this module.
+ */
+function signalCibilDocsReturned(w: {
+  id: string;
+  lead_id: string;
+  tenant_id: string;
+  cibil_review_id: string | null;
+}): void {
+  if (!w.cibil_review_id) return;
+  void import("@/lib/nbfc/cibil-review")
+    .then((m) =>
+      m.notifyCibilDocsReturned({
+        tenantId: w.tenant_id,
+        leadId: w.lead_id,
+        reviewId: w.cibil_review_id!,
+        requestId: w.id,
+      }),
+    )
+    .catch((err) =>
+      console.warn("[doc-requests] CIBIL docs-returned notice failed", err instanceof Error ? err.message : String(err)),
+    );
 }
 
 /**

@@ -1,0 +1,12 @@
+import fs from "node:fs";
+import pg from "pg";
+const lines = fs.readFileSync(".env.local","utf8").split(/\r?\n/);
+const url = lines.find(l=>/^DATABASE_URL=.*database-1/.test(l)).replace(/^DATABASE_URL=/,"").trim().replace(/[?&]sslmode=require/,"");
+const c = new pg.Client({connectionString:url, ssl:{rejectUnauthorized:false}});
+await c.connect();
+const cols = (await c.query(`select column_name from information_schema.columns where table_name='leads' and (column_name ilike '%dealer%' or column_name ilike '%assign%' or column_name ilike '%owner%' or column_name ilike '%created_by%')`)).rows.map(r=>r.column_name);
+console.log("ownership cols:", cols);
+const sel = cols.join(", ");
+const r = await c.query(`select id, ${sel} from leads where id in ('LEAD-20261117-6028c6ce','LEAD-20261117-62253ef1')`);
+console.table(r.rows);
+await c.end();

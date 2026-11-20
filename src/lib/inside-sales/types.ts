@@ -147,6 +147,15 @@ export type LeadDetailLead = QueueRow & {
     acquisition_campaign_name?: string | null;
     /** ID 74 (E-314): when the rep marked the lead Won. */
     won_at?: string | null;
+    /** ID 246 (header, display only): the lead's one open booking (ID 247 rule). */
+    has_open_booking?: boolean | null;
+    next_booking_date?: string | null;
+    /** > 0 only when the booking's date has passed (IST). */
+    next_booking_overdue_days?: number | null;
+    next_booking_booked_at?: string | null;
+    /** ID 246 Attempts: visits made (visit_status visited) and calls made (inside_sales_call). */
+    visits_done?: number | null;
+    calls_made?: number | null;
 };
 
 /** ID 74 — the "Won without an approved quote" flag, gated on the status it describes. */

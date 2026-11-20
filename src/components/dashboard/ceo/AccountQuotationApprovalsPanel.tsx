@@ -11,6 +11,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import Link from "next/link";
+import { SortHeaderButton, sortRows, useUrlTableSort, type SortSpec } from "@/components/shared/TableSort";
 
 type Row = {
     quotation_id: string;
@@ -52,6 +53,15 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
     return json.data as T;
 }
 
+// ID 243 — sort the account quotes. The API caps the list, so the rows in hand
+// are sorted in the browser; kept in the page link (?acq_sort=).
+const ACCOUNT_QUOTE_SORT: SortSpec<Row>[] = [
+    { key: "amount", type: "number", value: (q) => q.value },
+    { key: "raised", type: "date", value: (q) => q.created_at },
+    { key: "decided", type: "date", value: (q) => q.approved_at },
+    { key: "account", type: "text", value: (q) => q.account_name ?? q.account_id },
+];
+
 export function AccountQuotationApprovalsPanel() {
     const [tab, setTab] = useState<"pending" | "history">("pending");
     const queryClient = useQueryClient();
@@ -62,6 +72,8 @@ export function AccountQuotationApprovalsPanel() {
     });
     const [rejecting, setRejecting] = useState<string | null>(null);
     const [reason, setReason] = useState("");
+    const { sort, toggle: toggleSort, comparator } = useUrlTableSort(ACCOUNT_QUOTE_SORT, { prefix: "acq_" });
+    const rows = sortRows(data?.quotations ?? [], comparator);
     const decide = useMutation({
         mutationFn: (v: { id: string; decision: "approve" | "reject"; reason?: string }) =>
             api(`/api/dashboard/ceo/account-quotations/${v.id}/decision`, {
@@ -107,8 +119,17 @@ export function AccountQuotationApprovalsPanel() {
                 <p className="px-4 py-5 text-sm text-ink-muted">{tab === "pending" ? "No account quotation is waiting for you." : "No decisions yet."}</p>
             )}
             {decide.error && <p className="mx-4 mt-3 rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700">{(decide.error as Error).message}</p>}
+            {rows.length > 1 && (
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 pt-3 text-[10px] font-semibold text-ink-muted">
+                    <span className="normal-case tracking-normal">Sort by</span>
+                    <SortHeaderButton label="Amount" sortKey="amount" sort={sort} onToggle={toggleSort} />
+                    <SortHeaderButton label="Raised" sortKey="raised" sort={sort} onToggle={toggleSort} />
+                    {tab === "history" && <SortHeaderButton label="Decided" sortKey="decided" sort={sort} onToggle={toggleSort} />}
+                    <SortHeaderButton label="Account" sortKey="account" sort={sort} onToggle={toggleSort} />
+                </div>
+            )}
             <ul className="divide-y divide-border">
-                {data?.quotations.map((q) => (
+                {rows.map((q) => (
                     <li key={q.quotation_id} className="px-4 py-3 text-sm">
                         <div className="flex flex-wrap items-center gap-2">
                             <span className="rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[11px] font-semibold text-violet-700">Account</span>

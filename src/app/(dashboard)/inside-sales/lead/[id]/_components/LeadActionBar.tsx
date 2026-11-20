@@ -1,6 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import {
+    ArrowRight,
     MessageSquarePlus,
     Receipt,
     Send,
@@ -14,7 +16,7 @@ import { CLAIM_ROLES, type LeadDetailBundle } from "@/lib/inside-sales/types";
 import { isOpen, isTerminal, type LeadStatus } from "@/lib/lifecycle/transitions";
 import type { ActiveModal } from "./LeadDetailView";
 import { CallNowButton } from "@/components/leads/call-now-button";
-import { InfoTip } from "@/components/ui/info-tip";
+import { LeadMoreMenu, type MoreMenuItem } from "./LeadMoreMenu";
 import { CorrectLeadGstinButton } from "@/components/leads/CorrectLeadGstinButton";
 import { GSTIN_CORRECTION_MANAGER_ROLES } from "@/lib/leads/correctLeadGstinRules";
 import { canReassignToIsr, canTransferAnyLead, managerMayTransferStatus } from "@/lib/leads/access";
@@ -137,16 +139,51 @@ export function LeadActionBar({
     // rep can re-transfer a lead, the same freedom the status dropdown gives.
     // Mark Won and Escalate stay open-only: their routes refuse a Lost /
     // Converted lead, so the button would only ever produce an error.
+    //
+    // ID 246: grouped by stage — the work buttons on the left, the decision on
+    // the right, the rest under More. Each action keeps its handler, its
+    // show/hide rule and its disabled reason (244_246 workflows).
+    const continueOnboarding =
+        (status === "Won" || status === "Converted") &&
+        Boolean(lead.dealer_onboarding_application_id) &&
+        (lead.onboarding_status ?? "draft").toLowerCase() === "draft";
+
+    const more: MoreMenuItem[] = [
+        {
+            key: "commercials",
+            label: "Update quote",
+            icon: Receipt,
+            onClick: () => onAction("commercials"),
+            hint: "Share a brochure, give or revise a quote, or change terms.",
+        },
+        { key: "transfer_asm", label: "Transfer to ASM", icon: Send, onClick: () => onAction("transfer_asm") },
+    ];
+    // ID 221: only to someone in the owner's team; nobody under them = no item (Transfer to ASM stays).
+    if (canOwnerReassign) more.push({ key: "reassign", label: "Reassign", icon: Repeat, onClick: () => onAction("reassign") });
+    more.push({
+        key: "escalate",
+        label: "Escalate",
+        icon: AlertCircle,
+        tone: "amber",
+        onClick: () => onAction("escalate"),
+        disabled: !open,
+        disabledReason: !open ? "This lead is closed" : undefined,
+    });
 
     return (
         <div className="sticky bottom-0 z-10 bg-white border-t border-gray-200 px-4 sm:px-6 py-2.5 flex flex-wrap items-center gap-2">
-            <ActionButton primary icon={MessageSquarePlus} onClick={() => onAction("touchpoint")}>
+            {continueOnboarding && (
+                <Link
+                    href={`/dealer-onboarding?applicationId=${lead.dealer_onboarding_application_id}`}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-700"
+                >
+                    Continue onboarding
+                    <ArrowRight className="h-3.5 w-3.5" />
+                </Link>
+            )}
+            <ActionButton primary={!continueOnboarding} icon={MessageSquarePlus} onClick={() => onAction("touchpoint")}>
                 Log activity
             </ActionButton>
-            <ActionButton icon={Receipt} onClick={() => onAction("commercials")}>
-                Update quote
-            </ActionButton>
-            <InfoTip className="-ml-1">Share a brochure, give or revise a quote, or change terms.</InfoTip>
             {/* ID 83: the owner asks the NeoDove calling team to ring this dealer
                 next. The call that follows is marked "called on your behalf". */}
             <CallNowButton
@@ -155,53 +192,31 @@ export function LeadActionBar({
                 disabled={!open}
                 onQueued={onChanged}
             />
-            <ActionButton
-                icon={Send}
-                onClick={() => onAction("transfer_asm")}
-            >
-                Transfer to ASM
-            </ActionButton>
-            {isWon ? (
-                correctGstin
-            ) : (
-                <ActionButton
-                    icon={CheckCircle2}
-                    tone="emerald"
-                    onClick={() => onAction("mark_converted")}
-                    disabled={!open}
-                    disabledReason={
-                        !open ? `Lead is ${status === "Lost" ? "Lost — reactivate it first" : "closed"}` : undefined
-                    }
-                >
-                    Mark Won
-                </ActionButton>
-            )}
-            {/* ID 115.4: a Won lead goes to Lost only through the admin
-                onboarding drop-out review — the server refuses it here. */}
-            {status !== "Won" && (
-                <ActionButton
-                    icon={XCircle}
-                    tone="rose"
-                    onClick={() => onAction("mark_lost")}
-                >
-                    Mark Lost
-                </ActionButton>
-            )}
-            {/* ID 221: only to someone in the owner's team; nobody under them = no button (Transfer to ASM stays). */}
-            {canOwnerReassign && (
-                <ActionButton icon={Repeat} onClick={() => onAction("reassign")}>
-                    Reassign
-                </ActionButton>
-            )}
-            <ActionButton
-                icon={AlertCircle}
-                tone="amber"
-                onClick={() => onAction("escalate")}
-                disabled={!open}
-                disabledReason={!open ? "This lead is closed" : undefined}
-            >
-                Escalate
-            </ActionButton>
+            <div className="ml-auto flex flex-wrap items-center gap-2">
+                {isWon ? (
+                    correctGstin
+                ) : (
+                    <ActionButton
+                        icon={CheckCircle2}
+                        tone="emerald"
+                        onClick={() => onAction("mark_converted")}
+                        disabled={!open}
+                        disabledReason={
+                            !open ? `Lead is ${status === "Lost" ? "Lost — reactivate it first" : "closed"}` : undefined
+                        }
+                    >
+                        Mark Won
+                    </ActionButton>
+                )}
+                {/* ID 115.4: a Won lead goes to Lost only through the admin
+                    onboarding drop-out review — the server refuses it here. */}
+                {status !== "Won" && (
+                    <ActionButton icon={XCircle} tone="rose" onClick={() => onAction("mark_lost")}>
+                        Mark Lost
+                    </ActionButton>
+                )}
+                <LeadMoreMenu items={more} />
+            </div>
         </div>
     );
 }

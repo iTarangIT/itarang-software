@@ -11,8 +11,20 @@ import { KpiCards } from "./KpiCards";
 import { FiltersBar } from "./FiltersBar";
 import { ConvertedTable } from "./ConvertedTable";
 import { DrillDrawer } from "./DrillDrawer";
+import { useUrlTableSort, type SortSpec } from "@/components/shared/TableSort";
 
 const PAGE_SIZE = 25;
+
+// ID 243 — header sort, kept in the page link and done by the API (the list is
+// paged). Keys match CONVERTED_SORT_KEYS in lib/sales-insight/types.ts.
+const CONVERTED_SORT: SortSpec<unknown>[] = [
+    { key: "source", type: "text" },
+    { key: "name", type: "text" },
+    { key: "region", type: "text" },
+    { key: "dealer", type: "text" },
+    { key: "converted", type: "date" },
+    { key: "intent", type: "number" },
+];
 
 function serializeFilters(f: ConvertedFilters): string {
     const params = new URLSearchParams();
@@ -23,6 +35,10 @@ function serializeFilters(f: ConvertedFilters): string {
     if (f.search) params.set("search", f.search);
     params.set("page", String(f.page ?? 1));
     params.set("limit", String(f.limit ?? PAGE_SIZE));
+    if (f.sort) {
+        params.set("sort", f.sort.key);
+        params.set("dir", f.sort.dir);
+    }
     return params.toString();
 }
 
@@ -39,10 +55,23 @@ export function ConvertedInsightView() {
 
     const [drawerRow, setDrawerRow] = useState<ConvertedRow | null>(null);
 
+    const { sort, toggle: toggleSort } = useUrlTableSort(CONVERTED_SORT, { mode: "server" });
+    // A new order starts from the first page.
+    const sortQs = sort ? `${sort.key}:${sort.dir}` : "";
+    const [pagedFor, setPagedFor] = useState(sortQs);
+    if (pagedFor !== sortQs) {
+        setPagedFor(sortQs);
+        setFilters((f) => ({ ...f, page: 1 }));
+    }
+    const sorted: ConvertedFilters = {
+        ...filters,
+        sort: sort ? { key: sort.key as NonNullable<ConvertedFilters["sort"]>["key"], dir: sort.dir } : null,
+    };
+
     const query = useQuery<ConvertedListResponse>({
-        queryKey: ["sales-insight-converted", filters],
+        queryKey: ["sales-insight-converted", sorted],
         queryFn: async () => {
-            const res = await fetch(`/api/sales-insight/converted?${serializeFilters(filters)}`, {
+            const res = await fetch(`/api/sales-insight/converted?${serializeFilters(sorted)}`, {
                 cache: "no-store",
             });
             if (!res.ok) throw new Error("Failed to load converted leads");
@@ -52,7 +81,7 @@ export function ConvertedInsightView() {
     });
 
     const handleExport = () => {
-        const url = `/api/sales-insight/converted/export?${serializeFilters({ ...filters, page: 1, limit: 50_000 })}`;
+        const url = `/api/sales-insight/converted/export?${serializeFilters({ ...sorted, page: 1, limit: 50_000 })}`;
         window.location.href = url;
     };
 
@@ -76,6 +105,8 @@ export function ConvertedInsightView() {
                 error={query.error?.message ?? null}
                 onPageChange={(page) => setFilters((f) => ({ ...f, page }))}
                 onRowClick={(row) => setDrawerRow(row)}
+                sort={sort}
+                onSort={toggleSort}
             />
 
             <DrillDrawer row={drawerRow} onClose={() => setDrawerRow(null)} />

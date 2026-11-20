@@ -85,6 +85,12 @@ export interface SectionGOptions {
    * back to the other matches, instead of dead-ending on the Bajaj card.
    */
   excludeNbfcIds?: number[];
+  /**
+   * E-391 — return every BRE hit, without the city_default_loan_products pin.
+   * The NBFC routing rules check their own pick against the raw hits; a pin
+   * must not hide a lender a routing rule names.
+   */
+  skipPinnedDefault?: boolean;
 }
 
 /**
@@ -194,6 +200,7 @@ export async function loadSectionGOptions(
     grouped = grouped.filter((g) => !drop.has(g.nbfcId));
   }
 
+  if (opts?.skipPinnedDefault) return grouped;
   return await applyPinnedDefault(lead, grouped);
 }
 

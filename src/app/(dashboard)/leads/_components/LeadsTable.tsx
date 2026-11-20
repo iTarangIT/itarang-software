@@ -24,6 +24,7 @@ import {
 // — only this one takes `provider` and `onCallStart`, which the dialer needs.
 import { CallButton } from "@/components/leads/call-button";
 import { InfoTip } from "@/components/ui/info-tip";
+import { SortableTh, SortHeaderButton, type SortState } from "@/components/shared/TableSort";
 import { SendToNeodoveButton } from "@/components/leads/send-to-neodove-button";
 import { NeodoveTag } from "@/components/leads/neodove-tag";
 import { IvrTag } from "@/components/leads/ivr-tag";
@@ -160,6 +161,13 @@ type Props = {
     endedLeadIds: Set<string>;
     /** ID 199: a manager's team view — adds the review columns. */
     teamReview?: boolean;
+    /**
+     * ID 243 — header sort. The list is paged, so the page sends the sort to
+     * GET /api/dealer-leads (keys in lib/leads/leadListSort.ts) and keeps it in
+     * the link. Without onSort the headers are plain.
+     */
+    sort?: SortState | null;
+    onSort?: (key: string) => void;
 };
 
 export function LeadsTable({
@@ -178,7 +186,16 @@ export function LeadsTable({
     countdown,
     endedLeadIds,
     teamReview = false,
+    sort = null,
+    onSort,
 }: Props) {
+    // ID 243 — a sortable header when the page wires sorting, a plain one otherwise.
+    const th = (label: string, sortKey: string, className: string) =>
+        onSort ? (
+            <SortableTh label={label} sortKey={sortKey} sort={sort} onToggle={onSort} className={`${className} px-4 py-3 text-left`} />
+        ) : (
+            <th className={`${className} px-4 py-3 text-left font-semibold`}>{label}</th>
+        );
     // The checkbox column only earns its place if the viewer can act in bulk.
     const selectable = caps.canBulkAct || caps.canSendToNeodove;
     const allOnPageSelected =
@@ -211,43 +228,29 @@ export function LeadsTable({
                                     />
                                 </th>
                             )}
-                            <th className="min-w-[200px] px-4 py-3 text-left font-semibold">
-                                Dealer / Shop
-                            </th>
+                            {th("Dealer / Shop", "dealer", "min-w-[200px]")}
                             <th className="min-w-[140px] px-4 py-3 text-left font-semibold">
                                 Phone
                             </th>
-                            <th className="min-w-[130px] px-4 py-3 text-left font-semibold">
-                                Region
-                            </th>
-                            <th className="min-w-[150px] px-4 py-3 text-left font-semibold">
-                                Status
-                            </th>
+                            {th("Region", "city", "min-w-[130px]")}
+                            {th("Status", "status", "min-w-[150px]")}
                             <th className="min-w-[120px] px-4 py-3 text-left font-semibold">
                                 Business Type
                             </th>
-                            <th className="min-w-[110px] px-4 py-3 text-left font-semibold">
-                                Interest
-                            </th>
+                            {th("Interest", "interest", "min-w-[110px]")}
                             {caps.canSeeOwnerAsm && (
                                 <>
-                                    <th className="min-w-[150px] px-4 py-3 text-left font-semibold">
-                                        Owner
-                                    </th>
-                                    <th className="min-w-[120px] px-4 py-3 text-left font-semibold">
-                                        ASM
-                                    </th>
+                                    {th("Owner", "owner", "min-w-[150px]")}
+                                    {th("ASM", "asm", "min-w-[120px]")}
                                 </>
                             )}
                             <th className="min-w-[140px] px-4 py-3 text-left font-semibold">
                                 Visit / Outcome
                             </th>
-                            <th className="min-w-[110px] px-4 py-3 text-left font-semibold">
-                                Last activity
-                            </th>
+                            {th("Last activity", "last_activity", "min-w-[110px]")}
                             <th className="min-w-[90px] px-4 py-3 text-left font-semibold">
                                 <span className="inline-flex items-center gap-1">
-                                    Idle days
+                                    {onSort ? <SortHeaderButton label="Idle days" sortKey="idle" sort={sort} onToggle={onSort} /> : "Idle days"}
                                     <InfoTip>
                                         Working days (holidays off) since the latest of: last call, visit or
                                         status change; the day the owner got the lead; a follow-up in the
@@ -256,7 +259,17 @@ export function LeadsTable({
                                 </span>
                             </th>
                             <th className="min-w-[170px] px-4 py-3 text-left font-semibold">
-                                Source / Campaign
+                                {onSort ? (
+                                    // The cell shows the source, the campaign and the created date:
+                                    // sort by source, or by when the lead was created.
+                                    <span className="inline-flex flex-wrap items-center gap-x-2">
+                                        <SortHeaderButton label="Source" sortKey="source" sort={sort} onToggle={onSort} />
+                                        <span className="text-gray-300">/</span>
+                                        <SortHeaderButton label="Created" sortKey="created" sort={sort} onToggle={onSort} />
+                                    </span>
+                                ) : (
+                                    "Source / Campaign"
+                                )}
                             </th>
                             {teamReview && <TeamReviewHeaders />}
                             <th className="min-w-[300px] px-4 py-3 text-right font-semibold">

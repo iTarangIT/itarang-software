@@ -13,6 +13,7 @@ import { eq } from "drizzle-orm";
 import { getCurrentTenant, getSessionUser } from "@/lib/nbfc/tenant";
 import {
   nbfcUsers,
+  nbfcTenants,
   nbfcRiskRules,
   nbfcServiceConfig,
   nbfcStepOwners,
@@ -69,6 +70,13 @@ export default async function SettingsPage() {
       notification_prefs: nbfcUsers.notification_prefs,
       email: usersTable.email,
       name: usersTable.name,
+      phone: usersTable.phone,
+      // E-387 — parent/child CIBIL approval hierarchy.
+      parent_user_id: nbfcUsers.parent_user_id,
+      delegated_steps: nbfcUsers.delegated_steps,
+      // E-388 — menus + designation.
+      allowed_nav: nbfcUsers.allowed_nav,
+      title: nbfcUsers.title,
     })
     .from(nbfcUsers)
     .leftJoin(usersTable, eq(usersTable.id, nbfcUsers.user_id))
@@ -78,6 +86,11 @@ export default async function SettingsPage() {
   // Normalise the legacy 'admin' seed → 'nbfc_admin' so the account owner can
   // edit (mirrors resolveActor; the server PUT routes apply the same mapping).
   const canEdit = normalizeNbfcRole(myMembership?.role) === "nbfc_admin";
+  const [hierarchyRow] = await db
+    .select({ enabledAt: nbfcTenants.cibil_review_enabled_at })
+    .from(nbfcTenants)
+    .where(eq(nbfcTenants.id, tenant.id))
+    .limit(1);
 
   // Addendum V0.2 §7.4 / §7.2 — Service Opt-In config + step owners.
   const [serviceCfgRow] = await db
@@ -164,11 +177,18 @@ export default async function SettingsPage() {
       <UsersSection
         tenantId={tenant.id}
         currentUserId={session?.id ?? null}
+        canManage={canEdit}
+        cibilReviewEnabledAt={hierarchyRow?.enabledAt?.toISOString() ?? null}
         members={memberships.map((m) => ({
           user_id: m.user_id,
           role: m.role,
           email: m.email,
           name: m.name,
+          phone: m.phone ?? null,
+          parent_user_id: m.parent_user_id ?? null,
+          delegated_steps: Array.isArray(m.delegated_steps) ? m.delegated_steps : [],
+          allowed_nav: Array.isArray(m.allowed_nav) ? m.allowed_nav : null,
+          title: m.title ?? null,
           created_at: m.created_at?.toISOString() ?? null,
         }))}
       />

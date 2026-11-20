@@ -12,7 +12,8 @@
 // that without a lot of casting; raw SQL is shorter and clearer.
 
 import { sql, type SQL } from "drizzle-orm";
-import type { ConvertedFilters } from "./types";
+import type { ConvertedFilters, ConvertedSortKey } from "./types";
+import { sortOrderSql } from "@/lib/http/sortParam";
 import { INTENT_THRESHOLDS } from "@/lib/ai/scoring";
 
 export type BuiltQueries = {
@@ -25,6 +26,17 @@ export type BuiltQueries = {
 const DEFAULT_PAGE = 1;
 const DEFAULT_LIMIT = 25;
 const MAX_LIMIT = 100;
+
+// ID 243 — header sort over the `base` CTE's columns. Blank text becomes NULL
+// so it stays last both ways; newest conversion, then id, is the tie-breaker.
+const CONVERTED_SORT_SQL: Record<ConvertedSortKey, SQL> = {
+    source: sql`source`,
+    name: sql`NULLIF(btrim(lower(display_name)), '')`,
+    region: sql`NULLIF(btrim(lower(region)), '')`,
+    dealer: sql`NULLIF(btrim(lower(dealer_id::text)), '')`,
+    converted: sql`converted_at`,
+    intent: sql`intent_score`,
+};
 
 // Shared UNION-of-sources expression, parameterised on whether to apply
 // the pagination clause. Lives behind a function so the count query, the
@@ -149,7 +161,7 @@ export function buildConvertedQuery(filters: ConvertedFilters): BuiltQueries {
             raw_ref,
             also_in
         FROM base
-        ORDER BY converted_at DESC NULLS LAST
+        ORDER BY ${sortOrderSql(filters.sort ?? null, CONVERTED_SORT_SQL, sql`converted_at DESC NULLS LAST, id`)}
         LIMIT ${limit} OFFSET ${offset}
     `;
 

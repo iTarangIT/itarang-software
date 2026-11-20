@@ -14,6 +14,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { enachMandates } from "@/lib/db/schema";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
+import { hierarchyBlock } from "@/lib/nbfc/approval-hierarchy-http";
 import { generateEnachRef, getWinningAssignment } from "@/lib/nbfc/enach";
 import { notifyEnachEvent } from "@/lib/notifications/events";
 import { tenantDisplayName } from "@/lib/notifications/emit";
@@ -45,6 +46,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
     }
 
     const actor = await resolveActor(req.headers);
+    // E-387 — parent/child CIBIL approval hierarchy gate.
+    const hierarchyBlocked = await hierarchyBlock(actor, leadId, "enach");
+    if (hierarchyBlocked) return hierarchyBlocked;
     // §9.2 — waiver is restricted to Credit/Underwriting (nbfc_admin may also act
     // since it holds full configuration authority).
     if (actor.role !== "credit_underwriting" && actor.role !== "nbfc_admin") {

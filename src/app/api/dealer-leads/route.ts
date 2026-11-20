@@ -7,6 +7,8 @@ import { withErrorHandler } from "@/lib/api-utils";
 import { LEADS_PAGE_ROLES, canEditLead, capabilitiesFor, exportsOwnLeadsOnly } from "@/lib/leads/access";
 import { parseLeadListFilters } from "@/lib/leads/leadListParams";
 import { getTeamMemberIds } from "@/lib/users/team";
+import { parseSortParam } from "@/lib/http/sortParam";
+import { LEAD_LIST_SORT_KEYS } from "@/lib/leads/leadListSort";
 import {
   BULK_ID_CAP,
   fetchBusinessTypeCounts,
@@ -320,13 +322,18 @@ export const GET = withErrorHandler(async (req: Request) => {
   // leads; only looked up for the own-scoped roles, everyone else sees more.
   const teamMemberIds = exportsOwnLeadsOnly(user.role) ? await getTeamMemberIds(user.id) : [];
   const filters: LeadListFilters = await parseLeadListFilters(searchParams, caps, { ...user, teamMemberIds });
+  // ID 243 — header sort (?sort=&dir=), only for the list's own columns; the
+  // fixed order stays the tie-breaker so page 2 carries on the same order.
+  // Owner / ASM order only for a role that sees those columns (or a manager on a team view).
+  const askedSort = parseSortParam(searchParams, LEAD_LIST_SORT_KEYS);
+  const sort = askedSort && !caps.canSeeOwnerAsm && teamMemberIds.length === 0 && (askedSort.key === "owner" || askedSort.key === "asm") ? null : askedSort;
 
   // ?ids_only=1 — every id matching these filters, for "select all N matching".
   // Returned on its own: the caller wants ids to feed a bulk action, not rows,
   // and materialising 5,000 joined rows (plus the visit LATERAL and both user
   // joins) to throw away every column but one would be pure waste.
   if (searchParams.get("ids_only") === "1") {
-    const ids = await fetchLeadListIds(filters);
+    const ids = await fetchLeadListIds(filters, undefined, sort);
     return NextResponse.json({
       success: true,
       ids,
@@ -340,7 +347,7 @@ export const GET = withErrorHandler(async (req: Request) => {
 
   const [rows, stats, allFacets, campaignFacets, scrapeRuns, businessTypeCounts, numberSearch, hiddenLost] =
     await Promise.all([
-      fetchLeadListRows(filters, page, limit),
+      fetchLeadListRows(filters, page, limit, sort),
       fetchLeadListStats(filters),
       fetchLeadListFacets(),
       fetchCampaignFacets(),

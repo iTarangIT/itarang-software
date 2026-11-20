@@ -19,6 +19,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { fieldInvestigations, leads, nbfcServiceConfig } from "@/lib/db/schema";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
+import { hierarchyBlock } from "@/lib/nbfc/approval-hierarchy-http";
 import { resolveServiceOptIn } from "@/lib/nbfc/service-opt-in";
 import { getActiveAssignment } from "@/lib/nbfc/vkyc";
 import { generateFiLinkToken, geocodeAddress, getCurrentFiTrack, slaDueFrom } from "@/lib/nbfc/fi";
@@ -84,6 +85,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
     const d = parsed.data;
 
     const actor = await resolveActor(req.headers);
+    // E-387 — parent/child CIBIL approval hierarchy gate.
+    const hierarchyBlocked = await hierarchyBlock(actor, leadId, "fi");
+    if (hierarchyBlocked) return hierarchyBlocked;
     const canAct = actor.role === "fi_coordinator" || actor.role === "nbfc_admin";
     if (!canAct) {
       return NextResponse.json(
