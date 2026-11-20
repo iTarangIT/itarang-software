@@ -1,11 +1,14 @@
 import { dialerSession } from "@/lib/queue/dialerSession";
 import { db } from "@/lib/db";
+import { dialerCampaigns } from "@/lib/db/schema";
+import { eq } from "drizzle-orm";
 import { triggerBolnaCall } from "@/lib/ai/bolna_ai/triggerCall";
 import { triggerElevenLabsCall } from "@/lib/ai/elevenlabs/triggerCall";
+import { markCampaignLeadCalling } from "@/lib/queue/campaignTracker";
 import {
-  finalizeCampaign,
-  markCampaignLeadCalling,
-} from "@/lib/queue/campaignTracker";
+  campaignSessionEnded,
+  legacyTimeoutMayAdvance,
+} from "@/lib/queue/legacyDialerStatus";
 import { NextResponse } from "next/server";
 import { LEADS_PAGE_ROLES } from "@/lib/leads/access";
 import { guardApi } from "@/lib/auth/apiGuard";
@@ -14,20 +17,37 @@ export async function GET() {
   // ID 118: signed in, with a role that reaches this screen.
   const authGate = await guardApi([...LEADS_PAGE_ROLES]);
   if (!authGate.ok) return authGate.response;
-  // If current call timed out (3 min), auto-advance to next lead using
-  // whichever provider this dialer session was started with.
-  if ((await dialerSession.isActive()) && (await dialerSession.isCallTimedOut())) {
+
+  const campaignId = await dialerSession.getCampaignId();
+
+  // 20 Nov 2026 — a session that belongs to a campaign is read-only here.
+  // advanceCampaign owns the dialling (skips, window, dial guard, retries); this
+  // poll used to dial the session queue itself and close the campaign when it
+  // ran dry, stranding every booked retry (legacyDialerStatus.ts). Clear the
+  // session once the campaign has ended so the /leads banner goes idle.
+  if (campaignId) {
+    const [c] = await db
+      .select({ status: dialerCampaigns.status })
+      .from(dialerCampaigns)
+      .where(eq(dialerCampaigns.id, campaignId))
+      .limit(1);
+    if (campaignSessionEnded(c?.status)) await dialerSession.stop();
+  }
+
+  // Manual queue (no campaign): if the current call timed out (3 min),
+  // auto-advance to the next lead using the session's provider.
+  if (
+    legacyTimeoutMayAdvance({ campaignId }) &&
+    (await dialerSession.isActive()) &&
+    (await dialerSession.isCallTimedOut())
+  ) {
     console.log("[AI DIALER] Call timed out, advancing to next lead");
 
-    // Capture campaignId BEFORE getNext — if the queue exhausts here, the
-    // session is cleared and we need the id to finalize the campaign row.
-    const campaignId = await dialerSession.getCampaignId();
     const nextLeadId = await dialerSession.getNext();
 
-    if (!nextLeadId) {
-      // Queue exhausted on timeout. Finalize the campaign as completed.
-      await finalizeCampaign(campaignId, "completed");
-    } else {
+    // Queue exhausted on timeout: getNext() has cleared the session. There is
+    // no campaign row to finalize on this path.
+    if (nextLeadId) {
       const lead = await db.query.dealerLeads.findFirst({
         where: (l, { eq }) => eq(l.id, nextLeadId),
       });
@@ -37,10 +57,7 @@ export async function GET() {
         const trigger =
           provider === "elevenlabs" ? triggerElevenLabsCall : triggerBolnaCall;
 
-        await markCampaignLeadCalling({
-          leadId: lead.id,
-          campaignId,
-        });
+        await markCampaignLeadCalling({ leadId: lead.id, campaignId: null });
 
         // Fire and forget — don't block the status response
         trigger({ phone: lead.phone, leadId: lead.id }).catch((err) =>
