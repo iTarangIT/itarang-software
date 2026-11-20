@@ -17,6 +17,7 @@ import {
     nextWindowOpen,
     planRetry,
     REATTEMPT_RULES,
+    UNREACHED_RETRY_DAYS,
     type RetryInput,
     type RetryWindow,
 } from "@/lib/ai-dialer/retryPolicy";
@@ -81,19 +82,35 @@ describe("isAutoRetryable", () => {
 });
 
 describe("planRetry — attempt budget", () => {
-    it("gives a pre-E-315 campaign (max_retries null) the default budget", () => {
+    // 20 Nov 2026 — an unreached lead is redialled for UNREACHED_RETRY_DAYS,
+    // not 1 + max_retries dials.
+    it("keeps redialling an unreached lead past max_retries", () => {
         expect(planRetry(base({ maxRetries: null }))).not.toBeNull();
-        expect(planRetry(base({ maxRetries: null, attemptCount: DEFAULT_MAX_RETRIES }))).not.toBeNull();
-        expect(planRetry(base({ maxRetries: null, attemptCount: DEFAULT_MAX_RETRIES + 1 }))).toBeNull();
+        expect(planRetry(base({ maxRetries: null, attemptCount: DEFAULT_MAX_RETRIES + 1 }))).not.toBeNull();
+        expect(planRetry(base({ attemptCount: 4 }))).not.toBeNull();
+        expect(planRetry(base({ attemptCount: 12 }))).not.toBeNull();
     });
 
     it("is off only when max_retries is explicitly 0", () => {
         expect(planRetry(base({ maxRetries: 0 }))).toBeNull();
     });
 
-    it("allows 1 + max_retries dials in total", () => {
-        expect(planRetry(base({ attemptCount: 3 }))).not.toBeNull();
-        expect(planRetry(base({ attemptCount: 4 }))).toBeNull();
+    it("max_retries still caps redials of a dropped conversation", () => {
+        const dropped = { status: "completed", callOutcome: DISCONNECTED_OUTCOME };
+        expect(planRetry(base({ ...dropped, attemptCount: 3 }))).not.toBeNull();
+        expect(planRetry(base({ ...dropped, attemptCount: 4 }))).toBeNull();
+    });
+
+    it(`stops an unreached lead after ${UNREACHED_RETRY_DAYS} days from its first dial`, () => {
+        const history = [{ at: ist("2026-09-28T10:00:00").toISOString() }];
+        // Day 4 (Fri 2 Oct), dial 11: next opening is Sat 3 Oct = day 5, booked.
+        expect(
+            planRetry(base({ attemptCount: 11, history, now: ist("2026-10-02T11:00:00") })),
+        ).not.toBeNull();
+        // Day 7 (Sun 4 Oct, not a working day) would land on Mon 5 Oct = day 7: done.
+        expect(
+            planRetry(base({ attemptCount: 13, history, dialsToday: 2, now: ist("2026-10-03T17:00:00") })),
+        ).toBeNull();
     });
 
     it("does not retry a completed call", () => {
@@ -189,7 +206,9 @@ describe("line blocked on our side (refunded attempts)", () => {
                 lineBlockedRetriesUsed: MAX_LINE_BLOCKED_RETRIES,
             }),
         );
-        expect(plan).toBeNull(); // 4th dial, budget spent
+        // Refunds used up: counted like any failure — an unreached lead, so
+        // redialled within the 7 days (20 Nov 2026).
+        expect(plan?.consumesAttempt).toBe(true);
     });
 
     it("is off for campaigns created with auto-retry off", () => {
@@ -237,5 +256,62 @@ describe("lastConversation — Connected sticks once the dealer spoke", () => {
                 { status: "no_response", outcome: "trigger_failed: SIP 480", call_id: null },
             ]),
         ).toEqual({ outcome: "unknown", call_id: "c2" });
+    });
+});
+
+// 20 Nov 2026 — "completed status 100%": unreached leads keep being redialled
+// for UNREACHED_RETRY_DAYS; only wrong numbers and IVR / switchboards stop.
+describe("unreached leads are redialled for 7 days (20 Nov 2026)", () => {
+    const firstDial = [{ at: ist("2026-09-28T10:00:00").toISOString(), counted: true }];
+    const v3 = (disposition: string, over: Partial<RetryInput> = {}) =>
+        planRetryDetailed(base({ disposition, history: firstDial, maxRetries: 5, ...over }));
+
+    it.each([
+        ["busy", "Busy in another call"],
+        ["no_response", "Did not pick"],
+        ["hung_up", "Hung up during intro"],
+        ["voicemail", "Recording / voicemail"],
+        ["no_response", "Incoming calls not available"],
+    ])("%s / %s is booked on day 5 at dial 9", (status, disp) => {
+        const plan = v3(disp, { status, attemptCount: 9, now: ist("2026-10-02T11:00:00") });
+        expect(plan).not.toBeNull();
+        expect(plan?.longHorizon).toBeUndefined();
+    });
+
+    it("voicemail is redialled more than once", () => {
+        const history = [
+            ...firstDial,
+            { at: ist("2026-09-29T10:00:00").toISOString(), disp: "Recording / voicemail" },
+        ];
+        expect(v3("Recording / voicemail", { status: "voicemail", attemptCount: 3, history })).not.toBeNull();
+    });
+
+    it("Did not pick stops after day 7, not day 3", () => {
+        expect(v3("Did not pick", { attemptCount: 7, now: ist("2026-10-01T15:00:00") })).not.toBeNull();
+        expect(v3("Did not pick", { attemptCount: 13, dialsToday: 2, now: ist("2026-10-03T17:00:00") })).toBeNull();
+    });
+
+    it("a 'come back later' label on an early hang-up stays in the campaign", () => {
+        const plan = v3("Need Some Time", { status: "hung_up", now: ist("2026-09-28T11:00:00") });
+        expect(plan?.longHorizon).toBeUndefined();
+        expect(plan?.at).toEqual(ist("2026-09-29T15:00:00")); // next day, other half (same offset)
+    });
+
+    it("an explicit refusal on an unconnected dial still rests 90 days", () => {
+        expect(v3("Not Interested", { status: "hung_up" })?.longHorizon).toEqual({ once: true });
+    });
+
+    it.each([
+        ["switchboard", null, "IVR / auto-attendant"],
+        ["switchboard", null, "Hung up during intro"],
+        ["failed", "invalid_number", "Incorrect / Invalid number"],
+        ["failed", "invalid_number", "Did not pick"],
+    ])("never redials %s / %s / %s", (status, outcome, disp) => {
+        expect(v3(disp, { status, callOutcome: outcome, attemptCount: 2 })).toBeNull();
+    });
+
+    it("connected dials keep their own rules", () => {
+        expect(v3("Need Some Time", { status: "completed" })?.longHorizon).toEqual({ once: false });
+        expect(v3("Information Collected", { status: "completed" })).toBeNull();
     });
 });

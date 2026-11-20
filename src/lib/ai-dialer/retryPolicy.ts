@@ -101,6 +101,29 @@ const DEFAULT_GAPS: Gap[] = [HOUR, 3 * HOUR, "next_window"];
 export const DEFAULT_MAX_RETRIES = 5;
 
 /** max_retries as stored → the budget the planners use. NULL = the default. */
+/**
+ * 20 Nov 2026 — an unreached lead (the dealer has not spoken) is redialled for
+ * this many IST days, counting the day of its first dial, 2 dials a day. Howrah
+ * part 1 (19 Nov): 20 of 30 leads were busy / unanswered / hung up after the
+ * first two dials; the old 6-dial budget and 3-day "Did not pick" limit would
+ * have ended most of them by day 3.
+ */
+export const UNREACHED_RETRY_DAYS = 7;
+
+/** The dealer has not spoken on this dial (any status but 'completed'). */
+function isUnreached(status: string): boolean {
+    return status !== "completed";
+}
+
+/** `at` falls inside the UNREACHED_RETRY_DAYS days that start on the row's first dial. */
+function withinUnreachedDays(
+    at: Date,
+    history: ReadonlyArray<ReattemptHistoryEntry>,
+    now: Date,
+): boolean {
+    return istParts(at).dayIndex - firstDialDay(history, now) < UNREACHED_RETRY_DAYS;
+}
+
 export function effectiveMaxRetries(maxRetries: number | null | undefined): number {
     return maxRetries == null ? DEFAULT_MAX_RETRIES : maxRetries;
 }
@@ -113,6 +136,12 @@ const NOT_A_FINISHED_DIAL = new Set(["skipped", "pending", "calling"]);
 // switchboard / IVR / company bot, and leads that were never dialable. Busy,
 // no answer, voicemail, silent, hung up, any failure and a dial the user
 // stopped are all redialled.
+//
+// 20 Nov 2026 — "I want the completed status 100%": an unreached lead is
+// redialled until the dealer speaks, for UNREACHED_RETRY_DAYS from its first
+// dial (at most MAX_DIALS_PER_DAY a day), instead of stopping after
+// max_retries. max_retries still caps redials of a call the dealer DID speak
+// on (a dropped conversation), and 0 still turns automatic retries off.
 const NEVER_RETRY_OUTCOME = [
     /invalid_number/i,
     /no_phone/i,
@@ -289,8 +318,9 @@ export function planRetryDetailed(input: RetryInput): RetryPlan | null {
 //   long          outlives the campaign: 3 / 7 / 30 / 90 days (ai_redial_plan)
 //   none          the AI does not redial (a person follows up, or the number is retired)
 //
-// maxPerDay / maxDays / maxTimes cap the rule; max_retries stays the outer cap
-// for redials inside the campaign.
+// maxPerDay / maxDays / maxTimes cap the rule. The outer cap for redials inside
+// the campaign is UNREACHED_RETRY_DAYS when the dealer has not spoken on this
+// dial, max_retries when he has (20 Nov 2026).
 
 export type ReattemptRule =
     | { kind: "after"; ms: number; maxPerDay?: number; maxTimes?: number; thenNextDay?: boolean }
@@ -305,8 +335,9 @@ export const REATTEMPT_RULES: Readonly<Record<string, ReattemptRule>> = {
     // An IVR / tracking number never reaches a person: not redialled (13 Nov
     // 2026, AI dialer list item 2). Listed under Needs dealer mobile.
     "IVR / auto-attendant": { kind: "none" },
-    "Recording / voicemail": { kind: "next_day", window: "same", maxTimes: 1 },
+    "Recording / voicemail": { kind: "next_day", window: "same" },
     "Tracking number, no voice": { kind: "none" },
+    // 15 min once, then the next day, every day (20 Nov 2026).
     "Dead audio (no sound either way)": { kind: "after", ms: 15 * MIN, maxTimes: 1, thenNextDay: true },
     // Connected › Cold
     "Loan Procedure Issue": { kind: "none" }, // a person calls back within 24 h
@@ -341,7 +372,7 @@ export const REATTEMPT_RULES: Readonly<Record<string, ReattemptRule>> = {
     "Business Closed": { kind: "none" },
     "REJECTED BY US": { kind: "none" },
     // Not Connected
-    "Did not pick": { kind: "next_window", maxPerDay: 2, maxDays: 3 },
+    "Did not pick": { kind: "next_window", maxPerDay: 2, maxDays: UNREACHED_RETRY_DAYS },
     "Busy in another call": { kind: "after", ms: 30 * MIN, maxPerDay: 2 },
     "User disconnected the call": { kind: "next_day", window: "other" },
     "Switch off": { kind: "next_day", window: "same" },
@@ -351,7 +382,9 @@ export const REATTEMPT_RULES: Readonly<Record<string, ReattemptRule>> = {
     "Call not connected / can not be completed": { kind: "next_window" },
     "Other reason": { kind: "next_day", window: "same" },
     "Incorrect / Invalid number": { kind: "none" }, // fix the lead
-    "Incoming calls not available": { kind: "long", days: 7, once: false },
+    // Was 7 days out of the campaign; redialled next day like a switched-off
+    // phone since 20 Nov 2026 (the dealer has not been reached).
+    "Incoming calls not available": { kind: "next_day", window: "same" },
     "Number not in use / does not exist / out of service": { kind: "none" }, // retired
 };
 
@@ -436,7 +469,16 @@ function firstDialDay(history: ReadonlyArray<ReattemptHistoryEntry>, now: Date):
  * null = the row is done (no redial, nothing long-horizon).
  */
 export function planReattempt(input: RetryInput): RetryPlan | null {
-    const rule = reattemptRuleFor(input.disposition);
+    const unreached = isUnreached(input.status);
+    // Wrong / invalid number and switchboard / IVR end an unreached lead
+    // whatever label the dial got.
+    if (unreached && !isAutoRetryable(input.status, input.callOutcome)) return null;
+    let rule = reattemptRuleFor(input.disposition);
+    // 20 Nov 2026 — a "come back in N days" label on a dial where the dealer
+    // did not actually speak (e.g. "Need Some Time" on an early hang-up) keeps
+    // the lead in the campaign: redialled like a hang-up during the intro. An
+    // explicit refusal (once: Not Interested, Lost to Competition) still rests.
+    if (unreached && rule?.kind === "long" && !rule.once) rule = { kind: "next_day", window: "other" };
     if (!rule || rule.kind === "none") return null;
     const window = withinDialerHours(input.window);
     const history = input.history ?? [];
@@ -451,18 +493,21 @@ export function planReattempt(input: RetryInput): RetryPlan | null {
         return { at, consumesAttempt: true, longHorizon: { once: rule.once } };
     }
 
-    // A redial inside the campaign: the E-315 budget is the outer cap.
+    // A redial inside the campaign. Outer cap: UNREACHED_RETRY_DAYS for an
+    // unreached dial (checked on the planned time below), the E-315 budget
+    // for a conversation that was cut off.
     const { attemptCount } = input;
     const maxRetries = effectiveMaxRetries(input.maxRetries);
     if (maxRetries <= 0) return null;
-    if (attemptCount < 1 || attemptCount >= 1 + maxRetries) return null;
+    if (attemptCount < 1) return null;
+    if (!unreached && attemptCount >= 1 + maxRetries) return null;
 
     let at: Date | null = null;
     switch (rule.kind) {
         case "after": {
             if (rule.maxTimes != null && sameDispBefore >= rule.maxTimes) {
-                // Used up. Dead audio gets one more try the next day.
-                if (!rule.thenNextDay || sameDispBefore > rule.maxTimes) return null;
+                // Used up. Dead audio moves to the next day, every day.
+                if (!rule.thenNextDay) return null;
                 at = nextDayInWindow(input.now, window, "same");
                 break;
             }
@@ -502,6 +547,7 @@ export function planReattempt(input: RetryInput): RetryPlan | null {
     if (rule.kind === "next_window" && rule.maxDays != null) {
         if (istParts(at).dayIndex - firstDialDay(history, input.now) >= rule.maxDays) return null;
     }
+    if (unreached && !withinUnreachedDays(at, history, input.now)) return null;
     return { at, consumesAttempt: true };
 }
 
@@ -514,15 +560,20 @@ export function planRetry(input: RetryInput): Date | null {
     const { attemptCount } = input;
     const maxRetries = effectiveMaxRetries(input.maxRetries);
     if (maxRetries <= 0) return null;
-    if (attemptCount < 1 || attemptCount >= 1 + maxRetries) return null;
+    if (attemptCount < 1) return null;
+    // 20 Nov 2026 — an unreached lead is capped by UNREACHED_RETRY_DAYS (on the
+    // planned time, below), not by max_retries.
+    const unreached = isUnreached(input.status);
+    if (!unreached && attemptCount >= 1 + maxRetries) return null;
     if (!isAutoRetryable(input.status, input.callOutcome)) return null;
+    const history = input.history ?? [];
 
     const window = withinDialerHours(input.window);
     const gaps = input.status === "busy" ? BUSY_GAPS : DEFAULT_GAPS;
     // attemptCount 1 → first retry → gaps[0]. Past the table, reuse its tail.
     const gap = gaps[Math.min(attemptCount - 1, gaps.length - 1)];
 
-    const at =
+    let at =
         gap === "next_window"
             ? nextWindowOpen(input.now, window)
             : clampIntoWindow(new Date(input.now.getTime() + gap), window);
@@ -534,8 +585,9 @@ export function planRetry(input: RetryInput): Date | null {
         istParts(at).dayIndex === istParts(input.now).dayIndex
     ) {
         const tomorrow = new Date((istParts(input.now).dayIndex + 1) * DAY_MS - IST_OFFSET_MS);
-        return clampIntoWindow(tomorrow, window);
+        at = clampIntoWindow(tomorrow, window);
     }
+    if (unreached && !withinUnreachedDays(at, history, input.now)) return null;
     return at;
 }
 
