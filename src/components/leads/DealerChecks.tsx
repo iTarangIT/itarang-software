@@ -1,7 +1,9 @@
 "use client";
 
-// E-390 — the iTarang Admin dealer-assignment check queue.
-// GET /api/admin/dealer-checks?view=… ; POST /api/admin/dealer-checks/[id]/decide.
+// E-390 — the dealer-assignment check queue (20 Nov: decided by iTarang House).
+// GET /api/leads/dealer-checks?view=… ; POST /api/leads/dealer-checks/[id]/decide.
+// mode "house" — the iTarang House dealer login: Approve / Change / Reject.
+// mode "admin" — Admin / Sales Head: view only; the case link opens KYC review.
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
@@ -45,22 +47,24 @@ const STATUS_STYLE: Record<Row["status"], string> = {
   rejected: "bg-red-50 text-red-700 border-red-200",
 };
 
-export default function DealerChecks() {
+export default function DealerChecks({ mode }: { mode: "house" | "admin" }) {
   const [view, setView] = useState<"pending" | "decided">("pending");
+  const [canDecide, setCanDecide] = useState(false);
   const [rows, setRows] = useState<Row[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch(`/api/admin/dealer-checks?view=${view}`, { cache: "no-store" });
+      const res = await fetch(`/api/leads/dealer-checks?view=${view}`, { cache: "no-store" });
       const json = await res.json();
       if (!json.success) throw new Error(json.error?.message || "Could not load the dealer checks");
       setRows(json.data.rows);
+      setCanDecide(mode === "house" && !!json.data.canDecide);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not load the dealer checks");
     }
-  }, [view]);
+  }, [view, mode]);
 
   useEffect(() => {
     setRows(null);
@@ -79,7 +83,7 @@ export default function DealerChecks() {
               view === v ? "bg-[#0047AB] text-white border-[#0047AB]" : "bg-white text-gray-700 border-gray-300"
             }`}
           >
-            {v === "pending" ? "Waiting for you" : "Decided"}
+            {v === "pending" ? (mode === "house" ? "Waiting for you" : "Waiting for iTarang House") : "Decided"}
           </button>
         ))}
       </div>
@@ -91,12 +95,24 @@ export default function DealerChecks() {
           {view === "pending" ? "No dealer waiting to be checked." : "Nothing decided yet."}
         </p>
       )}
-      {rows?.map((r) => <CheckCard key={r.id} row={r} onDone={load} />)}
+      {rows?.map((r) => (
+        <CheckCard key={r.id} row={r} onDone={load} canDecide={canDecide} linkToCase={mode === "admin"} />
+      ))}
     </div>
   );
 }
 
-function CheckCard({ row, onDone }: { row: Row; onDone: () => void }) {
+function CheckCard({
+  row,
+  onDone,
+  canDecide,
+  linkToCase,
+}: {
+  row: Row;
+  onDone: () => void;
+  canDecide: boolean;
+  linkToCase: boolean;
+}) {
   const [mode, setMode] = useState<null | "change" | "reject">(null);
   const [busy, setBusy] = useState(false);
   const [reason, setReason] = useState("");
@@ -133,7 +149,7 @@ function CheckCard({ row, onDone }: { row: Row; onDone: () => void }) {
     if (decision === "change" && !picked) return toast.error("Pick the correct dealer.");
     setBusy(true);
     try {
-      const res = await fetch(`/api/admin/dealer-checks/${row.id}/decide`, {
+      const res = await fetch(`/api/leads/dealer-checks/${row.id}/decide`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -159,9 +175,15 @@ function CheckCard({ row, onDone }: { row: Row; onDone: () => void }) {
     <div className="rounded-lg border border-gray-200 bg-white p-4 space-y-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <Link href={`/admin/kyc-review/${encodeURIComponent(row.lead_id)}`} className="text-sm font-semibold text-[#0047AB] hover:underline">
-            {row.customer ?? "Customer"} · {row.reference_id ?? row.lead_id}
-          </Link>
+          {linkToCase ? (
+            <Link href={`/admin/kyc-review/${encodeURIComponent(row.lead_id)}`} className="text-sm font-semibold text-[#0047AB] hover:underline">
+              {row.customer ?? "Customer"} · {row.reference_id ?? row.lead_id}
+            </Link>
+          ) : (
+            <p className="text-sm font-semibold text-gray-900">
+              {row.customer ?? "Customer"} · {row.reference_id ?? row.lead_id}
+            </p>
+          )}
           <p className="text-xs text-gray-500">
             {[row.city, row.state].filter((x) => x && x !== "Unknown").join(", ") || "—"} · {row.payment_method ?? "—"} ·{" "}
             {row.channel === "whatsapp" ? "WhatsApp" : "CRM"} · {ago(row.created_at)}
@@ -195,6 +217,10 @@ function CheckCard({ row, onDone }: { row: Row; onDone: () => void }) {
           {row.decided_by_name ? <>By <b>{row.decided_by_name}</b></> : null}
           {row.decided_at ? ` · ${new Date(row.decided_at).toLocaleString("en-IN")}` : ""}
           {row.decision_reason ? <> — {row.decision_reason}</> : null}
+        </p>
+      ) : !canDecide ? (
+        <p className="text-xs text-amber-800">
+          Waiting for iTarang House to approve, change or reject the dealer. The file comes to KYC review after that.
         </p>
       ) : mode === null ? (
         <div className="flex flex-wrap gap-2">
@@ -258,7 +284,7 @@ function CheckCard({ row, onDone }: { row: Row; onDone: () => void }) {
       ) : (
         <div className="space-y-2">
           <textarea value={reason} onChange={(e) => setReason(e.target.value)} rows={2} maxLength={1000}
-            placeholder="Reason (required) — the person who picked the dealer sees this and picks again"
+            placeholder="Reason (required) — the sales person who picked the dealer sees this and picks again"
             className="w-full rounded border border-red-300 px-3 py-2 text-sm" />
           <div className="flex gap-2">
             <button type="button" disabled={busy} onClick={() => decide("reject")}

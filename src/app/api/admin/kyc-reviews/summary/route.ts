@@ -36,7 +36,11 @@ export async function GET() {
   try {
     const rows = (await db.execute(sql`
       WITH live_leads AS (
-        SELECT l.id FROM leads l WHERE l.deleted_by_admin_at IS NULL
+        SELECT l.id FROM leads l
+         WHERE l.deleted_by_admin_at IS NULL
+           -- E-390, 20 Nov: files held for the iTarang House dealer check are
+           -- not on the KYC review queue yet (same rule as the list).
+           AND COALESCE(l.assignment_status, '') NOT IN ('pending_verification', 'dealer_rejected')
       )
       SELECT
         (SELECT COALESCE(json_object_agg(x.status, x.n), '{}'::json) FROM (

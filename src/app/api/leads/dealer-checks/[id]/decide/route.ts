@@ -1,15 +1,15 @@
-// E-390 — Battery Pool diagram 1. POST /api/admin/dealer-checks/[id]/decide
+// E-390 — Battery Pool diagram 1. POST /api/leads/dealer-checks/[id]/decide
 //   body { decision: "approve" | "change" | "reject", dealer_id?, reason? }
 //
-// Approve → the file may go to a lender. Change → the file moves to the dealer
-// picked here, then may go to a lender. Reject (reason required) → the
-// initiator is told and picks again.
+// iTarang House dealer logins only (20 Nov — moved from Admin / Sales Head).
+// Approve / Change → the file goes on to the Admin / Sales Head KYC review and
+// may go to a lender. Reject (reason required) → the initiator picks again.
 
 import { z } from "zod";
 
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
-import { requireRole } from "@/lib/auth-utils";
-import { DealerCheckError, decideDealerReview } from "@/lib/leads/dealer-assignment";
+import { requireAuth } from "@/lib/auth-utils";
+import { DealerCheckError, decideDealerReview, mayDecideDealerChecks } from "@/lib/leads/dealer-assignment";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +20,10 @@ const Body = z.object({
 });
 
 export const POST = withErrorHandler(async (req: Request, { params }: { params: Promise<{ id: string }> }) => {
-  const user = await requireRole(["admin", "sales_head"]);
+  const user = await requireAuth();
+  if (!(await mayDecideDealerChecks(user))) {
+    return errorResponse("Only the iTarang House dealer login can approve, change or reject a dealer.", 403);
+  }
   const parsed = Body.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return errorResponse(parsed.error.issues[0]?.message ?? "Invalid request", 400);
   const { id } = await params;

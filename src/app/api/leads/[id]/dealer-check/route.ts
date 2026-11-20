@@ -3,7 +3,7 @@
 //   GET  → the latest check on this lead (status, dealer, reason) + the dealers
 //          the initiator may re-pick from when it was rejected.
 //   POST { dealer_id } → after a rejection, re-pick the dealer: the file moves
-//          to it and goes back to the iTarang admin as a new check.
+//          to it and goes back to iTarang House as a new check.
 //
 // Allowed for the person who started the check, and for Admin / Sales Head.
 
