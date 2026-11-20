@@ -358,7 +358,7 @@ async function askCustomerDealer(hub: SessionRow, operator?: WhatsAppOperator): 
       return await startWithCustomerDealer(hub, operator, owned[0], {
         reasonKind: kindForSalespersonPick({ eligibleCount: 1, pickedFromOwned: true }),
         candidates: owned,
-        note: `🏪 Tagged to *${owned[0].name}* — the dealer you look after. The iTarang admin confirms the dealer before the file goes to a lender.`,
+        note: `🏪 Tagged to *${owned[0].name}* — the dealer you look after. iTarang House confirms the dealer before the file goes to KYC review and a lender.`,
       });
     }
     if (outcome === "pick") return await showCustomerDealerPick(hub, owned, 0);
@@ -467,7 +467,7 @@ async function startWithCustomerDealer(
   return await startOperatorCustomerFlow(await loadSession(hub.id), dealer);
 }
 
-/** E-390 — the operator re-picks the dealer after the iTarang admin rejected it. */
+/** E-390 — the operator re-picks the dealer after iTarang House rejected it. */
 async function onDealerFix(
   hub: SessionRow,
   operator: WhatsAppOperator,
@@ -493,7 +493,7 @@ async function onDealerFix(
     });
     return await reply(
       hub,
-      `✅ Sent back to the iTarang admin with *${r.dealer.name}*. We'll tell you here once it's confirmed.`,
+      `✅ Sent back to iTarang House with *${r.dealer.name}*. We'll tell you here once it's confirmed.`,
     );
   } catch (err) {
     const msg = err instanceof DealerCheckError ? err.message : "Sorry, that didn't go through — try again in a moment.";

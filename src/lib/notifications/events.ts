@@ -534,6 +534,21 @@ export async function notifyKycSubmitted(p: {
   cardCount?: number | null;
 }) {
   const who = p.customerName || (await leadLabel(p.leadId));
+  // E-390, 20 Nov: while iTarang House has not confirmed the dealer the file is
+  // not on the admin KYC review queue — hold the admin bell; the house's
+  // approve / change sends "KYC ready for review" instead.
+  let held = false;
+  try {
+    const [l] = await db
+      .select({ s: leads.assignment_status })
+      .from(leads)
+      .where(eq(leads.id, p.leadId))
+      .limit(1);
+    const { isDealerCheckHold } = await import("@/lib/leads/dealer-assignment-rules");
+    held = isDealerCheckHold(l?.s);
+  } catch {
+    held = false;
+  }
   await emit({
     type: "kyc.submitted",
     title: "KYC submitted for verification",
@@ -544,7 +559,7 @@ export async function notifyKycSubmitted(p: {
     stage: "Step 2 · KYC",
     from: p.dealerName ? dealerParty(p.dealerName) : await actingParty(),
     to: [
-      toAdmins({ href: adminLead(p.leadId) }),
+      ...(held ? [] : [toAdmins({ href: adminLead(p.leadId) })]),
       toLeadNbfcs(p.leadId, { message: `KYC for ${who} was submitted and is now available.` }),
     ],
   });

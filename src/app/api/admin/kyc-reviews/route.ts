@@ -13,8 +13,9 @@ import {
   kycVerifications,
   users,
 } from "@/lib/db/schema";
-import { and, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, notInArray, or } from "drizzle-orm";
 import { FULL_ID_ROLES } from "@/lib/auth/leadAccessRules";
+import { DEALER_CHECK_HOLD_STATUSES } from "@/lib/leads/dealer-assignment-rules";
 import { ownedLeadsWhere } from "@/lib/auth/ownedLeadsWhere";
 import { backOfficeMayReachLead } from "@/lib/auth/requireLeadAccess";
 import { maskAadhaarDeep } from "@/lib/kyc/aadhaarMask";
@@ -555,6 +556,13 @@ export async function GET(req: NextRequest) {
           and(
             inArray(leads.id, leadIds),
             isNull(leads.deleted_by_admin_at),
+            // E-390, 20 Nov: a file whose dealer iTarang House has not yet
+            // approved / changed (or rejected) is not on this queue — it comes
+            // here once the house confirms the dealer.
+            or(
+              isNull(leads.assignment_status),
+              notInArray(leads.assignment_status, [...DEALER_CHECK_HOLD_STATUSES]),
+            ),
             ownedLeadsWhere(admin, leads.id),
           ),
         ),

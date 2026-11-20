@@ -1,5 +1,8 @@
 /**
- * E-390 — Battery Pool diagram 1: the iTarang Admin dealer-assignment check.
+ * E-390 — Battery Pool diagram 1: the dealer-assignment check.
+ * 20 Nov: decided by the iTarang House dealer login (any house login), not the
+ * iTarang Admin. Admin / Sales Head only see the queue; the file reaches their
+ * KYC review queue once the house approves or changes the dealer.
  * DB side; the pure rules live in ./dealer-assignment-rules.ts.
  *
  *   eligibleDealersForStaff — the dealers an iTarang sales person owns
@@ -7,8 +10,8 @@
  *   staffUserForInitiator   — which sales person is behind a WhatsApp operator
  *                             (whatsapp_operators.user_id) or an iTarang House
  *                             team login (house_login_staff_links).
- *   openDealerReview        — hold the file ('pending_verification') + admin queue row + admin bell.
- *   decideDealerReview      — admin Approve / Change dealer / Reject (reason).
+ *   openDealerReview        — hold the file ('pending_verification') + check row + house bell.
+ *   decideDealerReview      — house Approve / Change dealer / Reject (reason).
  *   resubmitDealer          — the initiator re-picks after a rejection.
  *   assertNbfcRoutingAllowed— the Step 4 send-to-lender gate.
  *
@@ -19,6 +22,7 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   accountOwnership,
+  adminVerificationQueue,
   auditLogs,
   houseLoginStaffLinks,
   leadDealerReviews,
@@ -28,6 +32,7 @@ import {
   whatsappOperators,
 } from "@/lib/db/schema";
 import { emit, toAdmins } from "@/lib/notifications/emit";
+import { ADMIN_PARTY } from "@/lib/notifications/provenance";
 
 import { findActiveDealerById, houseDealerCode, type PushTargetDealer } from "./dealerByMobile";
 import {
@@ -39,7 +44,7 @@ import {
   type DealerCheckKind,
   type DealerDecision,
 } from "./dealer-assignment-rules";
-import { needsLoan, pickerDealers } from "./pushToDealer";
+import { isHouseLogin, needsLoan, pickerDealers } from "./pushToDealer";
 import {
   detachAuditChanges,
   detachFromOldDealer,
@@ -50,7 +55,40 @@ import {
 
 export * from "./dealer-assignment-rules";
 
-export const DEALER_CHECKS_HREF = "/admin/dealer-checks";
+/** Where the house decides (house dealer logins). */
+export const DEALER_CHECKS_HREF = "/dealer-portal/dealer-checks";
+/** Admin / Sales Head's view-only copy of the queue. */
+export const ADMIN_DEALER_CHECKS_HREF = "/admin/dealer-checks";
+
+/** May this login SEE the dealer checks from the dealer portal? Any iTarang house login. */
+export async function mayViewHouseDealerChecks(user: {
+  role: string | null | undefined;
+  dealer_id?: string | null;
+}): Promise<boolean> {
+  return isHouseLogin({ role: user.role, dealerId: user.dealer_id ?? null, houseDealerCode: await houseDealerCode() });
+}
+
+/**
+ * May this login DECIDE dealer checks? Only the main iTarang House login
+ * (dealer@itarang.com, or WHATSAPP_HOUSE_DEALER_EMAIL) — matched by user id.
+ * House team logins (sales persons under the house code) see the queue view only,
+ * so nobody approves a dealer they picked themselves. 20 Nov decision.
+ */
+export async function mayDecideDealerChecks(user: {
+  id: string;
+  role: string | null | undefined;
+  dealer_id?: string | null;
+}): Promise<boolean> {
+  if (user.role !== "dealer") return false;
+  try {
+    const { resolveHouseDealer } = await import("@/lib/whatsapp/customer-lead");
+    const house = await resolveHouseDealer();
+    return !!house && house.uploaderId === user.id && user.dealer_id === house.dealerCode;
+  } catch (err) {
+    console.warn("[dealer-assignment] house login lookup failed", err instanceof Error ? err.message : String(err));
+    return false;
+  }
+}
 
 export type Candidate = { dealerId: string; name: string };
 
@@ -114,9 +152,9 @@ export async function eligibleDealersForStaff(
 // ── Open a check ─────────────────────────────────────────────────────────────
 
 /**
- * Hold the file for the iTarang admin's dealer check: assignment_status =
+ * Hold the file for the iTarang House dealer check: assignment_status =
  * 'pending_verification', one pending lead_dealer_reviews row (any older
- * pending row for the lead is closed first), admin bell. Never throws — a
+ * pending row for the lead is closed first), house bell. Never throws — a
  * database without E-390 leaves the lead exactly as it was.
  */
 export async function openDealerReview(opts: {
@@ -158,7 +196,7 @@ export async function openDealerReview(opts: {
       return row.id;
     });
 
-    void notifyAdminsOfDealerCheck(opts.leadId, opts.dealerId, opts.reasonKind, opts.initiator.name);
+    void notifyHouseOfDealerCheck(opts.leadId, opts.dealerId, opts.reasonKind, opts.initiator.name);
     return { id };
   } catch (err) {
     console.error("[dealer-assignment] openDealerReview failed", err);
@@ -175,21 +213,52 @@ async function leadLabel(leadId: string): Promise<{ name: string; ref: string }>
   return { name: l?.full_name || l?.owner_name || leadId, ref: l?.reference_id || leadId };
 }
 
-async function notifyAdminsOfDealerCheck(leadId: string, dealerId: string, kind: string, by: string | null) {
+async function notifyHouseOfDealerCheck(leadId: string, dealerId: string, kind: string, by: string | null) {
   try {
+    // Only the main house login decides, so only it gets the bell.
+    const { resolveHouseDealer } = await import("@/lib/whatsapp/customer-lead");
+    const house = await resolveHouseDealer();
+    if (!house) return;
     const [{ name, ref }, names] = await Promise.all([leadLabel(leadId), dealerDisplayNames([dealerId])]);
     await emit({
       type: "lead.dealer_check_pending",
       title: "Dealer assignment to check",
       message: `${name} (${ref}) is tagged to ${names.get(dealerId) ?? dealerId}. ${dealerCheckKindLabel(kind)}${
         by ? ` — ${by}` : ""
-      }. Approve, change or reject the dealer before it can go to a lender.`,
+      }. Approve, change or reject the dealer — the file goes to the iTarang KYC review after that.`,
       leadId,
       stage: "Dealer assignment",
-      to: [toAdmins({ href: DEALER_CHECKS_HREF })],
+      to: [{ audience: { kind: "user", userId: house.uploaderId }, as: ADMIN_PARTY, href: DEALER_CHECKS_HREF }],
     });
   } catch (err) {
-    console.warn("[dealer-assignment] admin notice failed", err instanceof Error ? err.message : String(err));
+    console.warn("[dealer-assignment] house notice failed", err instanceof Error ? err.message : String(err));
+  }
+}
+
+/**
+ * After the house approves / changes the dealer: if the dealer already
+ * submitted KYC (an admin_verification_queue row), tell Admin / Sales Head the
+ * file is now on their KYC review queue (the submit-time bell was held back).
+ */
+async function notifyAdminsKycReady(leadId: string, dealerName: string) {
+  try {
+    const [q] = await db
+      .select({ id: adminVerificationQueue.id })
+      .from(adminVerificationQueue)
+      .where(eq(adminVerificationQueue.lead_id, leadId))
+      .limit(1);
+    if (!q) return;
+    const { name, ref } = await leadLabel(leadId);
+    await emit({
+      type: "kyc.submitted",
+      title: "KYC ready for review",
+      message: `iTarang House confirmed ${dealerName} for ${name} (${ref}). The KYC is now waiting for your review.`,
+      leadId,
+      stage: "Step 2 · KYC",
+      to: [toAdmins({ href: `/admin/kyc-review/${encodeURIComponent(leadId)}` })],
+    });
+  } catch (err) {
+    console.warn("[dealer-assignment] KYC-ready notice failed", err instanceof Error ? err.message : String(err));
   }
 }
 
@@ -298,11 +367,11 @@ export class DealerCheckError extends Error {
 }
 
 /**
- * Admin decision on a pending dealer check.
+ * iTarang House decision on a pending dealer check.
  *  approve → 'assigned'.
- *  change  → the file moves to the dealer the admin picked (coupon / salesperson
+ *  change  → the file moves to the dealer the house picked (coupon / salesperson
  *            detached like a push, LEAD_PUSHED_TO_DEALER audit), then 'assigned'.
- *            Allowed even after consent: it is the admin's own correction and is
+ *            Allowed even after consent: it is iTarang's own correction and is
  *            recorded on the push history.
  *  reject  → 'dealer_rejected'; the initiator is told and re-picks.
  * Approve / change on a KYC-cleared finance lead re-sends WhatsApp "Choose lender".
@@ -398,7 +467,7 @@ export async function decideDealerReview(opts: {
         to_dealer_id: target!.dealerId,
         to_dealer_name: target!.name,
         reason: reason ?? "Corrected in the dealer assignment check",
-        by_name: opts.actor.name ?? null,
+        by_name: opts.actor.name ?? "iTarang House",
         by_role: opts.actor.role,
         via: "dealer_check",
         repush: true,
@@ -432,6 +501,7 @@ export async function decideDealerReview(opts: {
   });
 
   if (opts.decision !== "reject") {
+    void notifyAdminsKycReady(lead.id, target?.name ?? fromName);
     try {
       // E-391 — auto-route by an NBFC routing rule, else "Choose lender".
       const { step4OpenedFor } = await import("./nbfc-routing");
@@ -459,14 +529,14 @@ async function notifyInitiatorOfDecision(opts: {
       decision === "reject"
         ? "Dealer rejected — pick the correct dealer"
         : decision === "change"
-          ? "Admin changed the dealer"
+          ? "iTarang House changed the dealer"
           : "Dealer approved";
     const message =
       decision === "reject"
-        ? `The iTarang admin rejected ${dealerName} for ${name} (${ref}): ${reason}. Pick the correct dealer again.`
+        ? `iTarang House rejected ${dealerName} for ${name} (${ref}): ${reason}. Pick the correct dealer again.`
         : decision === "change"
-          ? `The iTarang admin moved ${name} (${ref}) to ${dealerName}. It can now go to a lender.`
-          : `The iTarang admin approved ${dealerName} for ${name} (${ref}). It can now go to a lender.`;
+          ? `iTarang House moved ${name} (${ref}) to ${dealerName}. It now goes to the iTarang KYC review.`
+          : `iTarang House approved ${dealerName} for ${name} (${ref}). It now goes to the iTarang KYC review.`;
 
     if (review.initiated_by_user_id) {
       await emit({
@@ -478,7 +548,7 @@ async function notifyInitiatorOfDecision(opts: {
         to: [
           {
             audience: { kind: "user", userId: review.initiated_by_user_id },
-            as: { party: "admin", label: opts.adminName ?? "iTarang Admin" },
+            as: { party: "admin", label: opts.adminName ?? "iTarang House" },
             href: `/dealer-portal/leads/${encodeURIComponent(review.lead_id)}`,
           },
         ],
@@ -536,7 +606,7 @@ async function whatsappNoticeToInitiator(
         .filter((d) => d.dealerId !== review.dealer_id)
         .slice(0, 10);
       if (!options.length) {
-        return await reply(session, `❌ ${message}\n\nYou have no other dealer to pick — the iTarang admin will assign it.`);
+        return await reply(session, `❌ ${message}\n\nYou have no other dealer to pick — iTarang House will assign it.`);
       }
       return await replyList(
         session,
@@ -552,7 +622,7 @@ async function whatsappNoticeToInitiator(
   await pushToLead(review.lead_id, (t) => ({
     prompt: {
       kind: "text",
-      body: `${rejected ? "❌" : "✅"} ${message}${rejected ? "\n\nPlease contact the iTarang admin with the correct dealer." : ""}`,
+      body: `${rejected ? "❌" : "✅"} ${message}${rejected ? "\n\nPlease contact iTarang House with the correct dealer." : ""}`,
     },
     nudge: {
       template: "lead_action",
@@ -565,7 +635,7 @@ async function whatsappNoticeToInitiator(
 
 /**
  * The initiator picks the correct dealer after a rejection. The file moves to
- * that dealer (if different) and goes back to the admin as a new check.
+ * that dealer (if different) and goes back to iTarang House as a new check.
  */
 export async function resubmitDealer(opts: {
   leadId: string;
@@ -620,7 +690,7 @@ export async function resubmitDealer(opts: {
           from_dealer_name: fromName,
           to_dealer_id: target.dealerId,
           to_dealer_name: target.name,
-          reason: "Re-picked after the admin rejected the dealer",
+          reason: "Re-picked after iTarang House rejected the dealer",
           by_name: opts.initiator.name,
           via: "dealer_check_resubmit",
           repush: true,

@@ -114,7 +114,7 @@ const REDUNDANT_FOR_SCRAP_ITEM_IDS = new Set(["buyback"]);
  * this login is a house login comes from the push-eligibility probe
  * (/api/leads/dealer-lookup answers 200 only for the house among dealers).
  */
-const HOUSE_ONLY_ITEM_IDS = new Set(["pushed-files"]);
+const HOUSE_ONLY_ITEM_IDS = new Set(["pushed-files", "house-dealer-checks"]);
 
 /**
  * peakAmp Battery Buyback — the iTarang-staff side.
@@ -2464,6 +2464,14 @@ const roleNavigation: Record<string, any[]> = {
           label: "Moved files",
           icon: Handshake,
           href: "/dealer-portal/pushed-files",
+        },
+        {
+          // E-390, 20 Nov: iTarang house logins only — approve / change /
+          // reject the dealer a sales person tagged a file to.
+          id: "house-dealer-checks",
+          label: "Dealer checks",
+          icon: Handshake,
+          href: "/dealer-portal/dealer-checks",
         },
         {
           id: "calculator",
