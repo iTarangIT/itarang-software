@@ -83,7 +83,7 @@ export default function DealerChecks({ mode }: { mode: "house" | "admin" }) {
               view === v ? "bg-[#0047AB] text-white border-[#0047AB]" : "bg-white text-gray-700 border-gray-300"
             }`}
           >
-            {v === "pending" ? (mode === "house" ? "Waiting for you" : "Waiting for iTarang House") : "Decided"}
+            {v === "pending" ? (canDecide ? "Waiting for you" : "Waiting for iTarang House") : "Decided"}
           </button>
         ))}
       </div>
@@ -220,7 +220,8 @@ function CheckCard({
         </p>
       ) : !canDecide ? (
         <p className="text-xs text-amber-800">
-          Waiting for iTarang House to approve, change or reject the dealer. The file comes to KYC review after that.
+          Waiting for iTarang House (dealer@itarang.com) to approve, change or reject the dealer. The file comes to KYC
+          review after that.
         </p>
       ) : mode === null ? (
         <div className="flex flex-wrap gap-2">

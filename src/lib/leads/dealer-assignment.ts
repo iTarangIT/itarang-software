@@ -60,12 +60,34 @@ export const DEALER_CHECKS_HREF = "/dealer-portal/dealer-checks";
 /** Admin / Sales Head's view-only copy of the queue. */
 export const ADMIN_DEALER_CHECKS_HREF = "/admin/dealer-checks";
 
-/** May this login decide dealer checks? Any iTarang house dealer login. */
-export async function mayDecideDealerChecks(user: {
+/** May this login SEE the dealer checks from the dealer portal? Any iTarang house login. */
+export async function mayViewHouseDealerChecks(user: {
   role: string | null | undefined;
   dealer_id?: string | null;
 }): Promise<boolean> {
   return isHouseLogin({ role: user.role, dealerId: user.dealer_id ?? null, houseDealerCode: await houseDealerCode() });
+}
+
+/**
+ * May this login DECIDE dealer checks? Only the main iTarang House login
+ * (dealer@itarang.com, or WHATSAPP_HOUSE_DEALER_EMAIL) — matched by user id.
+ * House team logins (sales persons under the house code) see the queue view only,
+ * so nobody approves a dealer they picked themselves. 20 Nov decision.
+ */
+export async function mayDecideDealerChecks(user: {
+  id: string;
+  role: string | null | undefined;
+  dealer_id?: string | null;
+}): Promise<boolean> {
+  if (user.role !== "dealer") return false;
+  try {
+    const { resolveHouseDealer } = await import("@/lib/whatsapp/customer-lead");
+    const house = await resolveHouseDealer();
+    return !!house && house.uploaderId === user.id && user.dealer_id === house.dealerCode;
+  } catch (err) {
+    console.warn("[dealer-assignment] house login lookup failed", err instanceof Error ? err.message : String(err));
+    return false;
+  }
 }
 
 export type Candidate = { dealerId: string; name: string };
@@ -193,7 +215,9 @@ async function leadLabel(leadId: string): Promise<{ name: string; ref: string }>
 
 async function notifyHouseOfDealerCheck(leadId: string, dealerId: string, kind: string, by: string | null) {
   try {
-    const house = await houseDealerCode();
+    // Only the main house login decides, so only it gets the bell.
+    const { resolveHouseDealer } = await import("@/lib/whatsapp/customer-lead");
+    const house = await resolveHouseDealer();
     if (!house) return;
     const [{ name, ref }, names] = await Promise.all([leadLabel(leadId), dealerDisplayNames([dealerId])]);
     await emit({
@@ -204,7 +228,7 @@ async function notifyHouseOfDealerCheck(leadId: string, dealerId: string, kind: 
       }. Approve, change or reject the dealer — the file goes to the iTarang KYC review after that.`,
       leadId,
       stage: "Dealer assignment",
-      to: [{ audience: { kind: "dealer", dealerId: house }, as: ADMIN_PARTY, href: DEALER_CHECKS_HREF }],
+      to: [{ audience: { kind: "user", userId: house.uploaderId }, as: ADMIN_PARTY, href: DEALER_CHECKS_HREF }],
     });
   } catch (err) {
     console.warn("[dealer-assignment] house notice failed", err instanceof Error ? err.message : String(err));

@@ -1,7 +1,8 @@
 // E-390 — Battery Pool diagram 1. POST /api/leads/dealer-checks/[id]/decide
 //   body { decision: "approve" | "change" | "reject", dealer_id?, reason? }
 //
-// iTarang House dealer logins only (20 Nov — moved from Admin / Sales Head).
+// Only the main iTarang House login dealer@itarang.com (20 Nov — moved from
+// Admin / Sales Head; house team logins may not decide).
 // Approve / Change → the file goes on to the Admin / Sales Head KYC review and
 // may go to a lender. Reject (reason required) → the initiator picks again.
 
@@ -22,7 +23,7 @@ const Body = z.object({
 export const POST = withErrorHandler(async (req: Request, { params }: { params: Promise<{ id: string }> }) => {
   const user = await requireAuth();
   if (!(await mayDecideDealerChecks(user))) {
-    return errorResponse("Only the iTarang House dealer login can approve, change or reject a dealer.", 403);
+    return errorResponse("Only the main iTarang House login (dealer@itarang.com) can approve, change or reject a dealer.", 403);
   }
   const parsed = Body.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return errorResponse(parsed.error.issues[0]?.message ?? "Invalid request", 400);
