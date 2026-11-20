@@ -143,7 +143,9 @@ export async function resolveRoutingTarget(leadId: string): Promise<RoutingTarge
   };
 }
 
-export type AutoRouteResult = { routed: true; nbfcName: string; ruleId: number } | { routed: false; why: string };
+export type AutoRouteResult =
+  | { routed: true; nbfcName: string; productName: string; ruleId: number }
+  | { routed: false; why: string };
 
 /**
  * Send the file to the routing rule's NBFC when Step 4 opens. Idempotent (a
@@ -197,7 +199,7 @@ export async function autoRouteLead(leadId: string, opts: { trigger: string }): 
       routingResolved: true,
     });
 
-    const note = `Sent to ${target.nbfcName} automatically by NBFC routing rule #${target.rule.id} (${target.scope})`;
+    const note = `Sent to ${target.nbfcName} — ${target.productName} automatically by NBFC routing rule #${target.rule.id} (${target.scope})`;
     await db
       .insert(auditLogs)
       .values({
@@ -211,6 +213,7 @@ export async function autoRouteLead(leadId: string, opts: { trigger: string }): 
           nbfc_id: target.nbfcId,
           nbfc_name: target.nbfcName,
           loan_product_id: target.loanProductId,
+          loan_product_name: target.productName,
           trigger: opts.trigger,
         },
         performed_by: null,
@@ -219,7 +222,16 @@ export async function autoRouteLead(leadId: string, opts: { trigger: string }): 
       .catch((err) => console.warn("[nbfc-routing] audit failed", err));
 
     void tellDealer(leadId, target.nbfcName, lead.full_name || lead.owner_name || null, note);
-    return { routed: true, nbfcName: target.nbfcName, ruleId: target.rule.id };
+    void tellSalesPeople({
+      leadId,
+      dealerCode: lead.dealer_id,
+      customer: lead.full_name || lead.owner_name || null,
+      nbfcName: target.nbfcName,
+      productName: target.productName,
+      ruleId: target.rule.id,
+      scope: target.scope,
+    });
+    return { routed: true, nbfcName: target.nbfcName, productName: target.productName, ruleId: target.rule.id };
   } catch (err) {
     console.error(`[nbfc-routing] auto-route ${leadId} failed`, err);
     return { routed: false, why: err instanceof Error ? err.message : "Auto-route failed" };
@@ -269,6 +281,101 @@ async function tellDealer(leadId: string, nbfcName: string, customer: string | n
     }));
   } catch (err) {
     console.warn("[nbfc-routing] WhatsApp notice failed", err instanceof Error ? err.message : String(err));
+  }
+}
+
+/**
+ * The iTarang sales people behind this file hear WHICH NBFC and loan product
+ * the routing rule picked (they are iTarang staff, so the lender is named —
+ * unlike the masked dealer / customer copy):
+ *   - the dealer's account owner (Account ownership, E-321);
+ *   - whoever started the file and went through the E-390 dealer check (an
+ *     operator on WhatsApp, or a House team login on the CRM).
+ * CRM bell for each person; WhatsApp to their operator number(s) and to the
+ * number that started the KYC. Never throws.
+ */
+async function tellSalesPeople(p: {
+  leadId: string;
+  dealerCode: string | null;
+  customer: string | null;
+  nbfcName: string;
+  productName: string;
+  ruleId: number;
+  scope: string;
+}) {
+  try {
+    const { accountOwnership, leadDealerReviews, whatsappOnboardingSessions, whatsappOperators } = await import("@/lib/db/schema");
+    const { inArray } = await import("drizzle-orm");
+
+    const userIds = new Set<string>();
+    const waPhones = new Set<string>();
+    if (p.dealerCode) {
+      const [own] = await db
+        .select({ owner: accountOwnership.owner_user_id })
+        .from(accountOwnership)
+        .where(eq(accountOwnership.account_id, p.dealerCode))
+        .limit(1);
+      if (own?.owner) userIds.add(own.owner);
+    }
+    try {
+      const reviews = await db
+        .select({ uid: leadDealerReviews.initiated_by_user_id, wa: leadDealerReviews.initiator_wa_phone })
+        .from(leadDealerReviews)
+        .where(eq(leadDealerReviews.lead_id, p.leadId));
+      for (const r of reviews) {
+        if (r.uid) userIds.add(r.uid);
+        if (r.wa) waPhones.add(r.wa);
+      }
+    } catch {
+      /* DB without E-390 */
+    }
+    if (userIds.size) {
+      const ops = await db
+        .select({ wa: whatsappOperators.wa_phone })
+        .from(whatsappOperators)
+        .where(and(inArray(whatsappOperators.user_id, [...userIds]), eq(whatsappOperators.is_active, true)));
+      for (const o of ops) if (o.wa) waPhones.add(o.wa);
+    }
+    if (!userIds.size && !waPhones.size) return;
+
+    const [lr] = await db.select({ ref: leads.reference_id }).from(leads).where(eq(leads.id, p.leadId)).limit(1);
+    const who = `${p.customer ?? "Customer"} (${lr?.ref ?? p.leadId})`;
+    const message = `${who} was sent to ${p.nbfcName} — ${p.productName}, by NBFC routing rule #${p.ruleId} (${p.scope}).`;
+
+    if (userIds.size) {
+      const { emit } = await import("@/lib/notifications/emit");
+      await emit({
+        type: "lead.auto_routed",
+        title: `Sent to ${p.nbfcName} — ${p.productName}`,
+        message,
+        leadId: p.leadId,
+        stage: "Step 4 · Lender",
+        to: [...userIds].map((uid) => ({
+          audience: { kind: "user" as const, userId: uid },
+          as: { party: "admin" as const, label: "iTarang sales" },
+          href: `/admin/kyc-review/${encodeURIComponent(p.leadId)}`,
+        })),
+      });
+    }
+
+    if (waPhones.size) {
+      const { reply } = await import("@/lib/whatsapp/session-store");
+      for (const wa of waPhones) {
+        const [hub] = await db
+          .select()
+          .from(whatsappOnboardingSessions)
+          .where(and(eq(whatsappOnboardingSessions.wa_phone, wa), eq(whatsappOnboardingSessions.session_kind, "operator_hub")))
+          .orderBy(desc(whatsappOnboardingSessions.updated_at))
+          .limit(1);
+        if (!hub) continue;
+        await reply(
+          hub as unknown as Parameters<typeof reply>[0],
+          `🏦 *Sent to the lender*\n\n${who}\n*NBFC:* ${p.nbfcName}\n*Loan product:* ${p.productName}\n_By NBFC routing rule #${p.ruleId} (${p.scope})._`,
+        ).catch((err: unknown) => console.warn("[nbfc-routing] operator WhatsApp failed", err instanceof Error ? err.message : String(err)));
+      }
+    }
+  } catch (err) {
+    console.warn("[nbfc-routing] sales-person notice failed", err instanceof Error ? err.message : String(err));
   }
 }
 

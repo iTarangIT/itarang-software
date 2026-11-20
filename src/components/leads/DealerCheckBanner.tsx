@@ -1,7 +1,7 @@
 "use client";
 
 // E-390 — Battery Pool diagram 1: the dealer-assignment check on a lead page.
-// Pending → "waiting for the iTarang admin"; rejected → the reason and, for the
+// Pending → "waiting for iTarang House"; rejected → the reason and, for the
 // person who picked the dealer, the dealers they can re-pick. Renders nothing
 // when there is no check, or the viewer is not the initiator / an admin.
 
@@ -49,7 +49,7 @@ export default function DealerCheckBanner({ leadId, admin = false }: { leadId: s
       });
       const j = await res.json().catch(() => null);
       if (!j?.success) throw new Error(j?.error?.message || "Could not send the dealer back");
-      toast.success(`Sent back to the iTarang admin with ${j.data.dealer.name}`);
+      toast.success(`Sent back to iTarang House with ${j.data.dealer.name}`);
       await load();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not send the dealer back");
@@ -64,8 +64,8 @@ export default function DealerCheckBanner({ leadId, admin = false }: { leadId: s
     return (
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
         <span>
-          <b>Dealer check:</b> {check.dealer_name} is waiting for the iTarang admin to confirm ({check.reason_label.toLowerCase()}).
-          The file can go to a lender once it is approved; KYC carries on meanwhile.
+          <b>Dealer check:</b> {check.dealer_name} is waiting for iTarang House to confirm ({check.reason_label.toLowerCase()}).
+          It goes to the iTarang KYC review and can go to a lender once approved; KYC carries on meanwhile.
         </span>
         {admin && (
           <Link href="/admin/dealer-checks" className="text-xs font-semibold text-[#0047AB] hover:underline">
@@ -80,8 +80,8 @@ export default function DealerCheckBanner({ leadId, admin = false }: { leadId: s
   return (
     <div className="space-y-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
       <p>
-        <b>The iTarang admin rejected the dealer</b> {check.dealer_name}
-        {check.decision_reason ? <>: {check.decision_reason}</> : null}. Pick the correct dealer — it goes back to the admin.
+        <b>iTarang House rejected the dealer</b> {check.dealer_name}
+        {check.decision_reason ? <>: {check.decision_reason}</> : null}. Pick the correct dealer — it goes back to iTarang House.
       </p>
       {admin ? (
         <Link href="/admin/dealer-checks?view=decided" className="text-xs font-semibold text-[#0047AB] hover:underline">
@@ -102,7 +102,7 @@ export default function DealerCheckBanner({ leadId, admin = false }: { leadId: s
           ))}
         </div>
       ) : (
-        <p className="text-xs">No other dealer is linked to you — ask the iTarang admin to assign the dealer.</p>
+        <p className="text-xs">No other dealer is linked to you — ask iTarang House to assign the dealer.</p>
       )}
     </div>
   );

@@ -1,6 +1,9 @@
 /**
- * E-390 — Battery Pool diagram 1: iTarang Admin checks the dealer assignment
- * of an "uncertain" application before the file can go to any lender.
+ * E-390 — Battery Pool diagram 1: the iTarang House dealer login checks the
+ * dealer assignment of an "uncertain" application (20 Nov: moved from the
+ * iTarang Admin to the house). Until the house approves or changes the dealer
+ * the file is held: it cannot go to a lender and it stays off the Admin /
+ * Sales Head KYC review queue.
  * Pure rules (no I/O; unit-tested in __tests__/dealer-assignment-rules.test.ts).
  * The DB side lives in ./dealer-assignment.ts.
  *
@@ -15,7 +18,8 @@
  *
  * While a check is open the lead carries leads.assignment_status =
  * 'pending_verification'; after a rejection 'dealer_rejected'. Both block the
- * Step 4 send-to-lender. KYC and consent carry on meanwhile.
+ * Step 4 send-to-lender and keep the file off the admin KYC review queue. The
+ * dealer can carry on with KYC and consent meanwhile.
  */
 
 export const DEALER_CHECK_PENDING = "pending_verification";
@@ -37,7 +41,7 @@ export function isDealerCheckKind(v: unknown): v is DealerCheckKind {
   return typeof v === "string" && (DEALER_CHECK_KINDS as readonly string[]).includes(v);
 }
 
-/** Why the admin is being asked, in the words the queue shows. */
+/** Why the house is being asked, in the words the queue shows. */
 export function dealerCheckKindLabel(kind: string): string {
   switch (kind) {
     case "multi_pick":
@@ -51,7 +55,7 @@ export function dealerCheckKindLabel(kind: string): string {
     case "dealer_salesperson":
       return "Created by the dealer's sales team";
     case "resubmit":
-      return "Re-picked after the admin rejected the dealer";
+      return "Re-picked after iTarang House rejected the dealer";
     default:
       return kind;
   }
@@ -70,6 +74,14 @@ export function kindForSalespersonPick(opts: { eligibleCount: number; pickedFrom
   return opts.eligibleCount === 1 ? "single_owned" : "multi_pick";
 }
 
+/** Is the file held by an open (or rejected) dealer check? */
+export function isDealerCheckHold(assignmentStatus: string | null | undefined): boolean {
+  return assignmentStatus === DEALER_CHECK_PENDING || assignmentStatus === DEALER_CHECK_REJECTED;
+}
+
+/** The assignment_status values that hold a file (for SQL filters). */
+export const DEALER_CHECK_HOLD_STATUSES = [DEALER_CHECK_PENDING, DEALER_CHECK_REJECTED] as const;
+
 export type RoutingBlock = { blocked: false } | { blocked: true; message: string };
 
 /**
@@ -82,14 +94,14 @@ export function isNbfcRoutingBlocked(assignmentStatus: string | null | undefined
     return {
       blocked: true,
       message:
-        "The dealer on this application is waiting for the iTarang admin to confirm it. It can be sent to a lender once the admin approves.",
+        "The dealer on this application is waiting for iTarang House to confirm it. It can be sent to a lender once iTarang House approves.",
     };
   }
   if (assignmentStatus === DEALER_CHECK_REJECTED) {
     return {
       blocked: true,
       message:
-        "The iTarang admin rejected the dealer on this application. Pick the correct dealer again; it can be sent to a lender once the admin approves.",
+        "iTarang House rejected the dealer on this application. Pick the correct dealer again; it can be sent to a lender once iTarang House approves.",
     };
   }
   return { blocked: false };
@@ -97,7 +109,7 @@ export function isNbfcRoutingBlocked(assignmentStatus: string | null | undefined
 
 export type DealerDecision = "approve" | "change" | "reject";
 
-/** Validates an admin decision's inputs. */
+/** Validates a dealer-check decision's inputs. */
 export function validateDealerDecision(input: {
   decision: DealerDecision;
   newDealerId?: string | null;

@@ -1,10 +1,11 @@
 import { requireRole } from "@/lib/auth-utils";
-import DealerChecks from "./DealerChecks";
+import DealerChecks from "@/components/leads/DealerChecks";
 
 export const dynamic = "force-dynamic";
 
-// E-390 — Battery Pool diagram 1: the iTarang Admin checks the dealer an
-// "uncertain" application was tagged to before it can go to a lender.
+// E-390 — Battery Pool diagram 1. Admin / Sales Head view of the dealer checks.
+// 20 Nov: the iTarang House dealer login decides; a file comes to KYC review
+// once the house approves or changes its dealer.
 export default async function DealerChecksPage() {
   await requireRole(["admin", "sales_head"]);
   return (
@@ -12,12 +13,12 @@ export default async function DealerChecksPage() {
       <header>
         <h1 className="text-2xl font-semibold tracking-tight text-ink">Dealer checks</h1>
         <p className="mt-1 text-sm text-ink-muted">
-          Applications whose dealer was picked by an iTarang salesperson, assigned by iTarang House, or created by a
-          dealer&apos;s sales team. Approve the dealer, change it, or reject it with a reason. Until it is approved the
-          file cannot be sent to a lender; KYC and consent carry on meanwhile.
+          Applications whose dealer was picked by an iTarang sales person, assigned by iTarang House, or created by a
+          dealer&apos;s sales team. iTarang House approves, changes or rejects the dealer (from the house dealer login).
+          Until then the file is not on KYC review and cannot go to a lender. This page is view only.
         </p>
       </header>
-      <DealerChecks />
+      <DealerChecks mode="admin" />
     </div>
   );
 }

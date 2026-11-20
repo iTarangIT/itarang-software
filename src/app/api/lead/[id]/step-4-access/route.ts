@@ -265,7 +265,7 @@ export async function GET(
               ...sharedFields,
               readOnly: true,
               kycStatus: "pending_final_approval",
-              reason: `Sent to ${routed.nbfcName} automatically by an iTarang routing rule.`,
+              reason: `Sent to ${routed.nbfcName} — ${routed.productName} automatically by an iTarang routing rule.`,
             },
           });
         }
