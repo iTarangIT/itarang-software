@@ -20,8 +20,9 @@ import {
   campaignScheduleSchema,
   scheduleColumns,
 } from "@/lib/queue/campaignWindow";
+import { DIALER_PROVIDERS, isDialerProvider } from "@/lib/ai/providers";
 
-const ALLOWED_PROVIDERS: DialerProvider[] = ["bolna", "elevenlabs"];
+const ALLOWED_PROVIDERS: readonly DialerProvider[] = DIALER_PROVIDERS;
 
 export const POST = withErrorHandler(
   async (req: Request, ctx: { params: Promise<{ id: string }> }) => {

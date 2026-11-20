@@ -12,6 +12,7 @@ import {
   Check,
 } from "lucide-react";
 import { ListsTab } from "./lists-tab";
+import type { DialerProvider } from "@/lib/ai/providers";
 
 // ─── Types shared with the dialer modal & /api/ai-dialer/preview ──────
 
@@ -90,7 +91,7 @@ export function RegionSelector({
   onModeChange?: (mode: "region" | "list") => void;
   // Voice agent the modal currently has selected — used when a list draft is
   // started from the Lists tab.
-  provider?: "bolna" | "elevenlabs";
+  provider?: DialerProvider;
   // E-254 — `schedule` is the calling window chosen in the Lists tab's own
   // picker; this component only forwards it. Passed through rather than handled
   // here because RegionSelector knows nothing about campaigns.

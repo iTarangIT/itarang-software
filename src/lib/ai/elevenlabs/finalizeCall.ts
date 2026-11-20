@@ -24,6 +24,7 @@ import {
   callReviewSheetEnabled,
 } from "@/lib/google/sheet";
 import { claimCallForProcessing } from "@/lib/ai/analysis/callClaim";
+import type { DialerProvider } from "@/lib/ai/providers";
 import {
   applyPostCall,
   campaignOutcomeFor,
@@ -81,6 +82,13 @@ export type ElevenLabsFinalizePayload = {
   callLanguage?: string | null;
   /** Dispositions v3 — data collection `callback_agreed`. */
   callbackAgreed?: string | null;
+  /**
+   * Which provider placed the call. Defaults to "elevenlabs"; Sarvam reuses
+   * this whole pipeline by passing "sarvam" (src/lib/ai/sarvam/webhookHandler.ts).
+   * Every provider-tagged write below — ai_call_logs.provider, the call claim,
+   * cost, touchpoint, post-call outcome, follow_up_history — reads it.
+   */
+  provider?: DialerProvider;
 };
 
 const IN_PROGRESS = new Set(["initiated", "ringing", "in-progress"]);
@@ -108,7 +116,12 @@ const ADVANCE_DELAY_MS = 5_000;
 async function resolveElevenLabsPlayableUrl(
   conversationId: string,
   recordingUrl: string | null,
+  provider: DialerProvider = "elevenlabs",
 ): Promise<string> {
+  // Sarvam: the webhook handler already pulled the WAV from Sarvam's
+  // authenticated recordings endpoint and re-hosted it (or left the Sarvam API
+  // URL for the player route to retry). Nothing public to download here.
+  if (provider !== "elevenlabs") return recordingUrl ?? "";
   if (recordingUrl) {
     return rehostRecording({
       provider: "elevenlabs",
@@ -139,6 +152,7 @@ export async function finalizeElevenLabsCall(
     callResult,
     callLanguage,
     callbackAgreed,
+    provider = "elevenlabs",
   } = payload;
 
   if (IN_PROGRESS.has(status)) {
@@ -146,7 +160,7 @@ export async function finalizeElevenLabsCall(
   }
 
   if (conversationId) {
-    const claimed = await claimCallForProcessing("elevenlabs", conversationId);
+    const claimed = await claimCallForProcessing(provider, conversationId);
     if (!claimed) {
       console.log("[elevenlabs:finalize] already processed:", conversationId);
       return;
@@ -247,6 +261,7 @@ export async function finalizeElevenLabsCall(
     // format (08035315136) that will never match a stored +91 number, so this
     // branch is the *normal* path for them, not an edge case.
     await upsertAiCallLog({
+      provider,
       callId: conversationId,
       endEvidence,
       leadId: leadForPhone?.id ?? null,
@@ -271,7 +286,7 @@ export async function finalizeElevenLabsCall(
     // of the lead check: costStore keys on call_id, which now always exists, so
     // an unattributed call still gets its cost — and the cost column is what
     // the Cost tile sums.
-    await fetchAndPersistCallCost("elevenlabs", conversationId);
+    await fetchAndPersistCallCost(provider, conversationId);
 
     const v3 = await recordVerdict(leadForPhone?.id ?? null);
 
@@ -281,7 +296,7 @@ export async function finalizeElevenLabsCall(
       await writeAiCallTouchpoint({
         v3,
         leadId: leadForPhone.id,
-        provider: "elevenlabs",
+        provider,
         callId: conversationId,
         transcript: keptTranscript,
         providerStatus: status || "failed",
@@ -305,7 +320,7 @@ export async function finalizeElevenLabsCall(
       // AI dialer review — the outcome category (an unreached AI callback
       // re-dial goes back on the list).
       await applyPostCall({
-        provider: "elevenlabs",
+        provider,
         callId: conversationId,
         leadId: leadForPhone.id,
         plan: await preparePostCall({
@@ -353,6 +368,7 @@ export async function finalizeElevenLabsCall(
         const playableUrl = await resolveElevenLabsPlayableUrl(
           conversationId,
           recordingUrl,
+          provider,
         );
         await appendCallReview({
           uuid: reviewUuid,
@@ -411,6 +427,7 @@ export async function finalizeElevenLabsCall(
     // attributed by hand later, and re-finalizing after the lead exists will
     // upsert the score onto this same row.
     await upsertAiCallLog({
+      provider,
       callId: conversationId,
       endEvidence,
       leadId: null,
@@ -429,7 +446,7 @@ export async function finalizeElevenLabsCall(
       callStatus: "unattributed",
     });
     await recordVerdict(null);
-    await fetchAndPersistCallCost("elevenlabs", conversationId);
+    await fetchAndPersistCallCost(provider, conversationId);
     return;
   }
 
@@ -446,6 +463,7 @@ export async function finalizeElevenLabsCall(
       `[elevenlabs:finalize] analysis failed for lead ${lead.id}: ${result.reason}`,
     );
     const r = await markLeadNeedsReview({
+      provider,
       endEvidence,
       leadId: lead.id,
       followUpHistory: (lead.follow_up_history as unknown[]) || [],
@@ -464,7 +482,7 @@ export async function finalizeElevenLabsCall(
       v3: await recordVerdict(lead.id),
     });
     await applyPostCall({
-      provider: "elevenlabs",
+      provider,
       callId: conversationId,
       leadId: lead.id,
       plan: await preparePostCall({
@@ -516,7 +534,7 @@ export async function finalizeElevenLabsCall(
       conversation: conversation ?? [],
       signals: analysis.signals,
       scoring_version: analysis.scoring_version,
-      provider: "elevenlabs",
+      provider,
     };
     await db
       .update(dealerLeads)
@@ -524,11 +542,12 @@ export async function finalizeElevenLabsCall(
         follow_up_history: [...history, droppedEntry],
         total_attempts: history.length + 1,
         call_status: "dropped_empty",
-        provider: "elevenlabs",
+        provider,
       })
       .where(eq(dealerLeads.id, lead.id));
 
     await upsertAiCallLog({
+      provider,
       callId: conversationId,
       endEvidence,
       leadId: lead.id,
@@ -555,7 +574,7 @@ export async function finalizeElevenLabsCall(
       infoSignalsCount: 0,
     });
 
-    await fetchAndPersistCallCost("elevenlabs", conversationId);
+    await fetchAndPersistCallCost(provider, conversationId);
 
     // A transcript exists, so this is CONNECTED — v3 decides which row.
     const droppedV3 = await recordVerdict(lead.id, {
@@ -565,7 +584,7 @@ export async function finalizeElevenLabsCall(
     await writeAiCallTouchpoint({
       v3: droppedV3,
       leadId: lead.id,
-      provider: "elevenlabs",
+      provider,
       callId: conversationId,
       transcript,
       providerStatus: status || "completed",
@@ -598,7 +617,7 @@ export async function finalizeElevenLabsCall(
       intentScore: droppedScore,
     });
     await applyPostCall({
-      provider: "elevenlabs",
+      provider,
       callId: conversationId,
       leadId: lead.id,
       plan,
@@ -630,7 +649,7 @@ export async function finalizeElevenLabsCall(
       nextCallAt,
       conversation: conversation ?? [],
       memory: analysis.memory,
-      provider: "elevenlabs",
+      provider,
       intentScore: analysis.intent_score,
       band: analysis.band,
       callStatus: analysis.call_status,
@@ -658,7 +677,7 @@ export async function finalizeElevenLabsCall(
       intent_band: updatedLead.intent_band,
       memory: updatedLead.memory,
       next_call_at: null,
-      provider: "elevenlabs",
+      provider,
     })
     .where(eq(dealerLeads.id, lead.id));
 
@@ -672,6 +691,7 @@ export async function finalizeElevenLabsCall(
     : `${analysis.band} — ${analysis.info_signals_count}/5 signals disclosed`;
 
   await upsertAiCallLog({
+    provider,
     callId: conversationId,
     endEvidence,
     leadId: lead.id,
@@ -700,7 +720,7 @@ export async function finalizeElevenLabsCall(
 
   // Capture per-call cost from ElevenLabs /v1/convai/conversations/{id}.
   // Best-effort: backfill cron is the recovery path on race or 5xx.
-  await fetchAndPersistCallCost("elevenlabs", conversationId);
+  await fetchAndPersistCallCost(provider, conversationId);
 
   // The scored path. The band rides on external_tag rather than deciding the L2
   // bucket — an AI call cannot reach the sheet's Hot bucket. See dispositionV3.ts.
@@ -711,7 +731,7 @@ export async function finalizeElevenLabsCall(
   await writeAiCallTouchpoint({
     v3: scoredV3,
     leadId: lead.id,
-    provider: "elevenlabs",
+    provider,
     callId: conversationId,
     transcript,
     providerStatus: status || "completed",
@@ -744,7 +764,7 @@ export async function finalizeElevenLabsCall(
   // The category, the callback record and the sales hand-off — the one
   // scheduling path for a callback (see the Bolna twin).
   await applyPostCall({
-    provider: "elevenlabs",
+    provider,
     callId: conversationId,
     leadId: lead.id,
     plan,
@@ -794,6 +814,7 @@ export async function finalizeElevenLabsCall(
     const playableUrl = await resolveElevenLabsPlayableUrl(
       conversationId,
       recordingUrl,
+      provider,
     );
     await appendCallReview({
       uuid: reviewUuid,
@@ -880,6 +901,8 @@ async function persistTranscriptTurns(
 
 /** Exported for the inbound path (src/lib/ai-dialer/inbound.ts). */
 export async function upsertAiCallLog(opts: {
+  /** Defaults to "elevenlabs" (the inbound path passes none). */
+  provider?: DialerProvider;
   callId: string;
   /**
    * Null when no dealer_leads row matched.
@@ -966,7 +989,7 @@ export async function upsertAiCallLog(opts: {
         id,
         call_id: opts.callId || id,
         lead_id: opts.leadId,
-        provider: "elevenlabs",
+        provider: opts.provider ?? "elevenlabs",
         phone_number: opts.phone,
         started_at: opts.startedAt ?? null,
         ended_at: endedAt,
@@ -990,7 +1013,7 @@ export async function upsertAiCallLog(opts: {
     // read-then-update body that used to carry this call, so re-attach it to
     // the upsert path or the provider's verbatim turn array is never stored.
     await persistTranscriptTurns(opts.callId || id, opts.transcriptTurns);
-    await persistCallEndEvidence(opts.callId, opts.endEvidence, "elevenlabs:finalize");
+    await persistCallEndEvidence(opts.callId, opts.endEvidence, `${opts.provider ?? "elevenlabs"}:finalize`);
   } catch (err) {
     console.error("[elevenlabs:finalize] ai_call_logs upsert failed:", err);
   }
@@ -1000,6 +1023,7 @@ export async function upsertAiCallLog(opts: {
 // needs_review WITHOUT scoring it, leave final_intent_score untouched, and still
 // complete the campaign lead so the dialer advances.
 async function markLeadNeedsReview(opts: {
+  provider: DialerProvider;
   leadId: string;
   followUpHistory: unknown[];
   callId: string;
@@ -1027,7 +1051,7 @@ async function markLeadNeedsReview(opts: {
     reason: opts.reason,
     transcript: opts.transcript || "",
     conversation: opts.conversation || [],
-    provider: "elevenlabs",
+    provider: opts.provider,
   };
 
   try {
@@ -1037,7 +1061,7 @@ async function markLeadNeedsReview(opts: {
         follow_up_history: [...history, newEntry],
         total_attempts: history.length + 1,
         current_status: "needs_review",
-        provider: "elevenlabs",
+        provider: opts.provider,
       })
       .where(eq(dealerLeads.id, opts.leadId));
   } catch (err) {
@@ -1045,6 +1069,7 @@ async function markLeadNeedsReview(opts: {
   }
 
   await upsertAiCallLog({
+    provider: opts.provider,
     callId: opts.callId,
     endEvidence: opts.endEvidence,
     leadId: opts.leadId,
@@ -1065,14 +1090,14 @@ async function markLeadNeedsReview(opts: {
     transcriptTurns: opts.conversation ?? null,
   });
 
-  await fetchAndPersistCallCost("elevenlabs", opts.callId);
+  await fetchAndPersistCallCost(opts.provider, opts.callId);
 
   // Connected with a NULL L3: the dealer WAS reached, but the failure is ours.
   // See the Bolna twin — that null is the extraction-failure measurement.
   await writeAiCallTouchpoint({
     v3: opts.v3 ?? null,
     leadId: opts.leadId,
-    provider: "elevenlabs",
+    provider: opts.provider,
     callId: opts.callId,
     transcript: opts.transcript,
     providerStatus: opts.status || "needs_review",

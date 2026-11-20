@@ -17,6 +17,7 @@ const PROVIDER_META: Record<
 > = {
   bolna: { label: "Bolna", color: "#3b82f6", swatch: "bg-blue-500" },
   elevenlabs: { label: "ElevenLabs", color: "#8b5cf6", swatch: "bg-violet-500" },
+  sarvam: { label: "Sarvam", color: "#f59e0b", swatch: "bg-amber-500" },
 };
 
 type ProviderDonutProps = {
@@ -47,7 +48,7 @@ export function ProviderDonut({ data, loading }: ProviderDonutProps) {
         </span>
       </div>
       <h3 className="text-base font-bold text-gray-900 tracking-tight mb-5">
-        Bolna vs ElevenLabs
+        Cost by voice provider
       </h3>
 
       <div className="relative h-44">

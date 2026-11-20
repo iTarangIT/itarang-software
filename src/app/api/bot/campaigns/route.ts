@@ -10,6 +10,7 @@ import { successResponse } from "@/lib/api-utils";
 import { withBotAuth } from "@/lib/bot/auth";
 import { BOT_CAMPAIGN_SOURCE } from "@/lib/bot/constants";
 import { and, desc, eq, sql, type SQL } from "drizzle-orm";
+import { DIALER_PROVIDERS, isDialerProvider } from "@/lib/ai/providers";
 
 export const GET = withBotAuth(async (req: Request) => {
   const { searchParams } = new URL(req.url);
@@ -19,7 +20,7 @@ export const GET = withBotAuth(async (req: Request) => {
 
   const filters: SQL[] = [];
   const provider = searchParams.get("provider");
-  if (provider === "bolna" || provider === "elevenlabs") {
+  if (isDialerProvider(provider)) {
     filters.push(eq(dialerCampaigns.provider, provider));
   }
   if (searchParams.get("source") === "bot") {

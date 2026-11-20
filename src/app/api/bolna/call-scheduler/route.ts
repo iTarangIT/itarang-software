@@ -3,7 +3,7 @@ import { dealerLeads } from "@/lib/db/schema";
 import { triggerBolnaCall } from "@/lib/ai/bolna_ai/triggerCall";
 import { quotaCircuit } from "@/lib/queue/connection";
 import { log } from "@/lib/log";
-import { not, inArray, eq, isNotNull, isNull, and, or, ne } from "drizzle-orm";
+import { not, inArray, eq, isNotNull, isNull, and, or } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { checkCronAuth } from "@/lib/cron-auth";
 import { AI_FOLLOWUP_LOOP_RETIRES_CONNECTED } from "@/lib/ai-dialer/exclusionFilter";
@@ -30,11 +30,12 @@ export async function GET(req: Request) {
           isNotNull(dealerLeads.current_status),
           not(inArray(dealerLeads.current_status, SKIP_STATUSES)),
           isNotNull(dealerLeads.next_call_at),
-          // Skip leads explicitly tagged for ElevenLabs — they have their
-          // own scheduler. NULL provider = legacy/Bolna, also picked up here.
+          // Skip leads tagged for another AI provider (ElevenLabs, Sarvam) —
+          // a Bolna follow-up must never redial them. NULL provider =
+          // legacy/Bolna, also picked up here.
           or(
             isNull(dealerLeads.provider),
-            ne(dealerLeads.provider, "elevenlabs"),
+            not(inArray(dealerLeads.provider, ["elevenlabs", "sarvam"])),
           ),
         ),
       );

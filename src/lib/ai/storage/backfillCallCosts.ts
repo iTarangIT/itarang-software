@@ -20,6 +20,7 @@
 // Cadence: every 15 min on Vercel (vercel.json). Cache-warm to keep the
 // per-tick cost low.
 
+import type { DialerProvider } from "@/lib/ai/providers";
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { fetchAndPersistCallCost } from "@/lib/ai/storage/costStore";
@@ -124,7 +125,7 @@ export async function backfillCallCosts(): Promise<CallCostBackfillResult> {
         AND call_id IS NOT NULL
         AND ended_at IS NOT NULL
         AND ended_at < now() - interval '5 minutes'
-        AND provider IN ('bolna', 'elevenlabs')
+        AND provider IN ('bolna', 'elevenlabs', 'sarvam')
       ORDER BY ended_at DESC
       LIMIT ${BATCH_LIMIT}
     `,
@@ -135,7 +136,7 @@ export async function backfillCallCosts(): Promise<CallCostBackfillResult> {
   let failed = 0;
   for (const row of unwrapRows(rows)) {
     attempted += 1;
-    const provider = row.provider as "bolna" | "elevenlabs";
+    const provider = row.provider as DialerProvider;
     try {
       await fetchAndPersistCallCost(provider, row.call_id);
       succeeded += 1;

@@ -9,8 +9,9 @@ import { advanceCampaign } from "@/lib/queue/advanceCampaign";
 import { guardApi } from "@/lib/auth/apiGuard";
 import { CALLING_LIST_ROLES } from "@/lib/leads/access";
 import { campaignScheduleSchema } from "@/lib/queue/campaignWindow";
+import { DIALER_PROVIDERS, isDialerProvider } from "@/lib/ai/providers";
 
-const ALLOWED_PROVIDERS: DialerProvider[] = ["bolna", "elevenlabs"];
+const ALLOWED_PROVIDERS: readonly DialerProvider[] = DIALER_PROVIDERS;
 
 export async function POST(req: NextRequest) {
   // ⚠ SECURITY: this route had NO auth gate. Middleware does not cover /api/*,

@@ -32,6 +32,10 @@ import { LEADS_PAGE_ROLES, readsOwnLeadsOnly } from "@/lib/leads/access";
 import { getTeamMemberIds } from "@/lib/users/team";
 import { ownerScopeIds } from "@/lib/users/teamRules";
 import { guardApi } from "@/lib/auth/apiGuard";
+import {
+  isSarvamRecordingApiUrl,
+  rehostSarvamRecordingFromUrl,
+} from "@/lib/ai/sarvam/fetchRecording";
 
 function redirectTo(url: string): Response {
   return new Response(null, { status: 302, headers: { Location: url } });
@@ -94,7 +98,12 @@ export async function GET(
   // copied into our storage now (and the row repointed); the rest of the old
   // ones are copied by scripts/backfill-recordings-rehost.ts.
   let playable = row.recordingUrl ?? "";
-  if (playable && !isOwnRecordingUrl(playable)) {
+  if (row.provider === "sarvam" && isSarvamRecordingApiUrl(playable)) {
+    // Sarvam: the stored link is the authenticated analytics endpoint, left
+    // there when the recording was not ready at webhook time. Pull + re-host.
+    playable = await rehostSarvamRecordingFromUrl(callId, playable);
+    if (!playable) return new Response("Recording not available yet", { status: 404 });
+  } else if (playable && !isOwnRecordingUrl(playable)) {
     const copied = await ownRecordingUrl({ provider: row.provider || "bolna", callId, recordingUrl: playable });
     playable = copied && isOwnRecordingUrl(copied) ? copied : "";
     if (!playable) return new Response("Recording not available yet", { status: 404 });

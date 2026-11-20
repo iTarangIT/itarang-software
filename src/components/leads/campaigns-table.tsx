@@ -127,6 +127,13 @@ function providerChip(p: string) {
       </span>
     );
   }
+  if (p === "sarvam") {
+    return (
+      <span className="px-2 py-0.5 text-[11px] font-medium rounded-full bg-amber-50 text-amber-700">
+        Sarvam
+      </span>
+    );
+  }
   return (
     <span className="px-2 py-0.5 text-[11px] font-medium rounded-full bg-blue-50 text-blue-700">
       Bolna

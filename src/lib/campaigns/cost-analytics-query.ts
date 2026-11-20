@@ -17,11 +17,12 @@
 // not per-campaign.
 
 import { sql, type SQL } from "drizzle-orm";
+import type { DialerProvider } from "@/lib/ai/providers";
 
 export type CostAnalyticsFilters = {
   from_date: string | null;
   to_date: string | null;
-  provider: "bolna" | "elevenlabs" | null;
+  provider: DialerProvider | null;
   campaign_id: string | null;
   page: number;
   limit: number;

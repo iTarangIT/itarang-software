@@ -5,6 +5,7 @@
 
 "use client";
 
+import { DIALER_PROVIDER_LABEL, toDialerProvider } from "@/lib/ai/providers";
 import { useState } from "react";
 import { SortableTh, sortRows, useUrlTableSort, type SortSpec } from "@/components/shared/TableSort";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -969,7 +970,7 @@ export function CampaignDetailView({
             <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
               <CampaignStatusBadge status={campaign.status} />
               <span className="px-2 py-0.5 rounded-full font-medium bg-zinc-100 text-zinc-700">
-                {campaign.provider === "elevenlabs" ? "ElevenLabs" : "Bolna"}
+                {DIALER_PROVIDER_LABEL[toDialerProvider(campaign.provider)]}
               </span>
               {campaign.category && (
                 <span className="px-2 py-0.5 rounded-full font-medium bg-amber-50 text-amber-700">

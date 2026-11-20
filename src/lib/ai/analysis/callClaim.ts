@@ -7,11 +7,12 @@
 // post-call work; the rest no-op.
 
 import { dedupClaim } from "@/lib/queue/safeRedis";
+import type { DialerProvider } from "@/lib/ai/providers";
 
 const PROCESSED_CALL_TTL_SECONDS = 10 * 60;
 
 export async function claimCallForProcessing(
-  provider: "bolna" | "elevenlabs",
+  provider: DialerProvider,
   callId: string,
 ): Promise<boolean> {
   if (!callId) return false;

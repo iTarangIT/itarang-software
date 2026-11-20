@@ -6,8 +6,9 @@ import { inArray } from 'drizzle-orm';
 import { runLeadQualification } from '@/lib/ai/langgraph/lead-qualification-graph';
 import { getAICallerEnabled } from '@/lib/ai/settings';
 
-const ALLOWED_PROVIDERS = ['bolna', 'elevenlabs'] as const;
-type Provider = typeof ALLOWED_PROVIDERS[number];
+import { DIALER_PROVIDER_AI_OWNER, toDialerProvider, type DialerProvider } from '@/lib/ai/providers';
+
+type Provider = DialerProvider;
 
 export async function POST(req: NextRequest) {
     try {
@@ -19,9 +20,7 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ success: false, error: { message: 'leadIds array required' } }, { status: 400 });
         }
 
-        const provider: Provider = ALLOWED_PROVIDERS.includes(rawProvider)
-            ? rawProvider
-            : 'bolna';
+        const provider: Provider = toDialerProvider(rawProvider);
 
         const aiEnabled = await getAICallerEnabled();
         if (!aiEnabled) {
@@ -31,7 +30,7 @@ export async function POST(req: NextRequest) {
             );
         }
 
-        const aiOwner = provider === 'elevenlabs' ? 'elevenlabs_agent' : 'bolna_agent';
+        const aiOwner = DIALER_PROVIDER_AI_OWNER[provider];
         const now = new Date();
 
         // Use a single UPDATE ... WHERE id IN (...) RETURNING so the response

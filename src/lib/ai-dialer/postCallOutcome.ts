@@ -56,6 +56,7 @@ import type { QualificationSignals } from "@/lib/ai/scoring/signals";
 import { buildCallbackBrief, handOffToOwner, type CallbackKind } from "./callbackLoop";
 import { nextWorkingMorning } from "./callCategory";
 import { saveCallContacts } from "./contactStore";
+import type { DialerProvider } from "@/lib/ai/providers";
 
 export const CALLBACK_NOTIFICATION_TYPE = "lead.callback_requested";
 
@@ -64,7 +65,7 @@ export const MAX_AI_CALLBACK_ATTEMPTS = 3;
 /** An unreached AI callback is tried again this much later. */
 const AI_CALLBACK_REDIAL_GAP_MS = 2 * 60 * 60 * 1000;
 
-type Provider = "bolna" | "elevenlabs";
+type Provider = DialerProvider;
 
 /** The analysis fields this flow reads — AnalysisOk satisfies it. */
 export type PostCallAnalysis = CategoryAnalysis & {

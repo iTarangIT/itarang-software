@@ -1,11 +1,14 @@
 import { db } from "@/lib/db";
-import { recordLeadCreated, stampLeadSource } from "@/lib/leads/leadSource";
-import { dealerLeads, scraperLeads } from "@/lib/db/schema";
-import { eq, inArray } from "drizzle-orm";
-import { nanoid } from "nanoid";
+import { dealerLeads } from "@/lib/db/schema";
+import { eq } from "drizzle-orm";
 import { normalizeIndianPhone, phoneLookupVariants } from "@/lib/ai/phone";
 import { dedupClaim } from "@/lib/queue/safeRedis";
 import { openingLanguageOverride } from "@/lib/ai-dialer/callLanguage";
+import {
+  DIAL_IDEMPOTENCY_TTL_SECONDS,
+  dialIdempotencyKey,
+  promoteScraperLead,
+} from "@/lib/ai/dialerShared";
 import { ElevenLabsCallPayload, ElevenLabsCallResponse } from "./types";
 import { redialHints } from "@/lib/ai-dialer/dispositionV3";
 import { lastDispositionRuleFor } from "@/lib/ai/storage/dialDisposition";
@@ -13,11 +16,10 @@ import { spokenNameFor } from "@/lib/ai-dialer/spokenNameStore";
 
 // One ElevenLabs call per (lead, phone, day). Same rationale as Bolna —
 // stops QStash retries from billing 3x for the same daily outreach attempt.
-const IDEMPOTENCY_TTL_SECONDS = 25 * 60 * 60;
+const IDEMPOTENCY_TTL_SECONDS = DIAL_IDEMPOTENCY_TTL_SECONDS;
 
 function idempotencyKey(leadId: string, e164Phone: string): string {
-  const dateKey = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-  return `elevenlabs:idem:${leadId}:${e164Phone}:${dateKey}`;
+  return dialIdempotencyKey("elevenlabs", leadId, e164Phone);
 }
 
 // ElevenLabs has separate outbound endpoints depending on how the phone
@@ -77,65 +79,6 @@ function buildLastCallMemory(followUpHistory: any[]): string {
   return parts.join(" ").trim();
 }
 
-async function promoteScraperLead(phone: string): Promise<any | null> {
-  // dealer_leads stores 10-digit, scraper_leads stores +91 E.164 — look up
-  // by both variants so we match regardless of which the caller passed.
-  const variants = phoneLookupVariants(phone);
-  const [scraperLead] = await db
-    .select()
-    .from(scraperLeads)
-    .where(inArray(scraperLeads.phone, variants))
-    .limit(1);
-
-  if (!scraperLead) return null;
-
-  console.log(
-    "[ELEVENLABS] Scraper lead found, promoting to dealer_leads:",
-    scraperLead.id,
-  );
-
-  const newId = `L-${nanoid(8)}`;
-
-  await db.insert(dealerLeads).values({
-    id: newId,
-    dealer_name: scraperLead.name ?? null,
-    shop_name: scraperLead.name ?? null,
-    phone: scraperLead.phone ?? null,
-    location: scraperLead.city ?? null,
-    language: "hindi",
-    current_status: "new",
-    total_attempts: 0,
-    follow_up_history: [],
-    created_at: new Date(),
-    provider: "elevenlabs",
-  });
-
-  // ID 81: a scraper record promoted on dial — Entered via Scraper, Found via
-  // Scraped listing, and "Lead created". Best-effort; the lead exists either way.
-  await stampLeadSource(db, newId, { door: "scraper", origin: "scraped_listing" });
-  await recordLeadCreated(db, { leadId: newId, actorId: null, door: "scraper", ownerId: null }).catch((e) =>
-    console.warn("[triggerCall] Lead created not recorded:", e),
-  );
-
-  await db
-    .update(scraperLeads)
-    .set({ status: "pushed" })
-    .where(eq(scraperLeads.id, scraperLead.id));
-
-  console.log(
-    "[ELEVENLABS] Promoted scraper lead to dealer_leads with id:",
-    newId,
-  );
-
-  const [newLead] = await db
-    .select()
-    .from(dealerLeads)
-    .where(eq(dealerLeads.id, newId))
-    .limit(1);
-
-  return newLead ?? null;
-}
-
 export async function triggerElevenLabsCall(
   payload: ElevenLabsCallPayload,
 ): Promise<ElevenLabsCallResponse> {
@@ -172,7 +115,7 @@ export async function triggerElevenLabsCall(
         "[ELEVENLABS] Not found in dealer_leads, checking scraper_leads for:",
         payload.phone,
       );
-      lead = await promoteScraperLead(payload.phone);
+      lead = await promoteScraperLead(payload.phone, "elevenlabs");
     }
 
     if (!lead) {

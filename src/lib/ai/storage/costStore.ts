@@ -13,8 +13,25 @@ import { aiCallLogs } from "@/lib/db/schema";
 import { and, eq, sql } from "drizzle-orm";
 import { fetchBolnaCallCost, type NormalizedCallCost } from "@/lib/ai/bolna_ai/fetchCallCost";
 import { fetchElevenLabsCallCost } from "@/lib/ai/elevenlabs/fetchCallCost";
+import { fetchSarvamCallCost } from "@/lib/ai/sarvam/fetchCallCost";
+import { assertNeverProvider, type DialerProvider } from "@/lib/ai/providers";
 
-type Provider = "bolna" | "elevenlabs";
+type Provider = DialerProvider;
+
+// Exhaustive on purpose: this used to be `bolna ? … : elevenlabs`, so any new
+// provider's call ids were looked up against the ElevenLabs API.
+function fetchCallCost(provider: Provider, callId: string): Promise<NormalizedCallCost> {
+  switch (provider) {
+    case "bolna":
+      return fetchBolnaCallCost(callId);
+    case "elevenlabs":
+      return fetchElevenLabsCallCost(callId);
+    case "sarvam":
+      return fetchSarvamCallCost(callId);
+    default:
+      return assertNeverProvider(provider);
+  }
+}
 
 export async function fetchAndPersistCallCost(
   provider: Provider,
@@ -22,10 +39,7 @@ export async function fetchAndPersistCallCost(
 ): Promise<void> {
   if (!callId) return;
   try {
-    const cost: NormalizedCallCost =
-      provider === "bolna"
-        ? await fetchBolnaCallCost(callId)
-        : await fetchElevenLabsCallCost(callId);
+    const cost: NormalizedCallCost = await fetchCallCost(provider, callId);
 
     if (!cost.success) {
       console.warn(

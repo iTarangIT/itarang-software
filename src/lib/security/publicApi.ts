@@ -43,6 +43,7 @@ export const PUBLIC_API_RULES: readonly PublicApiRule[] = [
   { pattern: /^\/api\/webhooks\//, why: "provider webhook — Bolna: bearer BOLNA_WEBHOOK_SECRET; Digio: X-Digio-Checksum" },
   { pattern: /^\/api\/(bolna|elevenlabs|neodove|whatsapp)\/webhook$/, why: "provider webhook" },
   { pattern: /^\/api\/elevenlabs\/inbound-init$/, why: "ElevenLabs conversation-initiation webhook — header secret ELEVENLABS_INIT_WEBHOOK_SECRET" },
+  { pattern: /^\/api\/sarvam\/webhook$/, why: "Sarvam call-end webhook — ?token= SARVAM_WEBHOOK_TOKEN, checked in the route" },
   { pattern: /^\/api\/assistant\/wa\/webhook$/, why: "Meta WhatsApp webhook — signature / verify token" },
   { pattern: /^\/api\/ceo\/ai-dialer\/webhook\//, why: "Bolna webhook — bearer BOLNA_WEBHOOK_SECRET" },
   { pattern: /^\/api\/bolna\/tools\//, why: "tool calls made by the Bolna voice agent during a call — bearer BOLNA_TOOL_SECRET" },

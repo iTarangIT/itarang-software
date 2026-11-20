@@ -31,7 +31,7 @@ import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { successResponse, errorResponse, withErrorHandler } from "@/lib/api-utils";
 import { guardApi } from "@/lib/auth/apiGuard";
 import { CAMPAIGN_ACTION_ROLES } from "@/lib/leads/access";
-import { type DialerProvider } from "@/lib/queue/dialerSession";
+import { type DialerProvider, toDialerProvider } from "@/lib/queue/dialerSession";
 import { createCampaign } from "@/lib/queue/campaignTracker";
 import { startDraftCampaign } from "@/lib/queue/startCampaign";
 import { isRetryableFailure } from "@/lib/ai-dialer/failureReason";
@@ -157,8 +157,8 @@ export const POST = withErrorHandler(
       sourceCampaignId: source.id,
     };
 
-    const provider: DialerProvider =
-      source.provider === "elevenlabs" ? "elevenlabs" : "bolna";
+    // The retry stays on the source campaign's provider (never silently Bolna).
+    const provider: DialerProvider = toDialerProvider(source.provider);
 
     // Name the retry "Retry · <original>". Collapse any existing "Retry · "
     // prefixes first so retrying a retry doesn't compound into

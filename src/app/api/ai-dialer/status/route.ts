@@ -2,8 +2,8 @@ import { dialerSession } from "@/lib/queue/dialerSession";
 import { db } from "@/lib/db";
 import { dialerCampaigns } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
-import { triggerBolnaCall } from "@/lib/ai/bolna_ai/triggerCall";
-import { triggerElevenLabsCall } from "@/lib/ai/elevenlabs/triggerCall";
+import { triggerProviderCall } from "@/lib/ai/triggerProviderCall";
+import { toDialerProvider } from "@/lib/ai/providers";
 import { markCampaignLeadCalling } from "@/lib/queue/campaignTracker";
 import {
   campaignSessionEnded,
@@ -53,14 +53,12 @@ export async function GET() {
       });
 
       if (lead?.phone) {
-        const provider = await dialerSession.getProvider();
-        const trigger =
-          provider === "elevenlabs" ? triggerElevenLabsCall : triggerBolnaCall;
+        const provider = toDialerProvider(await dialerSession.getProvider());
 
         await markCampaignLeadCalling({ leadId: lead.id, campaignId: null });
 
         // Fire and forget — don't block the status response
-        trigger({ phone: lead.phone, leadId: lead.id }).catch((err) =>
+        triggerProviderCall(provider, { phone: lead.phone, leadId: lead.id }).catch((err) =>
           console.error(
             `[AI DIALER] Timeout trigger failed (${provider}):`,
             err,

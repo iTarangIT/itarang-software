@@ -131,6 +131,7 @@ export function FiltersBar({
               <option value="">All providers</option>
               <option value="bolna">Bolna</option>
               <option value="elevenlabs">ElevenLabs</option>
+              <option value="sarvam">Sarvam</option>
             </select>
             <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
           </div>

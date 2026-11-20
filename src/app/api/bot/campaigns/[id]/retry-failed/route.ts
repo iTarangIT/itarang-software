@@ -20,7 +20,7 @@ import { RETRYABLE_STATUSES } from "@/lib/ai-dialer/campaignLeadStatus";
 import { successResponse, errorResponse } from "@/lib/api-utils";
 import { withBotAuth } from "@/lib/bot/auth";
 import { DISCORD_BOT_USER_ID, BOT_CAMPAIGN_SOURCE } from "@/lib/bot/constants";
-import { type DialerProvider } from "@/lib/queue/dialerSession";
+import { type DialerProvider, toDialerProvider } from "@/lib/queue/dialerSession";
 import { createCampaign } from "@/lib/queue/campaignTracker";
 import { startDraftCampaign } from "@/lib/queue/startCampaign";
 
@@ -92,8 +92,8 @@ export const POST = withBotAuth(
       sourceCampaignId: source.id,
     };
 
-    const provider: DialerProvider =
-      source.provider === "elevenlabs" ? "elevenlabs" : "bolna";
+    // The retry stays on the source campaign's provider (never silently Bolna).
+    const provider: DialerProvider = toDialerProvider(source.provider);
 
     const baseName = (source.name ?? "").replace(/^(?:Retry · )+/, "").trim();
     const retryName = `Retry · ${baseName || "previous campaign"}`;

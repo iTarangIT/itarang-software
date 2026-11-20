@@ -45,6 +45,10 @@ import {
   audioExtensionFor,
   recordingKeyFor,
 } from "@/lib/ai/transcription/audioUpload";
+import {
+  isSarvamRecordingApiUrl,
+  rehostSarvamRecordingFromUrl,
+} from "@/lib/ai/sarvam/fetchRecording";
 
 export const runtime = "nodejs";
 
@@ -104,8 +108,12 @@ export const POST = withErrorHandler(
     // the provider once, re-host into our bucket, backfill the column so every
     // later reader takes the fast path.
     let recordingUrl = calls[0].recording_url ?? null;
-    if (!recordingUrl && calls[0].provider === "elevenlabs") {
-      recordingUrl = (await rehostElevenLabsRecording(callId)) || null;
+    const sarvamPending =
+      calls[0].provider === "sarvam" && isSarvamRecordingApiUrl(recordingUrl);
+    if (sarvamPending || (!recordingUrl && calls[0].provider === "elevenlabs")) {
+      recordingUrl = sarvamPending
+        ? (await rehostSarvamRecordingFromUrl(callId, recordingUrl!)) || null
+        : (await rehostElevenLabsRecording(callId)) || null;
 
       if (recordingUrl) {
         // Best-effort, as the player route treats it: the re-host has already

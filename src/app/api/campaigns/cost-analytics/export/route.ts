@@ -18,6 +18,7 @@ import {
   type CostAnalyticsFilters,
 } from "@/lib/campaigns/cost-analytics-query";
 import { costCentsToInr } from "@/lib/currency";
+import { DIALER_PROVIDERS, isDialerProvider } from "@/lib/ai/providers";
 
 const ALLOWED_ROLES = [
   "ceo",
@@ -55,7 +56,7 @@ export const GET = withErrorHandler(async (req: Request) => {
   const campaignId = searchParams.get("campaign_id");
   const provider = searchParams.get("provider");
   const validProvider =
-    provider === "bolna" || provider === "elevenlabs" ? provider : null;
+    isDialerProvider(provider) ? provider : null;
 
   const filters: CostAnalyticsFilters = {
     from_date: searchParams.get("from_date") || null,

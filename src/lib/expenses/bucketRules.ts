@@ -87,6 +87,7 @@ export const VENDOR_BUCKET_RULES: ReadonlyArray<
   ["digio", "tech"],
   ["bolna", "tech"],
   ["elevenlabs", "tech"],
+  ["sarvam", "tech"],
   ["firecrawl", "tech"],
   ["apify", "tech"],
   ["twilio", "tech"],
