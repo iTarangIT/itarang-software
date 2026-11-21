@@ -80,6 +80,23 @@ export async function runDialerPollOnce(): Promise<DialerPollResult> {
     const provider = (row.provider || "bolna").toLowerCase();
     const callId = row.callId!;
 
+    // Sarvam has no confirmed status lookup for an attempt_id (handoff spec,
+    // unverified point 4): its call-end webhook is the only source. Skip the
+    // row rather than letting it fall into the Bolna branch below, which would
+    // query Bolna's API with a Sarvam id. A webhook that never arrives leaves
+    // the row to the `calling` watchdog.
+    if (provider === "sarvam") {
+      result.skippedNotTerminal += 1;
+      result.perRow.push({
+        leadId: row.leadId,
+        callId,
+        provider,
+        status: "awaiting_webhook",
+        finalized: false,
+      });
+      continue;
+    }
+
     try {
       if (provider === "elevenlabs") {
         const s = await getElevenLabsCallStatus(callId);

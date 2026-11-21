@@ -4,7 +4,14 @@
 import { connection as redis } from "./connection";
 import { safeRedis } from "./safeRedis";
 
-export type DialerProvider = "bolna" | "elevenlabs";
+import type { DialerProvider } from "@/lib/ai/providers";
+
+export {
+  DIALER_PROVIDERS,
+  isDialerProvider,
+  toDialerProvider,
+  type DialerProvider,
+} from "@/lib/ai/providers";
 
 type DialerSession = {
   queue: string[];

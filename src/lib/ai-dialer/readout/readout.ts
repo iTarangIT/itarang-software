@@ -229,6 +229,130 @@ export function readoutLines(
         ...body,
         ...defects,
         "",
-        "Target: 15 per 100 dials by 15 Nov, 25 by 30 Nov. If 'Gone<15s' rises after a change, revert it the same day.",
+        READOUT_TARGET_LINE,
     ];
+}
+
+const READOUT_TARGET_LINE =
+    "Target: 15 per 100 dials by 15 Nov, 25 by 30 Nov. If 'Gone<15s' rises after a change, revert it the same day.";
+
+function escapeHtml(s: string): string {
+    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/** "2026-11-18" → "Wed 18 Nov" (or "18 Nov" without the weekday). Anything else is shown as it came. */
+function readoutDay(day: string, weekday = true): string {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
+    if (!m) return day;
+    const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+    const date = `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}`;
+    return weekday ? `${WEEKDAYS[d.getUTCDay()]} ${date}` : date;
+}
+
+/**
+ * The readout as an HTML email body. The plain-text lines are a fixed-width
+ * table about 66 characters wide; in a <pre> block a phone wraps every row in
+ * two and the columns stop lining up. A real <table> with short headers fits a
+ * phone screen. Inline styles only — mail clients drop <style> blocks.
+ * Same numbers as readoutLines, newest day first.
+ */
+export function readoutHtml(
+    rows: ReadonlyArray<ReadoutRow>,
+    meta: { version: string; changeTested: string; zeroAnswerMinDials?: number },
+): string {
+    const font = "font-family:-apple-system,'Segoe UI',Roboto,Arial,sans-serif";
+    // Tight enough that seven columns fit a 360 px phone without sideways scroll.
+    const cell = "padding:6px 4px;border-bottom:1px solid #e5e7eb;text-align:right;white-space:nowrap";
+    const headCell =
+        "padding:6px 4px;border-bottom:1px solid #e5e7eb;text-align:right;vertical-align:bottom;" +
+        "background:#f3f4f6;font-weight:600;color:#374151;font-size:11px;line-height:1.25";
+    const today = rows[0];
+    const out: string[] = [];
+
+    out.push(`<div style="${font};font-size:14px;color:#111827;line-height:1.45;max-width:640px">`);
+
+    if (today && isZeroAnswerDay(today, meta.zeroAnswerMinDials ?? ZERO_ANSWER_MIN_DIALS_DEFAULT)) {
+        out.push(
+            `<p style="margin:0 0 12px;padding:10px 12px;background:#fef2f2;border:1px solid #fecaca;color:#991b1b;font-weight:600">` +
+                `ZERO ANSWERED today: ${today.dials} dials and not one person picked up. Check the caller id and the provider route.</p>`,
+        );
+    }
+
+    out.push(
+        `<p style="margin:0 0 12px;color:#4b5563;font-size:13px">` +
+            `<b>Version:</b> ${escapeHtml(meta.version || "—")} &nbsp;·&nbsp; <b>Change tested:</b> ${escapeHtml(meta.changeTested || "—")}</p>`,
+    );
+
+    // [header, sub-header] — the sub-header says what the column counts.
+    const headers: Array<[string, string]> = [
+        ["Date", ""],
+        ["Dials", ""],
+        ["Humans", "picked up"],
+        ["Complete", "calls"],
+        ["Per 100", "dials"],
+        ["Gone&nbsp;&lt;15s", "of humans"],
+        ["Inbound", "answered"],
+    ];
+    out.push(`<table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;font-size:13px">`);
+    out.push(
+        "<tr>" +
+            headers
+                .map(
+                    ([h, sub], i) =>
+                        `<th style="${headCell}${i === 0 ? ";text-align:left" : ""}">${h}` +
+                        (sub ? `<br><span style="font-weight:400;color:#6b7280;font-size:11px">${sub}</span>` : "") +
+                        "</th>",
+                )
+                .join("") +
+            "</tr>",
+    );
+    for (const [i, r] of rows.entries()) {
+        const bold = i === 0 ? ";font-weight:600" : "";
+        const values = [
+            readoutDay(r.day, false),
+            String(r.dials),
+            String(r.humans),
+            String(r.complete),
+            r.per100 == null ? "—" : r.per100.toFixed(1),
+            r.gone15Pct == null ? "—" : `${r.gone15Pct}%`,
+            `${r.inboundAnswered} of ${r.inboundTotal}`,
+        ];
+        out.push(
+            "<tr>" +
+                values.map((v, j) => `<td style="${cell}${bold}${j === 0 ? ";text-align:left" : ""}">${escapeHtml(v)}</td>`).join("") +
+                "</tr>",
+        );
+    }
+    out.push("</table>");
+
+    if (today) {
+        const d = today.defects;
+        const defects: Array<[string, string]> = [
+            ["Intro restarted", String(d.introRestartCalls)],
+            [
+                `A reply over ${SLOW_REPLY_SECS} s`,
+                String(d.slowReplyCalls) + (d.slowReplyTurnsPct == null ? "" : ` (${d.slowReplyTurnsPct}% of replies)`),
+            ],
+            ["Language flip", String(d.languageFlipCalls)],
+            [`Gone in ${GONE_SECS} s`, String(d.goneIn15Calls)],
+        ];
+        out.push(
+            `<p style="margin:18px 0 6px;font-weight:600">Today's defects <span style="font-weight:400;color:#6b7280">(human calls, ${escapeHtml(readoutDay(today.day))})</span></p>`,
+        );
+        out.push(`<table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:13px">`);
+        for (const [label, value] of defects) {
+            out.push(
+                `<tr><td style="${cell};text-align:left;padding-left:0">${label}</td>` +
+                    `<td style="${cell};font-weight:600">${escapeHtml(value)}</td></tr>`,
+            );
+        }
+        out.push("</table>");
+    }
+
+    out.push(`<p style="margin:18px 0 0;color:#4b5563;font-size:13px">${escapeHtml(READOUT_TARGET_LINE)}</p>`);
+    out.push("</div>");
+    return out.join("\n");
 }

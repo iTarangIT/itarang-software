@@ -283,3 +283,34 @@ export async function rehostElevenLabsRecording(
     return "";
   }
 }
+
+/**
+ * Upload audio bytes already in hand (a provider behind an authenticated
+ * endpoint — Sarvam's recordings API) into the call-recordings bucket.
+ * Same key layout as rehostRecording. Throws on failure; callers decide the
+ * fallback.
+ */
+export async function storeRecordingBytes(opts: {
+  provider: string;
+  callId: string;
+  buffer: Buffer;
+  contentType: string;
+}): Promise<string> {
+  const { provider, callId, buffer } = opts;
+  const contentType = opts.contentType || "audio/wav";
+  if (buffer.byteLength === 0) throw new Error("recording has 0 bytes");
+  const key = `${envPrefix()}${sanitize(provider)}/${sanitize(callId)}.${extFor(contentType)}`;
+
+  if (isS3Backend) {
+    await putObject(BUCKET, key, buffer, contentType);
+    return filesProxyUrl(BUCKET, key);
+  }
+
+  const { error } = await supabaseAdmin.storage
+    .from(BUCKET)
+    .upload(key, buffer, { contentType, upsert: true });
+  if (error) throw new Error(`upload failed: ${error.message}`);
+  const { data } = supabaseAdmin.storage.from(BUCKET).getPublicUrl(key);
+  if (!data?.publicUrl) throw new Error("getPublicUrl returned no url");
+  return data.publicUrl;
+}

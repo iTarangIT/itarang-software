@@ -46,7 +46,9 @@ export type NormalizedCallCost = {
   // even when the original webhook never delivered duration.
   durationSecs: number | null;
   currency: "INR";
-  source: "provider_api";
+  // "duration_rate": computed from talk seconds × a contracted per-minute
+  // rate, for providers whose API returns no cost (Sarvam).
+  source: "provider_api" | "duration_rate";
   error?: string;
 };
 

@@ -1,9 +1,11 @@
 'use client';
 
 import { useState } from 'react';
-import { Brain, Check, Loader2, Sparkles, X } from 'lucide-react';
+import { Brain, Check, Languages, Loader2, Sparkles, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { INTENT_THRESHOLDS } from '@/lib/ai/scoring/thresholds';
+import type { DialerProvider } from "@/lib/ai/providers";
+import { DIALER_PROVIDER_LABEL } from '@/lib/ai/providers';
 
 interface Lead {
     id: string;
@@ -17,7 +19,7 @@ interface AIDialerControlsProps {
     userRole: string;
 }
 
-type Provider = 'bolna' | 'elevenlabs';
+type Provider = DialerProvider;
 
 export function AIDialerControls({ leads, userRole }: AIDialerControlsProps) {
     const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -59,7 +61,7 @@ export function AIDialerControls({ leads, userRole }: AIDialerControlsProps) {
             });
             const data = await res.json();
             if (data.success) {
-                setResult(`Assigned ${data.assigned} leads to ${provider === 'elevenlabs' ? 'ElevenLabs' : 'Bolna'}. ${data.scored} scored.`);
+                setResult(`Assigned ${data.assigned} leads to ${DIALER_PROVIDER_LABEL[provider]}. ${data.scored} scored.`);
                 setSelected(new Set());
             } else {
                 setResult(`Error: ${data.error?.message || 'Unknown'}`);
@@ -157,6 +159,18 @@ function ProviderPickerModal({
                         <div>
                             <div className="font-semibold text-gray-900">ElevenLabs</div>
                             <div className="text-xs text-gray-500">New voice agent — A/B test alongside Bolna</div>
+                        </div>
+                    </button>
+                    <button
+                        onClick={() => onPick('sarvam')}
+                        className="w-full flex items-center gap-3 px-4 py-3 text-left rounded-xl border border-gray-200 hover:border-amber-400 hover:bg-amber-50 transition-all"
+                    >
+                        <div className="w-10 h-10 flex items-center justify-center rounded-lg bg-amber-100 text-amber-600">
+                            <Languages className="w-5 h-5" />
+                        </div>
+                        <div>
+                            <div className="font-semibold text-gray-900">Sarvam</div>
+                            <div className="text-xs text-gray-500">Priya — Hindi-only voice agent (pilot)</div>
                         </div>
                     </button>
                 </div>

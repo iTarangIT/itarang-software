@@ -84,14 +84,15 @@ describe("planReattempt — sheet rules", () => {
         expect(iso(plan("Busy in another call", { now: ist(5, 18, 45) })?.at)).toBe(iso(ist(6, 10)));
     });
 
-    it("Did not pick: next window, at most 2 a day, for 3 days", () => {
+    // 20 Nov 2026 — 7 days (UNREACHED_RETRY_DAYS), was 3.
+    it("Did not pick: next window, at most 2 a day, for 7 days", () => {
         expect(iso(plan("Did not pick")?.at)).toBe(iso(ist(5, 14)));
         expect(iso(plan("Did not pick", { now: ist(5, 15), dialsToday: 2 })?.at)).toBe(iso(ist(6, 10)));
         const history = [{ at: ist(5, 10).toISOString() }, { at: ist(5, 15).toISOString() }];
-        // Day 3 afternoon → next window is day 4: past the 3-day limit.
-        expect(plan("Did not pick", { now: ist(7, 15), history, attemptCount: 5 })).toBeNull();
-        // Day 3 morning → day 3 afternoon is still inside.
-        expect(iso(plan("Did not pick", { now: ist(7, 10, 30), history, attemptCount: 4 })?.at)).toBe(iso(ist(7, 14)));
+        // Day 7 afternoon → next window is day 8: past the 7-day limit.
+        expect(plan("Did not pick", { now: ist(11, 15), history, attemptCount: 13 })).toBeNull();
+        // Day 7 morning → day 7 afternoon is still inside.
+        expect(iso(plan("Did not pick", { now: ist(11, 10, 30), history, attemptCount: 12 })?.at)).toBe(iso(ist(11, 14)));
     });
 
     it("Dropped mid-call: redial within 15 min, once", () => {
@@ -99,17 +100,17 @@ describe("planReattempt — sheet rules", () => {
         expect(plan("Dropped mid-call", { history: [{ at: ist(5, 10).toISOString(), disp: "Dropped mid-call" }] })).toBeNull();
     });
 
-    it("Dead audio: 15 min, then next day, then done", () => {
+    it("Dead audio: 15 min, then next day, every day (20 Nov 2026)", () => {
         expect(iso(plan("Dead audio (no sound either way)")?.at)).toBe(iso(ist(5, 10, 45)));
         const once = [{ at: ist(5, 10).toISOString(), disp: "Dead audio (no sound either way)" }];
         expect(iso(plan("Dead audio (no sound either way)", { history: once })?.at)).toBe(iso(ist(6, 10, 30)));
         const twice = [...once, { at: ist(5, 10, 15).toISOString(), disp: "Dead audio (no sound either way)" }];
-        expect(plan("Dead audio (no sound either way)", { history: twice })).toBeNull();
+        expect(iso(plan("Dead audio (no sound either way)", { history: twice })?.at)).toBe(iso(ist(6, 10, 30)));
     });
 
-    it("Voicemail: next day, one more try only", () => {
+    it("Voicemail: next day, same window, again and again (20 Nov 2026)", () => {
         expect(iso(plan("Recording / voicemail")?.at)).toBe(iso(ist(6, 10, 30)));
-        expect(plan("Recording / voicemail", { history: [{ disp: "Recording / voicemail", at: ist(4, 10).toISOString() }] })).toBeNull();
+        expect(iso(plan("Recording / voicemail", { history: [{ disp: "Recording / voicemail", at: ist(4, 10).toISOString() }] })?.at)).toBe(iso(ist(6, 10, 30)));
     });
 
     it("Hung up during intro / User disconnected: next day, the other window", () => {
@@ -129,11 +130,14 @@ describe("planReattempt — sheet rules", () => {
     });
 
     it("Long horizon: 7 / 30 / 90 days, outside the campaign budget", () => {
-        const p = plan("Need Some Time", { attemptCount: 9, maxRetries: 0 });
+        // On a call the dealer spoke on. On an unreached dial "Need Some Time"
+        // is redialled in the campaign instead (retryPolicy.test.ts).
+        const spoke = { status: "completed" };
+        const p = plan("Need Some Time", { ...spoke, attemptCount: 9, maxRetries: 0 });
         expect(p?.longHorizon).toEqual({ once: false });
         expect(iso(p?.at)).toBe(iso(ist(12, 10, 30)));
-        expect(iso(plan("No requirement in current")?.at)).toBe(iso(ist(5 + 30, 10, 30)));
-        expect(plan("Not Interested")?.longHorizon).toEqual({ once: true });
+        expect(iso(plan("No requirement in current", spoke)?.at)).toBe(iso(ist(5 + 30, 10, 30)));
+        expect(plan("Not Interested", spoke)?.longHorizon).toEqual({ once: true });
     });
 
     it("Not Interested a second time: no more redials", () => {
@@ -154,10 +158,13 @@ describe("planReattempt — sheet rules", () => {
         }
     });
 
-    it("the campaign budget still caps in-campaign redials", () => {
-        expect(plan("Busy in another call", { attemptCount: 6, maxRetries: 5 })).toBeNull();
+    it("the campaign budget caps redials of a dropped conversation only (20 Nov 2026)", () => {
+        // Unreached: past max_retries, still redialled (7-day limit instead).
+        expect(plan("Busy in another call", { attemptCount: 6, maxRetries: 5 })).not.toBeNull();
         expect(plan("Busy in another call", { maxRetries: null })).not.toBeNull(); // NULL = default budget
         expect(plan("Busy in another call", { maxRetries: 0 })).toBeNull();
+        const dropped = { status: "completed", callOutcome: "disconnected" };
+        expect(plan("Dead audio (no sound either way)", { ...dropped, attemptCount: 6, maxRetries: 5 })).toBeNull();
     });
 
     it("a refused attempt (counted: false) does not use up a 'once' rule", () => {

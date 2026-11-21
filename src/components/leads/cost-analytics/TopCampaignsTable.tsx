@@ -25,6 +25,7 @@ function providerChip(p: string) {
       text: "text-violet-700",
       label: "ElevenLabs",
     },
+    sarvam: { bg: "bg-amber-50", text: "text-amber-700", label: "Sarvam" },
   };
   const c = cfg[p] ?? { bg: "bg-gray-100", text: "text-gray-600", label: p };
   return (

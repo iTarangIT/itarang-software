@@ -10,6 +10,7 @@ import { and, desc, eq, sql, type SQL } from "drizzle-orm";
 import { DURATION_SECONDS_SQL } from "@/lib/ai-dialer/call-duration/derive";
 import { requireCampaignReader } from "@/lib/ai-dialer/campaignAccess";
 import { carrierPausesFor } from "@/lib/ai-dialer/lineHealth";
+import { DIALER_PROVIDERS, isDialerProvider } from "@/lib/ai/providers";
 
 export const GET = withErrorHandler(async (req: Request) => {
   // ID 45: was unauthenticated. Campaign-level rows only (no lead names or
@@ -25,7 +26,7 @@ export const GET = withErrorHandler(async (req: Request) => {
   // Optional provider filter for the Cost Analytics campaign picker.
   const provider = searchParams.get("provider");
   const filters: SQL[] = [];
-  if (provider === "bolna" || provider === "elevenlabs") {
+  if (isDialerProvider(provider)) {
     filters.push(eq(dialerCampaigns.provider, provider));
   }
 

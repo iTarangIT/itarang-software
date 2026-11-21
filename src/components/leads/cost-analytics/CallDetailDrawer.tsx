@@ -152,7 +152,9 @@ export function CallDetailDrawer({
                             className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${
                               c.provider === "bolna"
                                 ? "bg-blue-50 text-blue-700"
-                                : "bg-violet-50 text-violet-700"
+                                : c.provider === "sarvam"
+                                  ? "bg-amber-50 text-amber-700"
+                                  : "bg-violet-50 text-violet-700"
                             }`}
                           >
                             {c.provider}

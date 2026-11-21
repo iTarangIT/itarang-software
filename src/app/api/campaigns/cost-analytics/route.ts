@@ -25,6 +25,7 @@ import {
   buildCallDetailCountSql,
   type CostAnalyticsFilters,
 } from "@/lib/campaigns/cost-analytics-query";
+import { DIALER_PROVIDERS, isDialerProvider } from "@/lib/ai/providers";
 
 const ALLOWED_ROLES = [
   "ceo",
@@ -38,7 +39,7 @@ const ALLOWED_ROLES = [
 function parseFilters(searchParams: URLSearchParams): CostAnalyticsFilters {
   const provider = searchParams.get("provider");
   const validProvider =
-    provider === "bolna" || provider === "elevenlabs" ? provider : null;
+    isDialerProvider(provider) ? provider : null;
   return {
     from_date: searchParams.get("from_date") || null,
     to_date: searchParams.get("to_date") || null,

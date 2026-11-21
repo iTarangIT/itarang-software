@@ -70,6 +70,13 @@ export const VENDORS: VendorDef[] = [
     meteredFrom: "ai_call_logs (provider='bolna')",
     meteredUnit: "AI calls",
   },
+  {
+    id: "sarvam",
+    label: "Sarvam",
+    match: ["sarvam"],
+    meteredFrom: "ai_call_logs (provider='sarvam')",
+    meteredUnit: "AI calls",
+  },
   { id: "anthropic", label: "Anthropic", match: ["anthropic"] },
   { id: "openai", label: "OpenAI", match: ["openai", "open ai"] },
   // Listed before "openai" would match it: "openrouter" is the longer needle,

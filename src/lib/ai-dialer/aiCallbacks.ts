@@ -21,8 +21,8 @@
 import { eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { aiCallLogs, dealerLeads, dialerCampaignLeads } from "@/lib/db/schema";
-import { triggerBolnaCall } from "@/lib/ai/bolna_ai/triggerCall";
-import { triggerElevenLabsCall } from "@/lib/ai/elevenlabs/triggerCall";
+import { triggerProviderCall } from "@/lib/ai/triggerProviderCall";
+import { toDialerProvider } from "@/lib/ai/providers";
 import { analyzeTranscript } from "@/lib/ai/analysis";
 import { updateLeadAfterCall } from "@/lib/ai/storage/leadStore";
 import { aiInterestLevelSql } from "@/lib/ai/storage/aiInterest";
@@ -33,6 +33,7 @@ import { clampIntoWindow, isWindowOpen } from "./retryPolicy";
 import type { CallEndStatus } from "./campaignLeadStatus";
 import { dealerSpoke } from "./campaignLeadStatus";
 import { applyPostCall, MAX_AI_CALLBACK_ATTEMPTS, preparePostCall } from "./postCallOutcome";
+import type { DialerProvider } from "@/lib/ai/providers";
 
 /** Real calls cost money — off unless a deployment opts in. */
 export function aiCallbacksEnabled(): boolean {
@@ -149,12 +150,10 @@ async function dialDueAiCallbacks(): Promise<number> {
             await closeCallback(c.id, "cancelled", "Lead has no phone number.");
             continue;
         }
-        const provider = (c.provider ?? "bolna").toLowerCase();
+        const provider = toDialerProvider(c.provider);
         let res: { success: boolean; call_id?: string; error?: string };
         try {
-            res = (provider === "elevenlabs"
-                ? await triggerElevenLabsCall({ phone: c.phone, leadId: c.lead_id, bypassIdempotency: true })
-                : await triggerBolnaCall({ phone: c.phone, leadId: c.lead_id, bypassIdempotency: true })) as typeof res;
+            res = await triggerProviderCall(provider, { phone: c.phone, leadId: c.lead_id, bypassIdempotency: true });
         } catch (e) {
             res = { success: false, error: e instanceof Error ? e.message : String(e) };
         }
@@ -186,7 +185,7 @@ async function dialDueAiCallbacks(): Promise<number> {
 async function rescoreNeedsReview(): Promise<number> {
     const claimed = rows<{
         call_id: string;
-        provider: "bolna" | "elevenlabs" | null;
+        provider: DialerProvider | null;
         lead_id: string | null;
         campaign_id: string | null;
         campaign_lead_id: string | null;
@@ -246,7 +245,7 @@ export type ReprocessResult =
  */
 export async function reprocessCall(input: {
     callId: string;
-    provider: "bolna" | "elevenlabs";
+    provider: DialerProvider;
     leadId: string;
     campaignId: string | null;
     campaignLeadId: string | null;
