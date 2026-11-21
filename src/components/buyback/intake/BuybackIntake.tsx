@@ -37,8 +37,9 @@ import Lightbox, { type LightboxItem } from "@/components/buyback/Lightbox";
 import { PageHeader } from "@/components/buyback/ui";
 import { useRouter } from "next/navigation";
 
+import { apiErrorMessage } from "@/lib/buyback/api-error";
 import { inr } from "@/lib/buyback/format";
-import { DEFAULT_IOT_BRAND } from "@/lib/buyback/line-spec";
+import { DEFAULT_IOT_BRAND, MAX_QTY_PER_LINE } from "@/lib/buyback/line-spec";
 import { MIN_PHOTOS_PER_LINE } from "@/lib/buyback/submit-gate";
 
 interface Variant {
@@ -297,6 +298,15 @@ function splitError(row: DraftRow): string | null {
   return null;
 }
 
+/** Shown when a row's Qty is over the server's per-line ceiling. */
+function qtyCeilingMessage(qty: number): string {
+  return (
+    `Qty ${qty.toLocaleString("en-IN")} is more than one line can hold ` +
+    `(max ${MAX_QTY_PER_LINE.toLocaleString("en-IN")}). Use Split, or add another line — ` +
+    `nothing on this row is saved until it is within the limit.`
+  );
+}
+
 /** Units the dealer has left unclassified, or null when there is nothing to say. */
 function splitRemainder(row: DraftRow): number | null {
   if (row.functional_qty === "" || row.non_functional_qty === "") return null;
@@ -410,7 +420,7 @@ async function uploadBytes(
   }
 
   const json = await res.json().catch(() => null);
-  if (!json?.success) throw new Error(json?.error?.message ?? "Upload failed.");
+  if (!json?.success) throw new Error(apiErrorMessage(json, "Upload failed."));
   return json.data.s3_key as string;
 }
 
@@ -577,6 +587,8 @@ export default function BuybackIntake({
    */
   const lineIdsRef = useRef<Record<string, string | null>>({});
   const saveChainsRef = useRef<Record<string, Promise<string | null>>>({});
+  /** The row whose failed line save is in the banner, so its next success can clear it. */
+  const lineErrorRowRef = useRef<string | null>(null);
 
   /**
    * Save a row to the server: CREATE it the first time, UPDATE it every time after.
@@ -594,6 +606,16 @@ export default function BuybackIntake({
   const saveLine = useCallback(
     (row: DraftRow): Promise<string | null> => {
       if (!requestId || !row.variant_id) return Promise.resolve(null);
+
+      // Every save carries the quantity, so one over the ceiling would get the
+      // WHOLE save refused — brand, chemistry, weight and all (BB-1058). Say
+      // so up front instead of sending a request the server must reject; the
+      // row also shows this inline under Qty.
+      if (row.quantity > MAX_QTY_PER_LINE) {
+        setError(qtyCeilingMessage(row.quantity));
+        lineErrorRowRef.current = row.key;
+        return Promise.resolve(null);
+      }
 
       const run = async (): Promise<string | null> => {
         // The ref, not the row: `row` is the closure from whichever render
@@ -655,13 +677,22 @@ export default function BuybackIntake({
 
         if (!json?.success) {
           patch(row.key, { saving: false });
-          setError(json?.error?.message ?? "Could not save the battery line.");
+          // The zod detail, not the bare "Validation failed" (BB-1058).
+          setError(apiErrorMessage(json, "Could not save the battery line."));
+          lineErrorRowRef.current = row.key;
           return null;
         }
 
         const lineId = knownId ?? json.data!.line_id;
         lineIdsRef.current[row.key] = lineId;
         patch(row.key, { line_id: lineId, saving: false });
+        // This row's earlier save error no longer describes the server — clear
+        // it. Only THIS row's: after a Split both halves save at once, and the
+        // half that succeeded must not wipe the other half's failure.
+        if (lineErrorRowRef.current === row.key) {
+          lineErrorRowRef.current = null;
+          setError(null);
+        }
         // Progress was just made — the last gate refusal may no longer apply.
         // A stale banner that never clears while the dealer fixes exactly what
         // it complained about is worse than no banner at all (BB-1045).
@@ -691,7 +722,7 @@ export default function BuybackIntake({
       // Do NOT remove it from the page. A photo that vanished from the grid but
       // survived on the server would leave the dealer believing they had five when
       // they had six — and vice versa when the delete silently failed.
-      setError(json?.error?.message ?? "Could not remove the photo.");
+      setError(apiErrorMessage(json, "Could not remove the photo."));
       return;
     }
 
@@ -731,12 +762,17 @@ export default function BuybackIntake({
       if (!json?.success) {
         // Do NOT drop it from the page. A row that vanished from the screen but
         // survived on the server would be submitted without the dealer knowing.
-        setError(json?.error?.message ?? "Could not remove the battery line.");
+        setError(apiErrorMessage(json, "Could not remove the battery line."));
         return;
       }
     }
     delete lineIdsRef.current[row.key];
     delete saveChainsRef.current[row.key];
+    // The row whose save error is on screen is gone — so is the problem.
+    if (lineErrorRowRef.current === row.key) {
+      lineErrorRowRef.current = null;
+      setError(null);
+    }
     setRows((rs) => rs.filter((r) => r.key !== row.key));
   };
 
@@ -1053,7 +1089,7 @@ export default function BuybackIntake({
     const json = await res.json();
 
     if (!json?.success) {
-      setError(json?.error?.message ?? "Could not save provenance.");
+      setError(apiErrorMessage(json, "Could not save provenance."));
       return;
     }
 
@@ -1081,7 +1117,7 @@ export default function BuybackIntake({
     });
     const json = await res.json().catch(() => null);
     if (!json?.success) {
-      setError(json?.error?.message ?? "Could not save the pickup address.");
+      setError(apiErrorMessage(json, "Could not save the pickup address."));
     }
   };
 
@@ -1124,8 +1160,7 @@ export default function BuybackIntake({
 
     if (!json?.success) {
       // Zod refusals (e.g. a 5-digit pincode) arrive in details, per field.
-      const detail = json?.error?.details?.[0]?.message;
-      setError(detail ?? json?.error?.message ?? "Could not save the address.");
+      setError(apiErrorMessage(json, "Could not save the address."));
       return;
     }
 
@@ -1249,6 +1284,7 @@ export default function BuybackIntake({
                 <input
                   type="number"
                   min={1}
+                  max={MAX_QTY_PER_LINE}
                   value={row.quantity}
                   onChange={(e) =>
                     patch(row.key, { quantity: Math.max(1, Number(e.target.value) || 1) })
@@ -1315,6 +1351,12 @@ export default function BuybackIntake({
                 </button>
               )}
             </div>
+
+            {row.quantity > MAX_QTY_PER_LINE && (
+              <p className="-mt-1 px-4 pb-2 text-[11.5px] text-red-600">
+                ⚠ {qtyCeilingMessage(row.quantity)}
+              </p>
+            )}
 
             {/* Auto-filled spec — read-only. Only the measured voltage is editable. */}
             <div className="flex items-end gap-4 px-4 pb-3">
