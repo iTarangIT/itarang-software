@@ -6,6 +6,7 @@ import {
   Phone,
   Sparkles,
   Brain,
+  Languages,
   Loader2,
   ArrowRight,
   ChevronDown,
@@ -37,8 +38,9 @@ import {
   type LeadStateFilters,
 } from "@/lib/leads/leadStateFilters";
 import { toast } from "sonner";
+import type { DialerProvider } from "@/lib/ai/providers";
 
-export type DialerProvider = "bolna" | "elevenlabs";
+export type { DialerProvider };
 export type DialerCategory = "hot" | "warm" | "cold" | "all";
 
 // Shape of the modal's submit payload. The dialer modal hands the queue
@@ -149,6 +151,14 @@ const PROVIDERS: {
     icon: Sparkles,
     iconColor: "text-violet-600",
     iconBg: "bg-violet-50",
+  },
+  {
+    key: "sarvam",
+    label: "Sarvam",
+    hint: "Priya · Hindi only",
+    icon: Languages,
+    iconColor: "text-amber-600",
+    iconBg: "bg-amber-50",
   },
 ];
 
@@ -880,11 +890,7 @@ export function DialerStartModal({
                   </span>{" "}
                   {selectedCount === 1 ? "lead" : "leads"} via{" "}
                   <span
-                    className={`font-semibold ${
-                      provider === "elevenlabs"
-                        ? "text-violet-600"
-                        : "text-blue-600"
-                    }`}
+                    className={`font-semibold ${selectedProvider.iconColor}`}
                   >
                     {selectedProvider.label}
                   </span>

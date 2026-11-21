@@ -33,8 +33,8 @@ import {
   recordAttemptOutcome,
   syncCampaignCounters,
 } from "./campaignTracker";
-import { triggerBolnaCall } from "@/lib/ai/bolna_ai/triggerCall";
-import { triggerElevenLabsCall } from "@/lib/ai/elevenlabs/triggerCall";
+import { triggerProviderCall } from "@/lib/ai/triggerProviderCall";
+import { toDialerProvider } from "@/lib/ai/providers";
 import {
   AI_CONNECTED_CALL_SQL,
   isAiDialable,
@@ -367,7 +367,7 @@ export async function advanceCampaign(
       if (nextAt) return { kind: "waiting-retry", nextAt };
     }
 
-    const provider = (cmp[0].provider || "bolna").toLowerCase();
+    const provider = toDialerProvider(cmp[0].provider);
 
     // A campaign mid-retry ("Retry failed leads") carries recall:true in its
     // region_filter. For these, bypass the once-per-day idempotency guard so the
@@ -680,20 +680,14 @@ export async function advanceCampaign(
       // Place the call via the right provider.
       let trigResult: { success: boolean; call_id?: string; error?: string };
       try {
-        if (provider === "elevenlabs") {
-          trigResult = (await triggerElevenLabsCall({
-            phone: lead[0].phone,
-            leadId: lead[0].id,
-            bypassIdempotency,
-            ...(dialPhone ? { dialPhone } : {}),
-          })) as typeof trigResult;
-        } else {
-          trigResult = (await triggerBolnaCall({
-            phone: lead[0].phone,
-            leadId: lead[0].id,
-            bypassIdempotency,
-          })) as typeof trigResult;
-        }
+        // Exhaustive per-provider dispatch — a Sarvam campaign must never
+        // fall through to Bolna (it used to: `elevenlabs ? … : bolna`).
+        trigResult = await triggerProviderCall(provider, {
+          phone: lead[0].phone,
+          leadId: lead[0].id,
+          bypassIdempotency,
+          ...(dialPhone ? { dialPhone } : {}),
+        });
       } catch (err) {
         // Trigger threw — mark this row failed and CONTINUE to the next
         // pending lead. Previously we returned an error here, which left

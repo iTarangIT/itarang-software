@@ -20,13 +20,13 @@ export async function GET(req: Request) {
   const now = new Date();
 
   const candidates = await db.query.dealerLeads.findMany({
-    where: (l, { lte, isNotNull, isNull, ne, or }) =>
+    where: (l, { lte, isNotNull, isNull, notInArray, or }) =>
       and(
         lte(l.next_call_at, now),
         isNotNull(l.next_call_at),
-        // Skip leads explicitly tagged for ElevenLabs — handled by
-        // /api/elevenlabs/call-scheduler. NULL provider = legacy/Bolna.
-        or(isNull(l.provider), ne(l.provider, "elevenlabs")),
+        // Skip leads tagged for another AI provider (ElevenLabs, Sarvam) —
+        // this loop dials through Bolna. NULL provider = legacy/Bolna.
+        or(isNull(l.provider), notInArray(l.provider, ["elevenlabs", "sarvam"])),
         // BRD §0.2 — never call a lead in an active sales state.
         aiDialableCondition(),
       ),

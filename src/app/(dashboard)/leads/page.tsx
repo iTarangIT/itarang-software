@@ -84,6 +84,7 @@ import {
   BUSINESS_TYPE_UNSET,
   BUSINESS_TYPE_UNSET_LABEL,
 } from "@/lib/leads/businessType";
+import { DIALER_PROVIDER_CALL_ENDPOINT } from "@/lib/ai/providers";
 import { TeamMemberFilter, type TeamPerson } from "@/components/leads/TeamMemberFilter";
 
 // Upload preview: on-screen names for the file's column keys (the keys stay as-is).
@@ -837,11 +838,14 @@ function AiDialerBanner({
   expanded: boolean;
   onToggleExpanded: () => void;
 }) {
-  const providerLabel = provider === "elevenlabs" ? "AI voice 2" : "AI voice 1";
+  const providerLabel =
+    provider === "elevenlabs" ? "AI voice 2" : provider === "sarvam" ? "AI voice 3" : "AI voice 1";
   const providerChip =
     provider === "elevenlabs"
       ? "bg-violet-500/20 text-violet-300 border-violet-500/40"
-      : "bg-blue-500/20 text-blue-300 border-blue-500/40";
+      : provider === "sarvam"
+        ? "bg-amber-500/20 text-amber-300 border-amber-500/40"
+        : "bg-blue-500/20 text-blue-300 border-blue-500/40";
   return (
     <div className="bg-gray-900 border border-gray-700 rounded-xl px-5 py-4 mb-4">
       <div className="flex items-center justify-between gap-4">
@@ -1858,9 +1862,8 @@ export default function LeadsUnifiedPage() {
     async (lead: any) => {
       setDialerPhase("calling");
       const endpoint =
-        dialerProvider === "elevenlabs"
-          ? "/api/elevenlabs/call"
-          : "/api/bolna/call";
+        DIALER_PROVIDER_CALL_ENDPOINT[dialerProvider] ??
+        DIALER_PROVIDER_CALL_ENDPOINT.bolna;
       try {
         await fetch(endpoint, {
           method: "POST",

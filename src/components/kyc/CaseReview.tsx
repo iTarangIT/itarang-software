@@ -115,6 +115,8 @@ interface Consent {
   signerNameMatchScore: number | null;
   esignErrorMessage: string | null;
   deliveryChannel: string | null;
+  /** 20 Nov — result of the automatic signature check on a manual upload. */
+  signatureCheckNote?: string | null;
 }
 
 interface Metadata {
@@ -1525,6 +1527,11 @@ export default function CaseReview({ leadId, canRegenerateConsent = true }: Case
                                   {typeof c.signerNameMatchScore === "number" && (
                                     <span className="text-gray-400"> · name match {c.signerNameMatchScore}%</span>
                                   )}
+                                </p>
+                              )}
+                              {c.signatureCheckNote && (
+                                <p className={`text-[10px] mt-0.5 ${c.signatureCheckNote.includes("signature found") ? "text-emerald-700" : "text-amber-700"}`}>
+                                  {c.signatureCheckNote}
                                 </p>
                               )}
                               {isMismatch && c.esignErrorMessage && (

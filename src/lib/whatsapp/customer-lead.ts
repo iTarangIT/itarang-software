@@ -373,21 +373,17 @@ export async function createCustomerLead(
     }
   });
 
-  // ID 33: tell the dealer the lead is theirs. Best-effort, never throws.
-  if (dealer.pushedBy) {
-    const { notifyDealerOfPushedLead } = await import("./pushedLeadNotice");
-    await notifyDealerOfPushedLead(leadId, { reason: ITARANG_TEAM_PUSH_REASON });
-  }
-
   // E-390 — Battery Pool diagram 1: an "uncertain" dealer goes to the iTarang
-  // admin's dealer check before the file can reach a lender. An operator
+  // House dealer check before the file can reach a lender. An operator
   // (iTarang salesperson) naming the dealer, or a dealer sales-team member.
   // Never throws (openDealerReview is best-effort).
+  // ID 33: the dealer is told the lead is theirs — 20 Nov: only after the
+  // house approves the dealer (notifyDealerUnlessHeld / decideDealerReview).
   {
-    const { openDealerReview, isDealerCheckKind } = await import("@/lib/leads/dealer-assignment");
+    const { openDealerReview, isDealerCheckKind, notifyDealerUnlessHeld } = await import("@/lib/leads/dealer-assignment");
     const chk = dealer.pushedBy?.dealerCheck;
     if (dealer.pushedBy) {
-      await openDealerReview({
+      const review = await openDealerReview({
         leadId,
         dealerId: dealer.dealerCode,
         reasonKind: chk && isDealerCheckKind(chk.reasonKind) ? chk.reasonKind : "manual_pick",
@@ -395,6 +391,7 @@ export async function createCustomerLead(
         channel: "whatsapp",
         initiator: { userId: dealer.pushedBy.byUserId, name: dealer.pushedBy.byName, waPhone: chk?.waPhone ?? null },
       });
+      await notifyDealerUnlessHeld(leadId, review, { reason: ITARANG_TEAM_PUSH_REASON });
     } else if (dealer.actor?.role === "salesperson") {
       await openDealerReview({
         leadId,
@@ -428,6 +425,7 @@ export async function createCustomerLead(
       dealerName: dealer.actor?.displayName
         ? `${dealer.dealerName || dealer.dealerCode} · ${dealer.actor.displayName}`
         : dealer.dealerName || dealer.dealerCode,
+      createdBy: dealer.pushedBy?.byName ?? null,
     });
   }
 
@@ -468,6 +466,7 @@ export async function classifyCustomerLead(
       dealerName: dealer.actor?.displayName
         ? `${dealer.dealerName || dealer.dealerCode} · ${dealer.actor.displayName}`
         : dealer.dealerName || dealer.dealerCode,
+      createdBy: dealer.pushedBy?.byName ?? null,
     });
   }
 }

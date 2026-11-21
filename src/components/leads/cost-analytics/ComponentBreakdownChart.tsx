@@ -110,7 +110,8 @@ export function ComponentBreakdownChart({
 
       <p className="mt-3 text-[10px] text-gray-400">
         Bolna ships all five components; ElevenLabs bundles TTS/STT into
-        telephony — empty segments are normal when filtered to one provider.
+        telephony; Sarvam is one per-minute rate, shown as platform — empty
+        segments are normal when filtered to one provider.
       </p>
     </div>
   );

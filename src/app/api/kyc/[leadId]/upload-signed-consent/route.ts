@@ -40,13 +40,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         }
 
         const buffer = Buffer.from(await file.arrayBuffer());
-        const result = await storeSignedConsent({ leadId, buffer, consentFor });
+        // 20 Nov: refused (422) when the form has no customer signature.
+        const result = await storeSignedConsent({ leadId, buffer, consentFor, mimeType: file.type });
         if (!result.ok) {
-            return NextResponse.json({ success: false, error: { message: result.error } }, { status: result.status });
+            return NextResponse.json(
+                { success: false, error: { message: result.error }, signatureCheck: result.signature?.verdict ?? null },
+                { status: result.status },
+            );
         }
 
         await recordKycMilestone(writer.actor, `uploaded the signed consent${consentFor === 'borrower' ? ' (co-borrower)' : ''}`);
-        return NextResponse.json({ success: true, fileUrl: result.fileUrl });
+        return NextResponse.json({ success: true, fileUrl: result.fileUrl, signatureCheck: result.signature.verdict });
     } catch (error) {
         console.error('[Upload Signed Consent] Error:', error);
         const message = error instanceof Error ? error.message : 'Server error';

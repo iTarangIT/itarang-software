@@ -157,7 +157,7 @@ export function CostAnalyticsView() {
             Where AI dialer spend is going
           </h2>
           <p className="text-sm text-gray-500 mt-0.5">
-            Per-call cost captured from Bolna and ElevenLabs, rolled up
+            Per-call cost captured from Bolna, ElevenLabs and Sarvam, rolled up
             across campaigns.
           </p>
         </div>

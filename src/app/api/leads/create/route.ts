@@ -923,17 +923,17 @@ export const POST = withErrorHandler(async (req: Request) => {
             // listed under Save Drafts in their console. Best-effort, never throws.
             if (pushTarget) {
                 if (pushDetached) await logPushCouponRelease(pushDetached, data.leadId!, user.id, pushTarget.name);
-                const { notifyDealerOfPushedLead } = await import('@/lib/whatsapp/pushedLeadNotice');
-                await notifyDealerOfPushedLead(data.leadId!, { reason: ITARANG_TEAM_PUSH_REASON, fromDealerId: pushFrom?.dealerId ?? null });
                 // E-390 — Battery Pool diagram 1: the dealer an iTarang salesperson
-                // named goes to the iTarang admin's dealer check before the file
+                // named goes to the iTarang House dealer check before the file
                 // can reach a lender. "Your dealers" = the accounts the sales person
                 // linked to this house login owns. Best-effort, never throws.
+                // 20 Nov: the dealer is told only after the house approves
+                // (notifyDealerUnlessHeld; dealer-assignment.decideDealerReview).
                 {
                     const da = await import('@/lib/leads/dealer-assignment');
                     const staff = await da.staffUserForInitiator({ loginUserId: user.id });
                     const owned = await da.eligibleDealersForStaff(staff).catch(() => []);
-                    await da.openDealerReview({
+                    const review = await da.openDealerReview({
                         leadId: data.leadId!,
                         dealerId: pushTarget.dealerId,
                         reasonKind: da.kindForSalespersonPick({
@@ -943,6 +943,10 @@ export const POST = withErrorHandler(async (req: Request) => {
                         candidates: owned.map((d) => ({ dealerId: d.dealerId, name: d.name })),
                         channel: 'web',
                         initiator: { userId: user.id, name: user.name ?? null },
+                    });
+                    await da.notifyDealerUnlessHeld(data.leadId!, review, {
+                        reason: ITARANG_TEAM_PUSH_REASON,
+                        fromDealerId: pushFrom?.dealerId ?? null,
                     });
                 }
             } else if (step1Actor) {

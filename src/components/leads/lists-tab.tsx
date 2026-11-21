@@ -30,8 +30,9 @@ import {
   CheckCircle2,
 } from "lucide-react";
 import { CampaignStatusBadge } from "./campaign-status-badge";
+import { DIALER_PROVIDER_LABEL, type DialerProvider } from "@/lib/ai/providers";
 
-type ListProvider = "bolna" | "elevenlabs";
+type ListProvider = DialerProvider;
 
 type ListCampaignRow = {
   id: string;
@@ -739,7 +740,7 @@ export function ListsTab({
                   <button
                     type="button"
                     className="lists-start"
-                    title={`Start dialing via ${provider === "elevenlabs" ? "ElevenLabs" : "Bolna"}`}
+                    title={`Start dialing via ${DIALER_PROVIDER_LABEL[provider]}`}
                     disabled={startingId === c.id || isScheduleInvalid(schedule)}
                     onClick={() => handleStart(c.id)}
                   >

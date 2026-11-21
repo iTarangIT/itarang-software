@@ -22,8 +22,9 @@ import { createCampaign } from "@/lib/queue/campaignTracker";
 import { campaignScheduleSchema } from "@/lib/queue/campaignWindow";
 import { startDraftCampaign } from "@/lib/queue/startCampaign";
 import type { DialerProvider } from "@/lib/queue/dialerSession";
+import { DIALER_PROVIDERS, isDialerProvider } from "@/lib/ai/providers";
 
-const ALLOWED_PROVIDERS: DialerProvider[] = ["bolna", "elevenlabs"];
+const ALLOWED_PROVIDERS: readonly DialerProvider[] = DIALER_PROVIDERS;
 
 export const POST = withErrorHandler(
     async (req: NextRequest, { params }: { params: Promise<{ id: string }> }) => {

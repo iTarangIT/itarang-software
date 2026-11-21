@@ -386,6 +386,8 @@ export async function GET(
             signerNameMatchScore: c.signer_name_match_score,
             esignErrorMessage: c.esign_error_message,
             deliveryChannel: c.consent_delivery_channel,
+            // 20 Nov — the signature check on a manual upload (consent-signature-check).
+            signatureCheckNote: c.consent_type === "manual" && c.reviewer_notes?.startsWith("Signature check") ? c.reviewer_notes : null,
           };
         })),
         metadata: metadata

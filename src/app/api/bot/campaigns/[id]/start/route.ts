@@ -15,8 +15,9 @@ import { successResponse, errorResponse } from "@/lib/api-utils";
 import { withBotAuth } from "@/lib/bot/auth";
 import { type DialerProvider } from "@/lib/queue/dialerSession";
 import { startDraftCampaign } from "@/lib/queue/startCampaign";
+import { DIALER_PROVIDERS, isDialerProvider } from "@/lib/ai/providers";
 
-const ALLOWED_PROVIDERS: DialerProvider[] = ["bolna", "elevenlabs"];
+const ALLOWED_PROVIDERS: readonly DialerProvider[] = DIALER_PROVIDERS;
 
 export const POST = withBotAuth(
   async (req: Request, ctx: { params: Promise<{ id: string }> }) => {

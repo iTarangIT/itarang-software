@@ -11,6 +11,7 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { phoneLookupVariants } from "@/lib/ai/phone";
 import type { CallCategory, CallbackOwner } from "@/lib/ai-dialer/callCategory";
+import type { DialerProvider } from "@/lib/ai/providers";
 
 const PROBE_TTL_MS = 5 * 60 * 1000;
 let probe: { at: number; ok: boolean } | null = null;
@@ -79,7 +80,7 @@ export async function resolveLeadIdForCall(callId: string | null | undefined, ph
 
 export type CallOutcomeRow = {
     callId: string;
-    provider: "bolna" | "elevenlabs";
+    provider: DialerProvider;
     leadId: string | null;
     campaignId: string | null;
     campaignLeadId: string | null;
@@ -161,7 +162,7 @@ export async function upsertOpenCallback(input: {
     leadId: string;
     sourceCallId: string;
     campaignId: string | null;
-    provider: "bolna" | "elevenlabs";
+    provider: DialerProvider;
     owner: CallbackOwner;
     topic: string | null;
     category: CallCategory;

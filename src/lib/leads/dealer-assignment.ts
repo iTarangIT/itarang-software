@@ -242,10 +242,16 @@ async function notifyHouseOfDealerCheck(leadId: string, dealerId: string, kind: 
  */
 async function notifyAdminsKycReady(leadId: string, dealerName: string) {
   try {
+    // Only a case still open for review (not one already decided).
     const [q] = await db
       .select({ id: adminVerificationQueue.id })
       .from(adminVerificationQueue)
-      .where(eq(adminVerificationQueue.lead_id, leadId))
+      .where(
+        and(
+          eq(adminVerificationQueue.lead_id, leadId),
+          eq(adminVerificationQueue.status, "pending_itarang_verification"),
+        ),
+      )
       .limit(1);
     if (!q) return;
     const { name, ref } = await leadLabel(leadId);
@@ -481,15 +487,18 @@ export async function decideDealerReview(opts: {
 
   if (opts.decision === "change" && detached && target) {
     await logPushCouponRelease(detached, lead.id, opts.actor.id, target.name).catch(() => {});
-    try {
-      const { notifyDealerOfPushedLead } = await import("@/lib/whatsapp/pushedLeadNotice");
-      await notifyDealerOfPushedLead(lead.id, {
-        reason: reason ?? "Corrected in the dealer assignment check",
-        fromDealerId: currentDealerId,
-      });
-    } catch (err) {
-      console.warn("[dealer-assignment] dealer notice failed", err instanceof Error ? err.message : String(err));
-    }
+  }
+
+  // 20 Nov (items 6–7): the dealer hears about the file only now — after
+  // iTarang House approved (or changed) the dealer — never at push time.
+  if (opts.decision !== "reject") {
+    await notifyDealerAfterHouseDecision({
+      review,
+      leadId: lead.id,
+      changed: opts.decision === "change",
+      fromDealerId: currentDealerId,
+      changeReason: reason,
+    });
   }
 
   void notifyInitiatorOfDecision({
@@ -501,6 +510,15 @@ export async function decideDealerReview(opts: {
   });
 
   if (opts.decision !== "reject") {
+    // 20 Nov: the KYC automation clocks were paused while the file was held;
+    // give the admin a full window from now (else an elapsed clock would
+    // auto-approve the moment the file reached them).
+    try {
+      const { restartKycClocksAfterDealerCheck } = await import("@/lib/kyc/auto-approval");
+      await restartKycClocksAfterDealerCheck(lead.id);
+    } catch (err) {
+      console.warn("[dealer-assignment] KYC clock restart failed", err instanceof Error ? err.message : String(err));
+    }
     void notifyAdminsKycReady(lead.id, target?.name ?? fromName);
     try {
       // E-391 — auto-route by an NBFC routing rule, else "Choose lender".
@@ -512,6 +530,80 @@ export async function decideDealerReview(opts: {
   }
 
   return { id: review.id, status, dealer: target ? { dealerId: target.dealerId, name: target.name } : null };
+}
+
+/**
+ * 20 Nov (items 6–7) — the dealer's "New customer file from iTarang" notice
+ * (bell + email + WhatsApp) is held at push time while the file waits for the
+ * iTarang House dealer check, and sent here once the house approves / changes.
+ *  - A file the dealer's OWN sales team started (dealer_salesperson) is already
+ *    the dealer's: approve sends nothing; a change tells the new dealer and
+ *    the old one (who knew about it) that it moved.
+ *  - Any iTarang push (sales person / house): the final dealer gets the push
+ *    notice with the original push reason. A dealer that was replaced before
+ *    approval was never told, so it gets no "moved away" notice.
+ * Never throws.
+ */
+async function notifyDealerAfterHouseDecision(opts: {
+  review: typeof leadDealerReviews.$inferSelect;
+  leadId: string;
+  changed: boolean;
+  fromDealerId: string;
+  changeReason: string | null;
+}) {
+  try {
+    const ownTeam = opts.review.reason_kind === "dealer_salesperson";
+    if (ownTeam && !opts.changed) return;
+    const { notifyDealerOfPushedLead } = await import("@/lib/whatsapp/pushedLeadNotice");
+    const reason = opts.changed
+      ? opts.changeReason ?? "Corrected in the dealer assignment check"
+      : await latestPushReason(opts.leadId);
+    await notifyDealerOfPushedLead(opts.leadId, {
+      reason,
+      fromDealerId: ownTeam ? opts.fromDealerId : null,
+    });
+  } catch (err) {
+    console.warn("[dealer-assignment] dealer notice failed", err instanceof Error ? err.message : String(err));
+  }
+}
+
+/** The reason on the file's latest push audit row (what the pusher typed). */
+async function latestPushReason(leadId: string): Promise<string | null> {
+  try {
+    const [row] = await db
+      .select({ changes: auditLogs.changes })
+      .from(auditLogs)
+      .where(and(eq(auditLogs.entity_type, "lead"), eq(auditLogs.entity_id, leadId), eq(auditLogs.action, LEAD_PUSHED_TO_DEALER)))
+      .orderBy(desc(auditLogs.timestamp))
+      .limit(1);
+    const r = (row?.changes as { reason?: unknown } | null)?.reason;
+    return typeof r === "string" && r.trim() ? r : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Push sites call this instead of notifyDealerOfPushedLead directly: when the
+ * file went to the iTarang House dealer check, the dealer notice waits for the
+ * house decision (notifyDealerAfterHouseDecision). Only when no check could be
+ * opened (a database without E-390) is the dealer told straight away.
+ */
+export async function notifyDealerUnlessHeld(
+  leadId: string,
+  review: { id: string } | null,
+  notice: { reason?: string | null; fromDealerId?: string | null },
+): Promise<void> {
+  if (review) {
+    // The dealer that LOST the file did know about it — tell it now.
+    if (notice.fromDealerId) {
+      const { notifyDealerOfPushAway } = await import("./pushNotices");
+      await notifyDealerOfPushAway(leadId, notice.fromDealerId);
+    }
+    return;
+  }
+  const { notifyDealerOfPushedLead } = await import("@/lib/whatsapp/pushedLeadNotice");
+  await notifyDealerOfPushedLead(leadId, notice);
 }
 
 /** Bell (CRM initiator) + WhatsApp (operator / dealer sales team). Never throws. */

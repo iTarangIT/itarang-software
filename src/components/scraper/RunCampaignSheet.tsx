@@ -24,6 +24,7 @@ import {
   type CampaignScheduleValue,
 } from "@/components/leads/campaign-window-picker";
 import { Loader2, MapPin, Phone, X } from "lucide-react";
+import type { DialerProvider } from "@/lib/ai/providers";
 
 type RunCity = {
   raw: string;
@@ -51,6 +52,7 @@ type CampaignPreview = {
 const PROVIDERS = [
   { key: "bolna" as const, label: "Bolna" },
   { key: "elevenlabs" as const, label: "ElevenLabs" },
+  { key: "sarvam" as const, label: "Sarvam (Hindi)" },
 ];
 
 const EXCLUDED_REASON_LABEL: Record<string, string> = {
@@ -78,7 +80,7 @@ export function RunCampaignSheet({
   onClose: () => void;
   onStarted: (campaignId: string) => void;
 }) {
-  const [provider, setProvider] = useState<"bolna" | "elevenlabs">("bolna");
+  const [provider, setProvider] = useState<DialerProvider>("bolna");
   const [starting, setStarting] = useState(false);
   // E-254 — the calling window for the campaign this run kicks off.
   const [schedule, setSchedule] =

@@ -9,7 +9,10 @@ import { eq, and, desc, ilike, or, ne, isNull, inArray } from 'drizzle-orm';
 import { resolveDealerProfile } from '@/lib/supabase/identity';
 import { requireRole } from '@/lib/auth-utils';
 import { recordLeadCapture } from '@/lib/leads/lead-registry';
-import { dealerContacts } from '@/lib/leads/pushGuards';
+import { dealerContacts, houseOriginatedLeadIds } from '@/lib/leads/pushGuards';
+import { houseDealerCode } from '@/lib/leads/dealerByMobile';
+import { leadStageLabel } from '@/lib/leads/leadStageLabel';
+import { leadDealerReviews } from '@/lib/db/schema';
 
 
 // Extended Zod Schema
@@ -237,14 +240,24 @@ export const GET = withErrorHandler(async (req: Request) => {
     const type = searchParams.get('type');
 
     // 16 Oct (ID 183): the dealer is the only owner of a file the house pushed
-    // out — it is no longer on the house's own list (the 14 Oct house rows are
-    // gone). The house sees those files on Pushed files (/api/leads/pushed-files).
+    // out. 20 Nov (items 4/5/9): the iTarang House list ALSO shows every file
+    // the house or an iTarang sales person sent to a dealer — at every stage
+    // (dealer check, KYC review, lender, sanction, dispatch) — with the dealer
+    // and the stage, so a submitted file never drops out of Lead Management.
+    // The dealer that holds the file still owns it; the house works it as
+    // before (houseMayActOnLead). A dealer's delete never hides it here.
+    const house = await houseDealerCode();
+    const isHouse = !!house && dealer_id === house;
+    const sentOutIds = isHouse ? Array.from(await houseOriginatedLeadIds(house)) : [];
     const conditions = [
-        and(
-            eq(leads.dealer_id, dealer_id),
-            // E-285 — the dealer deleted it from THIS dashboard. The
-            // application itself may still be live with the admin and lender.
-            isNull(leads.deleted_by_dealer_at),
+        or(
+            and(
+                eq(leads.dealer_id, dealer_id),
+                // E-285 — the dealer deleted it from THIS dashboard. The
+                // application itself may still be live with the admin and lender.
+                isNull(leads.deleted_by_dealer_at),
+            ),
+            ...(sentOutIds.length ? [and(inArray(leads.id, sentOutIds), ne(leads.dealer_id, dealer_id))] : []),
         )!,
         or(
             isNull(leads.status),
@@ -321,6 +334,20 @@ export const GET = withErrorHandler(async (req: Request) => {
             if (a.id) lastActivity.set(a.id, { action: a.action ?? "updated", at: new Date(a.at as unknown as string).toISOString(), by: a.by ?? null });
         }
     }
+    // 20 Nov: the latest iTarang House dealer check per file, for the stage line.
+    const checkByLead = new Map<string, string>();
+    if (leadIds.length) {
+        try {
+            const checks = await db
+                .selectDistinctOn([leadDealerReviews.lead_id], { lead_id: leadDealerReviews.lead_id, status: leadDealerReviews.status })
+                .from(leadDealerReviews)
+                .where(inArray(leadDealerReviews.lead_id, leadIds))
+                .orderBy(leadDealerReviews.lead_id, desc(leadDealerReviews.created_at));
+            for (const c of checks) checkByLead.set(c.lead_id, c.status);
+        } catch {
+            /* database without E-390 — no dealer-check stage */
+        }
+    }
     const enriched = data.map((l) => {
         const ps = psByLead.get(l.id);
         const withDealer = l.dealer_id && l.dealer_id !== dealer_id ? contacts.get(l.dealer_id) : undefined;
@@ -336,6 +363,13 @@ export const GET = withErrorHandler(async (req: Request) => {
             final_price: ps?.final_price ?? null,
             product_payment_mode: ps?.payment_mode ?? null,
             has_product_selection: !!ps,
+            // 20 Nov: where the file is now (shown under Status).
+            stage_label: leadStageLabel({
+                kycStatus: l.kyc_status,
+                assignmentStatus: l.assignment_status,
+                dealerCheckStatus: checkByLead.get(l.id) ?? null,
+                hasProductSelection: !!ps,
+            }),
         };
     });
 

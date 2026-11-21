@@ -404,6 +404,7 @@ function DealerLeadsContent() {
                                                             {s.label}
                                                         </span>
                                                         {paymentPendingBadge(lead.id)}
+                                                        {lead.stage_label && <span className="text-[11px] text-gray-500">{lead.stage_label}</span>}
                                                     </div>
                                                 );
                                             })()}
@@ -498,6 +499,7 @@ function DealerLeadsContent() {
                                         <div className="text-gray-500 text-xs">{lead.owner_contact}</div>
                                         <WithDealer dealer={lead.current_dealer} />
                                         <div className="mt-1">{paymentPendingBadge(lead.id)}</div>
+                                        {lead.stage_label && <div className="mt-1 text-[11px] text-gray-500">{lead.stage_label}</div>}
                                     </div>
                                     {(() => {
                                         const s = resolveLeadStatus(lead);

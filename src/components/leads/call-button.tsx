@@ -3,8 +3,12 @@
 import { useState } from "react";
 import { Phone, PhoneCall, CheckCircle, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  DIALER_PROVIDER_CALL_ENDPOINT,
+  type DialerProvider,
+} from "@/lib/ai/providers";
 
-type Provider = "bolna" | "elevenlabs";
+type Provider = DialerProvider;
 
 interface CallButtonProps {
   leadId: string;
@@ -21,18 +25,17 @@ type CallState = "idle" | "calling" | "success" | "error";
 const PROVIDER_LABEL: Record<Provider, string> = {
   bolna: "AI call 1",
   elevenlabs: "AI call 2",
+  sarvam: "AI call 3",
 };
 
 // Tooltip on the button (an "i" button cannot sit inside a button).
 const PROVIDER_TIP: Record<Provider, string> = {
   bolna: "Starts an AI call to this dealer with AI voice 1.",
   elevenlabs: "Starts an AI call to this dealer with AI voice 2.",
+  sarvam: "Starts an AI call to this dealer with AI voice 3 (Hindi only).",
 };
 
-const PROVIDER_ENDPOINT: Record<Provider, string> = {
-  bolna: "/api/bolna/call",
-  elevenlabs: "/api/elevenlabs/call",
-};
+const PROVIDER_ENDPOINT: Record<Provider, string> = DIALER_PROVIDER_CALL_ENDPOINT;
 
 const PROVIDER_THEME: Record<Provider, { idle: string; success: string }> = {
   bolna: {
@@ -42,6 +45,10 @@ const PROVIDER_THEME: Record<Provider, { idle: string; success: string }> = {
   elevenlabs: {
     idle: "text-violet-600 border-violet-200 hover:bg-violet-50",
     success: "bg-violet-50 text-violet-700 border-violet-200",
+  },
+  sarvam: {
+    idle: "text-amber-600 border-amber-200 hover:bg-amber-50",
+    success: "bg-amber-50 text-amber-700 border-amber-200",
   },
 };
 

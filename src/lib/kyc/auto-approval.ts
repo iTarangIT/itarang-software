@@ -64,10 +64,12 @@ import {
     CARD_SLA_TYPES,
     formatSlaWindow,
     getKycAutoApprovalSettings,
+    slaStampFor,
     type CardSlaType,
     type KycAutoApprovalSettings,
 } from "@/lib/kyc/auto-approval-settings";
 import { notifyKycAutoApproved } from "@/lib/notifications/events";
+import { DEALER_CHECK_HOLD_STATUSES } from "@/lib/leads/dealer-assignment-rules";
 
 /**
  * Compile-time guard (E-248): the settings screen offers a per-card window for
@@ -174,6 +176,52 @@ export async function stampConsentAutoVerifyDeadline(
             err,
         );
         return 0;
+    }
+}
+
+/**
+ * 20 Nov — the iTarang House approved / changed the dealer on a held file, so
+ * it now reaches the admin's KYC review. Both automation clocks were frozen
+ * while it was held (the sweeps skip held leads) and have usually run out, so
+ * restart them from now: the admin gets the full window, not zero.
+ *  - the open admin_verification_queue row the sweep has not finalised;
+ *  - consents waiting for the admin whose clock had been started.
+ * Only clocks that were already running are moved; nothing is armed that was
+ * not armed before. Best-effort, never throws.
+ */
+export async function restartKycClocksAfterDealerCheck(leadId: string): Promise<void> {
+    try {
+        const settings = await getKycAutoApprovalSettings();
+        if (!settings.enabled) return;
+        const now = new Date();
+        const stamp = slaStampFor(now, settings);
+        if (stamp.sla_due_at) {
+            await db
+                .update(adminVerificationQueue)
+                .set({ ...stamp, updated_at: now })
+                .where(
+                    and(
+                        eq(adminVerificationQueue.lead_id, leadId),
+                        eq(adminVerificationQueue.status, "pending_itarang_verification"),
+                        isNull(adminVerificationQueue.auto_approved_at),
+                        isNotNull(adminVerificationQueue.sla_due_at),
+                    ),
+                );
+        }
+        if (settings.autoVerifyConsent) {
+            await db
+                .update(consentRecords)
+                .set({ auto_verify_due_at: new Date(now.getTime() + settings.slaMinutes * 60_000), updated_at: now })
+                .where(
+                    and(
+                        eq(consentRecords.lead_id, leadId),
+                        isNotNull(consentRecords.auto_verify_due_at),
+                        inArray(consentRecords.consent_status, CONSENT_AWAITING_ADMIN as unknown as string[]),
+                    ),
+                );
+        }
+    } catch (err) {
+        console.error(`[kyc-auto-approval] clock restart for lead ${leadId} failed:`, err);
     }
 }
 
@@ -610,6 +658,18 @@ export async function runKycAutoApprovalTick(
                       AND auto_approved_at IS NULL
                       AND COALESCE(sla_next_due_at, sla_due_at) IS NOT NULL
                       AND COALESCE(sla_next_due_at, sla_due_at) <= ${nowSql}
+                      -- 20 Nov: a file waiting for the iTarang House dealer
+                      -- check is not on the admin's queue yet, so the system
+                      -- may not act for the admin either. The clock restarts
+                      -- when the house approves (restartKycClocksAfterDealerCheck).
+                      AND NOT EXISTS (
+                          SELECT 1 FROM leads hl
+                           WHERE hl.id = admin_verification_queue.lead_id
+                             AND hl.assignment_status IN (${sql.join(
+                                 DEALER_CHECK_HOLD_STATUSES.map((s) => sql`${s}`),
+                                 sql`, `,
+                             )})
+                      )
                     ORDER BY COALESCE(sla_next_due_at, sla_due_at) ASC
                     LIMIT 1
                     FOR UPDATE SKIP LOCKED
@@ -768,6 +828,12 @@ async function sweepDueConsents(
                         consentRecords.consent_status,
                         CONSENT_AWAITING_ADMIN as unknown as string[],
                     ),
+                    // 20 Nov: not while the file waits for the iTarang House
+                    // dealer check (see the queue claim above).
+                    sql`NOT EXISTS (SELECT 1 FROM leads hl WHERE hl.id = ${consentRecords.lead_id} AND hl.assignment_status IN (${sql.join(
+                        DEALER_CHECK_HOLD_STATUSES.map((s) => sql`${s}`),
+                        sql`, `,
+                    )}))`,
                 ),
             )
             .limit(MAX_CONSENTS_PER_TICK);

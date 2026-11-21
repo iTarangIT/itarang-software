@@ -1,7 +1,9 @@
+import type { DialerProvider } from "@/lib/ai/providers";
+
 // Wire types for /api/campaigns/cost-analytics. Mirrors the JSON shape
 // returned by src/app/api/campaigns/cost-analytics/route.ts.
 
-export type ProviderKey = "bolna" | "elevenlabs";
+export type ProviderKey = DialerProvider;
 
 export type CostAnalyticsFilters = {
   from_date: string | null;
