@@ -36,12 +36,15 @@ import { db } from "@/lib/db";
 import { buybackBatches, buybackLines, buybackUnits, catalogVariants } from "@/lib/db/schema";
 import { loadOwnRequest, requireDealer } from "@/lib/buyback/auth";
 import { NotFoundError, TransitionError } from "@/lib/buyback/errors";
-import { lineSpecSchema, specColumnsFromBody } from "@/lib/buyback/line-spec";
+import {
+  UNIT_INSERT_CHUNK,
+  lineSpecSchema,
+  quantitySchema,
+  specColumnsFromBody,
+} from "@/lib/buyback/line-spec";
 import { loadDealForUpdate } from "@/lib/buyback/transition";
 
 export const runtime = "nodejs";
-
-const MAX_QTY_PER_LINE = 500;
 
 const bodySchema = z
   .object({
@@ -50,7 +53,8 @@ const bodySchema = z
     // screen showed the new one, so gate errors and the PO/invoice named a
     // battery the dealer could no longer see (BB-1045).
     variant_id: z.string().uuid().optional(),
-    quantity: z.number().int().min(1).max(MAX_QTY_PER_LINE).optional(),
+    // Ceiling shared with the create route and the intake form (line-spec.ts).
+    quantity: quantitySchema.optional(),
     condition: z.enum(["WORKING", "DEAD"]).optional(),
     expected_price_per_unit: z.number().nonnegative().nullish(),
     measured_voltage: z.number().nonnegative().nullish(),
@@ -145,12 +149,16 @@ export const PATCH = withErrorHandler(
 
       if (body.quantity !== undefined && body.quantity !== line.quantity) {
         if (body.quantity > line.quantity) {
-          await tx.insert(buybackUnits).values(
-            Array.from({ length: body.quantity - line.quantity }, (_, i) => ({
-              line_id: line.id,
-              unit_no: line.quantity + i + 1,
-            })),
-          );
+          // Chunked, same as create — one jump can add thousands of units.
+          for (let from = line.quantity; from < body.quantity; from += UNIT_INSERT_CHUNK) {
+            const to = Math.min(from + UNIT_INSERT_CHUNK, body.quantity);
+            await tx.insert(buybackUnits).values(
+              Array.from({ length: to - from }, (_, i) => ({
+                line_id: line.id,
+                unit_no: from + i + 1,
+              })),
+            );
+          }
           unitsAdded = body.quantity - line.quantity;
         } else {
           // ONLY the trailing units. Units 1..n keep whatever the dealer has
