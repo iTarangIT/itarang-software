@@ -963,7 +963,7 @@ export async function runCustomerTurn(
       case "DC_LEAD_CONSENT_CHANNEL":
         return await onConsentChannel(session, event, houseDealer);
       case "DC_LEAD_CONSENT_WAIT":
-        return await onConsentWait(session, event);
+        return await onConsentWait(session, event, houseDealer);
       case "DC_LEAD_CONSENT_OTP_WAIT":
         return await onConsentOtpWait(session, event, houseDealer);
       case "DC_LEAD_FINANCE_Q":
@@ -3508,7 +3508,7 @@ async function dispatchConsoleTurn(
       case "DC_LEAD_CONSENT_CHANNEL":
         return await onConsentChannel(session, event, dealer);
       case "DC_LEAD_CONSENT_WAIT":
-        return await onConsentWait(session, event);
+        return await onConsentWait(session, event, dealer);
       case "DC_LEAD_CONSENT_OTP_WAIT":
         return await onConsentOtpWait(session, event, dealer);
       case "DC_LEAD_FINANCE_Q":
@@ -4493,6 +4493,14 @@ const CONSENT_CHECK_BUTTON: ReplyButton = {
   title: "✅ Check if signed",
 };
 
+// 21 Nov: offered next to the signed-form upload, so a dealer whose upload was
+// refused as unsigned can switch to the call OTP in one tap instead of
+// scrolling back to the channel chooser. Same id as the chooser's Call button.
+const CONSENT_CALL_OTP_BUTTON: ReplyButton = {
+  id: "consent_call",
+  title: "📞 Call OTP",
+};
+
 // At the OTP-wait step the dealer can send the customer a fresh OTP.
 const CONSENT_RESEND_OTP_BUTTON: ReplyButton = {
   id: "consent_resend_otp",
@@ -4590,7 +4598,8 @@ async function onConsentChannel(
     await reply(
       session,
       `🔐 A 6-digit OTP was sent to the customer via *Call* on ${res.otpSentTo}.\n\n` +
-        `Ask the customer to read it out, then *type the 6 digits here* to record their consent.` +
+        `Ask the customer to read it out, then *type the 6 digits here* to record their consent.\n\n` +
+        `_Have a signed consent form instead? Upload it here._` +
         (res.devOtp ? `\n\n_(dev/test: OTP is ${res.devOtp})_` : ""),
       [CONSENT_RESEND_OTP_BUTTON],
     );
@@ -4607,7 +4616,26 @@ async function onConsentChannel(
 async function onConsentWait(
   session: SessionRow,
   event: InboundEvent,
+  dealer: ActiveDealer,
 ): Promise<void> {
+  // 21 Nov: the manual path keeps the call OTP open. "Call" (the Call OTP
+  // button, or the chooser's old Call button tapped again) switches to it;
+  // "Manual" re-sends the form to print.
+  {
+    const t = (event.text ?? "").trim().toLowerCase();
+    if (
+      event.type !== "document" &&
+      event.type !== "image" &&
+      (t === "consent_call" || t === "consent_manual" || /\b(call|otp)\b/.test(t) || t === "manual")
+    ) {
+      return await onConsentChannel(
+        session,
+        { ...event, text: t === "consent_manual" || t === "manual" ? "consent_manual" : "consent_call" },
+        dealer,
+      );
+    }
+  }
+
   // A manually-signed consent comes back as a document/image upload.
   if (event.type === "document" || event.type === "image") {
     const lead = await getLeadCtx(session);
@@ -4634,11 +4662,16 @@ async function onConsentWait(
     });
     if (!res.ok) {
       // 20 Nov: an unsigned form / other document is refused, not stored.
+      // 21 Nov: offer the call OTP right here as the other way to consent.
       await reply(
         session,
         res.status === 422
-          ? `❌ ${res.error}`
-          : `Couldn't save the signed consent: ${res.error}. Please resend.`,
+          ? `❌ ${res.error}\n\n` +
+              `You can:\n` +
+              `• *Upload the signed form* here again, or\n` +
+              `• Tap *Call OTP* — the customer gets a call with a 6-digit code instead of signing.`
+          : `Couldn't save the signed consent: ${res.error}. Please resend, or tap *Call OTP*.`,
+        [CONSENT_CALL_OTP_BUTTON],
       );
       return;
     }
@@ -4686,9 +4719,11 @@ async function onConsentWait(
 
   await reply(
     session,
-    "⏳ Waiting for the customer to sign the consent — tap *Check if signed* once they have, and I'll confirm here.\n\n" +
-      "Collecting the signature *manually*? Upload the signed PDF here. Send *menu* to exit.",
-    [CONSENT_CHECK_BUTTON],
+    "⏳ Waiting for the customer's consent.\n\n" +
+      "• *Upload the signed consent* PDF or photo here, or\n" +
+      "• Tap *Call OTP* — the customer gets a call with a 6-digit code instead.\n\n" +
+      "Send *menu* to exit.",
+    [CONSENT_CALL_OTP_BUTTON, CONSENT_CHECK_BUTTON],
   );
 }
 
@@ -4746,6 +4781,13 @@ async function onConsentOtpWait(
   if (!lead.leadId) {
     await reply(session, "Send *menu* to start again.");
     return;
+  }
+
+  // 21 Nov: a signed consent form is still accepted while waiting for the
+  // code — the same check and store as the manual path.
+  if (event.type === "document" || event.type === "image") {
+    await setSession(session.id, { current_state: "DC_LEAD_CONSENT_WAIT" });
+    return await onConsentWait(session, event, dealer);
   }
 
   const raw = (event.text ?? "").trim();
