@@ -626,6 +626,12 @@ const CONSENT_CHANNEL_BUTTONS: ReplyButton[] = [
   { id: "cb_consent_manual", title: "✍ Print & sign" },
 ];
 
+/** 21 Nov: the code options offered while waiting for a signed form. */
+const CB_MANUAL_CODE_BUTTONS: ReplyButton[] = [
+  { id: "cb_consent_call", title: "📞 Call OTP" },
+  { id: "cb_consent_sms", title: "💬 SMS OTP" },
+];
+
 /**
  * Offered every time we are waiting for the code. A code that never arrives
  * (call not picked up, SMS delayed) used to leave the dealer with no way out
@@ -747,6 +753,12 @@ async function onCoBorrowerConsentManual(
 
   if (event.type !== "document" && event.type !== "image") {
     const t = text(event).toLowerCase();
+    // 21 Nov: the code buttons offered after an unsigned upload go straight
+    // to sending the code.
+    if (t === "cb_consent_call" || t === "cb_consent_sms" || t === "call" || t === "sms") {
+      await setSession(session.id, { current_state: DC_CB_CONSENT });
+      return await onCoBorrowerConsent(session, event);
+    }
     if (t === "otp" || t === "code") {
       await setSession(session.id, { current_state: DC_CB_CONSENT });
       await reply(session, "No problem — how should we send the code?", CONSENT_CHANNEL_BUTTONS);
@@ -754,7 +766,8 @@ async function onCoBorrowerConsentManual(
     }
     await reply(
       session,
-      "Please send the *signed* consent form back as a PDF or a clear photo. Type *otp* to use a code instead.",
+      "Please send the *signed* consent form back as a PDF or a clear photo, or tap a button to use a code instead.",
+      CB_MANUAL_CODE_BUTTONS,
     );
     return;
   }
@@ -784,11 +797,16 @@ async function onCoBorrowerConsentManual(
   });
   if (!stored.ok) {
     // 20 Nov: an unsigned form / other document is refused, not stored.
+    // 21 Nov: offer the code (call / SMS) right here as the other way to consent.
     await reply(
       session,
       stored.status === 422
-        ? `❌ ${stored.error}`
-        : `I couldn't save that${stored.error ? ` — ${stored.error}` : ""}. Please send it again.`,
+        ? `❌ ${stored.error}
+
+` +
+            `You can *send the signed form* here again, or tap a button to confirm with a code instead.`
+        : `I couldn't save that${stored.error ? ` — ${stored.error}` : ""}. Please send it again, or use a code instead.`,
+      CB_MANUAL_CODE_BUTTONS,
     );
     return;
   }

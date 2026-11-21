@@ -52,8 +52,21 @@ async function whereSql(f: AccountsScreenFilters): Promise<SQL> {
     const where: SQL[] = [dealerAccountSql()];
     if (f.q) {
         const like = `%${f.q.replace(/[\\%_]/g, (m) => `\\${m}`)}%`;
+        // Also the people behind the account: its contact, everyone named on an
+        // onboarding form filed against it (a branch dealer has no account row
+        // of its own, only an application whose dealer_code is this account),
+        // and the dealer logins linked to it — so "Aditya Tile DEMO" finds the
+        // account its branch sits under.
         where.push(sql`(a.business_entity_name ILIKE ${like} OR a.id ILIKE ${like} OR a.gstin ILIKE ${like}
-                        OR a.city ILIKE ${like} OR ou.name ILIKE ${like})`);
+                        OR a.city ILIKE ${like} OR ou.name ILIKE ${like}
+                        OR a.contact_name ILIKE ${like} OR a.contact_email ILIKE ${like}
+                        OR EXISTS (SELECT 1 FROM dealer_onboarding_applications da
+                                    WHERE da.dealer_code = a.id
+                                      AND (da.owner_name ILIKE ${like} OR da.owner_email ILIKE ${like}
+                                           OR da.company_name ILIKE ${like}))
+                        OR EXISTS (SELECT 1 FROM users du
+                                    WHERE du.dealer_id = a.id
+                                      AND (du.name ILIKE ${like} OR du.email ILIKE ${like})))`);
     }
     if (f.owner === "none") where.push(sql`o.owner_user_id IS NULL`);
     else if (f.owner) where.push(sql`o.owner_user_id = ${f.owner}::uuid`);
