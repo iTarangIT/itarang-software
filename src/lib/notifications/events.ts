@@ -82,18 +82,23 @@ export async function notifyLeadCreated(p: {
   paymentMethod?: string | null;
   source?: "portal" | "whatsapp" | "import";
   dealerName?: string | null;
+  /** 20 Nov — an iTarang sales person created it FOR the dealer (WhatsApp
+   *  operator); the bell names that person, not the dealer. */
+  createdBy?: string | null;
 }) {
   const who = p.customerName || (await leadLabel(p.leadId));
   const via =
     p.source === "whatsapp" ? " over WhatsApp" : p.source === "import" ? " via import" : "";
+  const kind = p.paymentMethod === "cash" || p.paymentMethod === "upfront" ? "cash" : "finance";
   await emit({
     type: "lead.created",
     title: "New lead created",
-    message:
-      `${p.dealerName ?? "A dealer"} created a new ${p.paymentMethod === "cash" || p.paymentMethod === "upfront" ? "cash" : "finance"} lead for ${who}${via}.`,
+    message: p.createdBy
+      ? `${p.createdBy} (iTarang) created a new ${kind} lead for ${who}${via}, tagged to ${p.dealerName ?? "a dealer"} — waiting for the iTarang House dealer check.`
+      : `${p.dealerName ?? "A dealer"} created a new ${kind} lead for ${who}${via}.`,
     leadId: p.leadId,
     stage: "Step 1",
-    from: p.dealerName ? dealerParty(p.dealerName) : await actingParty(),
+    from: p.createdBy ? ADMIN_PARTY : p.dealerName ? dealerParty(p.dealerName) : await actingParty(),
     data: { customer_name: who, payment_method: p.paymentMethod ?? null, source: p.source ?? "portal" },
     to: [toAdmins({ href: adminLead(p.leadId) })],
   });

@@ -41,10 +41,20 @@ import {
   askCompanyType,
   runConsoleTurn,
   runCustomerTurn,
+  resumeDraft,
   runOnboardingStates,
   startOperatorCustomerFlow,
 } from "./orchestrator";
-import { loadApplication, resolveHouseDealer, resolvePushedCustomerDealer } from "./customer-lead";
+import { getDealerDraft, loadApplication, resolveHouseDealer, resolvePushedCustomerDealer } from "./customer-lead";
+import {
+  MY_LEAD_IDS_CAP,
+  MY_LEADS_PAGE_SIZE,
+  kycStageLabel,
+  listOperatorLeads,
+  maskMobile,
+  operatorLeadCard,
+  operatorOwnsLead,
+} from "./operator-leads";
 import { findActiveDealerByMobile, type PushTargetDealer } from "@/lib/leads/dealerByMobile";
 import {
   DealerCheckError,
@@ -101,6 +111,12 @@ const OP_MENU_ROWS: ListRow[] = [
     title: "👤 Customer KYC",
     description: "Start a customer's KYC for a dealer",
   },
+  // 20 Nov — the customer leads this number started, with their information.
+  {
+    id: "op_my_leads",
+    title: "📋 My Leads",
+    description: "Customers you started",
+  },
   {
     id: "op_help",
     title: "❓ Help",
@@ -146,6 +162,36 @@ const PICK_PAGE_SIZE = 9;
  * session row (see getOrCreateSession in orchestrator.ts).
  */
 export async function runOperatorTurn(
+  hub: SessionRow,
+  event: InboundEvent,
+  operator: WhatsAppOperator,
+): Promise<void> {
+  await runOperatorTurnInner(hub, event, operator);
+  // 20 Nov — remember any customer lead this turn created or touched, so
+  // "My Leads" finds it later (a Skip / house-kept lead has no other trace).
+  await rememberCustomerLead(hub.id);
+}
+
+async function rememberCustomerLead(hubId: string): Promise<void> {
+  try {
+    const fresh = await loadSession(hubId);
+    const ctx = (fresh?.context ?? {}) as Ctx;
+    const leadId = ctx.lead?.leadId;
+    if (!leadId || !ctx.op) return;
+    const list = ctx.op.myLeadIds ?? [];
+    if (list[list.length - 1] === leadId) return;
+    await mergeContext(fresh, (c) => {
+      if (!c.op) return;
+      const next = (c.op.myLeadIds ?? []).filter((id) => id !== leadId);
+      next.push(leadId);
+      c.op.myLeadIds = next.slice(-MY_LEAD_IDS_CAP);
+    });
+  } catch (err) {
+    console.warn("[WhatsApp/operator] remember lead failed", err instanceof Error ? err.message : String(err));
+  }
+}
+
+async function runOperatorTurnInner(
   hub: SessionRow,
   event: InboundEvent,
   operator: WhatsAppOperator,
@@ -201,6 +247,10 @@ export async function runOperatorTurn(
         return await onHandedOffChoice(hub, event, operator);
       case "OP_FILE_ACTIVE":
         return await delegateToFile(hub, event, operator);
+      case "OP_MY_LEADS":
+        return await onMyLeadsPick(hub, event, operator);
+      case "OP_LEAD_VIEW":
+        return await onLeadViewChoice(hub, event, operator);
       default:
         // Any leftover state (including a pre-E-214 dealer state, if this number
         // used to onboard as a dealer) drops back to the operator menu.
@@ -240,6 +290,7 @@ async function showOperatorMenu(
     // with its dealer; only the chat pointer is dropped.
     ctx.op.customerDealer = undefined;
     ctx.op.dealerAskRetried = undefined;
+    ctx.op.viewLeadId = undefined;
     ctx.flow = undefined;
     ctx.lead = undefined;
   });
@@ -288,6 +339,10 @@ async function onMenuChoice(
     return await askCustomerDealer(hub, operator);
   }
 
+  if (choice === "op_my_leads" || /^(my\s*)?leads?$/.test(choice)) {
+    return await showMyLeads(hub, operator, 0);
+  }
+
   if (choice === "op_my_console") {
     const dealer = await resolveOwnDealer(hub, hub.wa_phone);
     if (!dealer) {
@@ -328,6 +383,8 @@ function helpText(): string {
     "*Open Files* resumes any of them.\n\n" +
     "👤 *Customer KYC* — start a customer's KYC; send the dealer's mobile " +
     "and the lead goes to that dealer, or Skip to keep it with iTarang.\n\n" +
+    "📋 *My Leads* — every customer you started from this number, with its " +
+    "stage; open one to see its details or continue a draft.\n\n" +
     "Type *menu* at any point to come back here."
   );
 }
@@ -562,6 +619,153 @@ async function onCustomerDealer(
     await reply(hub, `${NO_ACTIVE_DEALER_MESSAGE} — keeping this customer with iTarang.`);
   }
   return await startOperatorCustomerFlow(await loadSession(hub.id), house);
+}
+
+// ── 20 Nov: My Leads — the customers this number started ─────────────────────
+
+const MY_LEADS_MORE_ID = "opl_more";
+const MY_LEADS_MENU_ID = "opl_menu";
+const LEAD_CONTINUE_ID = "oplv_continue";
+const LEAD_BACK_ID = "oplv_back";
+const LEAD_MENU_ID = "oplv_menu";
+
+function ownerScope(hub: SessionRow, operator: WhatsAppOperator) {
+  const ctx = (hub.context ?? {}) as Ctx;
+  return { waPhone: hub.wa_phone, userId: operator.userId, ctxLeadIds: ctx.op?.myLeadIds ?? [] };
+}
+
+async function showMyLeads(hub: SessionRow, operator: WhatsAppOperator, page: number): Promise<void> {
+  const all = await listOperatorLeads(ownerScope(hub, operator));
+  if (!all.length) {
+    await reply(hub, "📋 You haven't started any customer leads from this number yet. Tap *Customer KYC* to start one.");
+    return await showOperatorMenu(hub, operator);
+  }
+  const start = page * MY_LEADS_PAGE_SIZE;
+  if (start >= all.length && page > 0) return await showMyLeads(hub, operator, 0);
+  const slice = all.slice(start, start + MY_LEADS_PAGE_SIZE);
+  const names = await dealerDisplayNamesFor(slice.map((l) => l.dealerId));
+
+  const rows: ListRow[] = slice.map((l) => ({
+    id: `opl_${l.leadId}`,
+    title: truncate(l.customerName ?? maskMobile(l.mobile), 24),
+    description: truncate(
+      `${l.referenceId ?? ""} · ${l.dealerId ? names.get(l.dealerId) ?? l.dealerId : "—"} · ${kycStageLabel(l.kycStatus)}`,
+      72,
+    ),
+  }));
+  if (start + MY_LEADS_PAGE_SIZE < all.length) {
+    rows.push({ id: MY_LEADS_MORE_ID, title: "➡️ More", description: "Next page" });
+  }
+  rows.push({ id: MY_LEADS_MENU_ID, title: "⬅️ Menu", description: "Back to the main menu" });
+
+  await mergeContext(hub, (ctx) => {
+    ctx.op = { ...(ctx.op ?? { operatorId: operator.id }) };
+    ctx.op.myLeadsPage = page;
+    ctx.op.viewLeadId = undefined;
+  });
+  await setSession(hub.id, { current_state: "OP_MY_LEADS" });
+  await replyList(
+    await loadSession(hub.id),
+    `📋 *Your customer leads* (${all.length})\n\nPick one to see its details.`,
+    "Open lead",
+    rows,
+  );
+}
+
+async function dealerDisplayNamesFor(codes: Array<string | null>): Promise<Map<string, string>> {
+  const { dealerDisplayNames } = await import("@/lib/leads/pushGuards");
+  return dealerDisplayNames(codes.filter((c): c is string => !!c));
+}
+
+async function onMyLeadsPick(hub: SessionRow, event: InboundEvent, operator: WhatsAppOperator): Promise<void> {
+  const choice = (event.text ?? "").trim();
+  const ctx = (hub.context ?? {}) as Ctx;
+  if (choice === MY_LEADS_MORE_ID) return await showMyLeads(hub, operator, (ctx.op?.myLeadsPage ?? 0) + 1);
+  if (choice === MY_LEADS_MENU_ID) return await showOperatorMenu(hub, operator);
+  if (choice.startsWith("opl_")) return await showLeadCard(hub, operator, choice.slice("opl_".length));
+  return await showMyLeads(hub, operator, ctx.op?.myLeadsPage ?? 0);
+}
+
+async function showLeadCard(hub: SessionRow, operator: WhatsAppOperator, leadId: string): Promise<void> {
+  // Row ids are typeable — never show a lead this number did not start.
+  if (!(await operatorOwnsLead(ownerScope(hub, operator), leadId))) {
+    await reply(hub, "That lead isn't one you started from this number.");
+    return await showMyLeads(hub, operator, 0);
+  }
+  const card = await operatorLeadCard(leadId);
+  if (!card) {
+    await reply(hub, "I couldn't find that lead any more.");
+    return await showMyLeads(hub, operator, 0);
+  }
+  const draft = card.dealerId ? await getDealerDraft(card.dealerId, leadId).catch(() => null) : null;
+
+  await mergeContext(hub, (ctx) => {
+    ctx.op = { ...(ctx.op ?? { operatorId: operator.id }) };
+    ctx.op.viewLeadId = leadId;
+  });
+  await setSession(hub.id, { current_state: "OP_LEAD_VIEW" });
+  const buttons = draft
+    ? [
+        { id: LEAD_CONTINUE_ID, title: "▶️ Continue" },
+        { id: LEAD_BACK_ID, title: "📋 My Leads" },
+        { id: LEAD_MENU_ID, title: "⬅️ Menu" },
+      ]
+    : [
+        { id: LEAD_BACK_ID, title: "📋 My Leads" },
+        { id: LEAD_MENU_ID, title: "⬅️ Menu" },
+      ];
+  await reply(
+    await loadSession(hub.id),
+    card.body +
+      (draft
+        ? "\n\nThis lead is still open on WhatsApp — tap *Continue* to pick up where it stopped."
+        : "\n\nThis lead has left the WhatsApp capture steps — iTarang keeps you posted here."),
+    buttons,
+  );
+}
+
+async function onLeadViewChoice(hub: SessionRow, event: InboundEvent, operator: WhatsAppOperator): Promise<void> {
+  const choice = (event.text ?? "").trim().toLowerCase();
+  const ctx = (hub.context ?? {}) as Ctx;
+  const leadId = ctx.op?.viewLeadId;
+  if (choice === LEAD_MENU_ID) return await showOperatorMenu(hub, operator);
+  if (choice === LEAD_BACK_ID || !leadId) return await showMyLeads(hub, operator, ctx.op?.myLeadsPage ?? 0);
+  if (choice === LEAD_CONTINUE_ID || /^(continue|resume)$/.test(choice)) {
+    return await continueOperatorLead(hub, operator, leadId);
+  }
+  return await showLeadCard(hub, operator, leadId);
+}
+
+/** Resume a still-open draft on the hub, under the dealer the lead is with. */
+async function continueOperatorLead(hub: SessionRow, operator: WhatsAppOperator, leadId: string): Promise<void> {
+  if (!(await operatorOwnsLead(ownerScope(hub, operator), leadId))) {
+    return await showMyLeads(hub, operator, 0);
+  }
+  const card = await operatorLeadCard(leadId);
+  const draft = card?.dealerId ? await getDealerDraft(card.dealerId, leadId).catch(() => null) : null;
+  if (!card?.dealerId || !draft) {
+    await reply(hub, "This lead can't be continued on WhatsApp any more — it has moved on to iTarang.");
+    return await showLeadCard(hub, operator, leadId);
+  }
+
+  const house = await resolveHouseDealer();
+  const picked =
+    house && card.dealerId === house.dealerCode
+      ? undefined
+      : { dealerCode: card.dealerId, name: card.dealerName, byUserId: operator.userId, byName: operator.displayName };
+  const dealer = (picked ? await resolvePushedCustomerDealer(picked) : null) ?? house;
+  if (!dealer) {
+    await reply(hub, "Sorry, we can't continue this lead right now. Please try again later.");
+    return await showOperatorMenu(hub, operator);
+  }
+
+  await mergeContext(hub, (ctx) => {
+    ctx.op = { ...(ctx.op ?? { operatorId: operator.id }) };
+    ctx.op.customerDealer = picked;
+    ctx.op.viewLeadId = undefined;
+    ctx.flow = "customer";
+  });
+  return await resumeDraft(await loadSession(hub.id), dealer, draft);
 }
 
 // ── New dealer file ─────────────────────────────────────────────────────────

@@ -260,6 +260,13 @@ export type Ctx = {
     /** ID 33: the "Which dealer is this for?" question was already re-asked
      *  once after an unknown mobile; the next miss falls back to the house. */
     dealerAskRetried?: boolean;
+    /** 20 Nov — customer leads this hub started (newest last, capped). The only
+     *  trace of a Skip / house-kept lead, which has no dealer-check row. */
+    myLeadIds?: string[];
+    /** "My Leads" paging cursor (OP_MY_LEADS). */
+    myLeadsPage?: number;
+    /** The lead whose card is open (OP_LEAD_VIEW). */
+    viewLeadId?: string;
   };
   /** "Active batteries" browser (DC_ACTIVE_BATT) — paging cursor only. */
   ab?: { page?: number };

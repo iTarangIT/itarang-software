@@ -218,19 +218,18 @@ export const POST = withErrorHandler(async (req: Request, { params }: { params: 
   // Tell the dealer (bell, email, WhatsApp — template when there is no chat)
   // with the reason, and on a second move the dealer who loses the file too.
   // Best-effort, never throws.
-  const { notifyDealerOfPushedLead } = await import("@/lib/whatsapp/pushedLeadNotice");
-  await notifyDealerOfPushedLead(lead.id, { reason, fromDealerId: lead.dealerId });
-
   // E-390 — Battery Pool diagram 1: a dealer the iTarang House admin assigned
-  // goes to the iTarang admin's dealer check before any lender. Best-effort.
-  const { openDealerReview } = await import("@/lib/leads/dealer-assignment");
-  await openDealerReview({
+  // goes to the iTarang House dealer check before any lender. Best-effort.
+  // 20 Nov: the receiving dealer is told after the house approves.
+  const { openDealerReview, notifyDealerUnlessHeld } = await import("@/lib/leads/dealer-assignment");
+  const review = await openDealerReview({
     leadId: lead.id,
     dealerId: target.dealerId,
     reasonKind: "house_push",
     channel: "web",
     initiator: { userId: user.id, name: user.name ?? null },
   });
+  await notifyDealerUnlessHeld(lead.id, review, { reason, fromDealerId: lead.dealerId });
 
   return successResponse({ dealer: { dealerId: target.dealerId, name: target.name }, history: await pushHistory(lead.id) });
 });
