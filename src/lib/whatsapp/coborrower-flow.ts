@@ -764,30 +764,42 @@ async function onCoBorrowerConsentManual(
   }
 
   let buffer: Buffer;
+  let mimeType: string | undefined;
   try {
     const media = await getAdapter().downloadMedia(event.mediaProviderId);
     buffer = media.buffer;
+    mimeType = media.mimeType;
   } catch (err) {
     console.error("[WhatsApp/coborrower] signed consent download failed:", err);
     await reply(session, "I couldn't download that — please send it once more.");
     return;
   }
 
+  await reply(session, "⏳ Checking the co-borrower's signature on the form…");
   const stored = await storeSignedConsent({
     leadId,
     buffer,
     consentFor: "borrower",
+    mimeType,
   });
   if (!stored.ok) {
+    // 20 Nov: an unsigned form / other document is refused, not stored.
     await reply(
       session,
-      `I couldn't save that${stored.error ? ` — ${stored.error}` : ""}. Please send it again.`,
+      stored.status === 422
+        ? `❌ ${stored.error}`
+        : `I couldn't save that${stored.error ? ` — ${stored.error}` : ""}. Please send it again.`,
     );
     return;
   }
 
   await recordWhatsAppKycStep({ session, leadId, action: "Signed consent uploaded (co-borrower)", notify: true });
-  await reply(session, "✅ *Signed consent received.*");
+  await reply(
+    session,
+    stored.signature.verdict === "signed"
+      ? "✅ *Signed consent received* — signature found."
+      : "✅ *Consent form received.* iTarang will check the signature.",
+  );
   await showReview(session, leadId);
 }
 

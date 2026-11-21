@@ -215,21 +215,19 @@ export const POST = withErrorHandler(async (req: Request) => {
     // Tell the dealer on WhatsApp, one notice per lead (same as the Step-1
     // push). Best-effort, never throws — the move is already committed.
     if (pushed.length) {
-        const { notifyDealerOfPushedLead } = await import("@/lib/whatsapp/pushedLeadNotice");
-        for (const id of pushed) {
-            await notifyDealerOfPushedLead(id, { reason, fromDealerId: byId.get(id)?.dealerId ?? null });
-        }
         // E-390 — Battery Pool diagram 1: a dealer the iTarang House assigned
-        // goes to the iTarang admin's dealer check before any lender. Best-effort.
-        const { openDealerReview } = await import("@/lib/leads/dealer-assignment");
+        // goes to the iTarang House dealer check before any lender. Best-effort.
+        // 20 Nov: the receiving dealer is told after the house approves.
+        const { openDealerReview, notifyDealerUnlessHeld } = await import("@/lib/leads/dealer-assignment");
         for (const id of pushed) {
-            await openDealerReview({
+            const review = await openDealerReview({
                 leadId: id,
                 dealerId: target.dealerId,
                 reasonKind: "house_push",
                 channel: "web",
                 initiator: { userId: user.id, name: user.name ?? null },
             });
+            await notifyDealerUnlessHeld(id, review, { reason, fromDealerId: byId.get(id)?.dealerId ?? null });
         }
     }
 

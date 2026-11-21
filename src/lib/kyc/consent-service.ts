@@ -52,6 +52,11 @@ import {
 import { createWorkflowId } from "@/lib/kyc/admin-workflow";
 import { ensureAdminKycQueueEntry } from "@/lib/kyc/admin-workflow";
 import { stampConsentAutoVerifyDeadline } from "@/lib/kyc/auto-approval";
+import {
+  checkConsentSignature,
+  storedConsentFile,
+  type ConsentSignatureCheck,
+} from "@/lib/kyc/consent-signature-check";
 import { launchBrowser } from "@/lib/pdf/launch-browser";
 import { uploadFileToStorage } from "@/lib/storage";
 import {
@@ -585,31 +590,46 @@ export async function generateManualConsentPdf(opts: {
 }
 
 export type StoreSignedResult =
-  | { ok: true; fileUrl: string }
-  | { ok: false; status: number; error: string };
+  | { ok: true; fileUrl: string; signature: ConsentSignatureCheck }
+  | { ok: false; status: number; error: string; signature?: ConsentSignatureCheck };
 
 /** Persist a manually-signed consent PDF (buffer) and surface the lead to the
- *  admin KYC review queue. Updates the existing consent_records row if present. */
+ *  admin KYC review queue. Updates the existing consent_records row if present.
+ *
+ *  20 Nov: the upload is checked for a real customer signature first
+ *  (checkConsentSignature). An unsigned form, another document or an
+ *  unreadable scan is refused (422) and nothing is stored. When the check
+ *  cannot run, the upload is stored for a HUMAN check only — the auto-verify
+ *  clock is not started, so the system never marks it verified on its own. */
 export async function storeSignedConsent(opts: {
   leadId: string;
   buffer: Buffer;
   consentFor?: ConsentFor;
+  /** Declared content type of the upload (PDF or image). Sniffed when absent. */
+  mimeType?: string | null;
 }): Promise<StoreSignedResult> {
   const role = toRole(opts.consentFor);
+
+  const signature = await checkConsentSignature(opts.buffer, opts.mimeType ?? "");
+  if (signature.verdict !== "signed" && signature.verdict !== "unknown") {
+    return { ok: false, status: 422, error: signature.message ?? "The customer's signature could not be confirmed.", signature };
+  }
+
   const now = new Date();
-  const fileName = `kyc/${opts.leadId}/signed_consent_${Date.now()}.pdf`;
+  const file = storedConsentFile(opts.buffer, opts.mimeType);
+  const fileName = `kyc/${opts.leadId}/signed_consent_${Date.now()}.${file.ext}`;
 
   let signedConsentUrl: string;
   try {
     if (isS3Backend) {
-      await putObject("documents", fileName, opts.buffer, "application/pdf");
+      await putObject("documents", fileName, opts.buffer, file.mime);
       signedConsentUrl = filesProxyPath("documents", fileName);
     } else {
       const uploaded = await uploadFileToStorage({
         fileBuffer: opts.buffer,
-        fileName: `signed_consent_${Date.now()}.pdf`,
+        fileName: `signed_consent_${Date.now()}.${file.ext}`,
         folder: `kyc/${opts.leadId}`,
-        contentType: "application/pdf",
+        contentType: file.mime,
       });
       signedConsentUrl = uploaded.url;
     }
@@ -633,6 +653,9 @@ export async function storeSignedConsent(opts: {
         consent_status: "admin_review_pending",
         signed_consent_url: signedConsentUrl,
         signed_at: now,
+        reviewer_notes: signature.note,
+        // A re-upload starts from a clean clock (stamped below only when signed).
+        auto_verify_due_at: null,
         updated_at: now,
       })
       .where(eq(consentRecords.id, existing.id));
@@ -645,6 +668,7 @@ export async function storeSignedConsent(opts: {
       consent_status: "admin_review_pending",
       signed_consent_url: signedConsentUrl,
       signed_at: now,
+      reviewer_notes: signature.note,
       created_at: now,
       updated_at: now,
     });
@@ -657,9 +681,13 @@ export async function storeSignedConsent(opts: {
   // verifies it once the window closes, which leaves the admin time to reject.
   // Fire-and-forget: a consent that saved must never fail because the
   // automation did. Without this stamp the sweep can never see the record.
-  stampConsentAutoVerifyDeadline(opts.leadId).catch(() => {});
+  // 20 Nov: only when the signature check CONFIRMED a signature — an upload the
+  // check could not read waits for an admin.
+  if (signature.verdict === "signed") {
+    stampConsentAutoVerifyDeadline(opts.leadId).catch(() => {});
+  }
 
-  return { ok: true, fileUrl: signedConsentUrl };
+  return { ok: true, fileUrl: signedConsentUrl, signature };
 }
 
 /** Render the unsigned consent PDF for preview WITHOUT writing any DB row or

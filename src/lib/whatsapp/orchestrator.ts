@@ -4626,20 +4626,31 @@ async function onConsentWait(
       await reply(session, "I couldn't download that file. Please resend it.");
       return;
     }
+    await reply(session, "⏳ Checking the customer's signature on the form…");
     const res = await storeSignedConsent({
       leadId: lead.leadId,
       buffer: media.buffer,
+      mimeType: media.mimeType,
     });
     if (!res.ok) {
-      await reply(session, `Couldn't save the signed consent: ${res.error}. Please resend.`);
+      // 20 Nov: an unsigned form / other document is refused, not stored.
+      await reply(
+        session,
+        res.status === 422
+          ? `❌ ${res.error}`
+          : `Couldn't save the signed consent: ${res.error}. Please resend.`,
+      );
       return;
     }
     await recordWhatsAppKycStep({ session, leadId: lead.leadId, action: "Signed consent uploaded", notify: true });
     await presentSignedConsent(
       session,
       res.fileUrl,
-      "✅ *Signed consent received.*",
+      res.signature.verdict === "signed"
+        ? "✅ *Signed consent received* — customer's signature found."
+        : "✅ *Consent form received.* iTarang will check the customer's signature.",
       media.buffer,
+      media.mimeType,
     );
     return;
   }
@@ -4689,13 +4700,15 @@ async function presentSignedConsent(
   url: string | null,
   headline: string,
   bytes?: Buffer,
+  mimeType?: string,
 ): Promise<void> {
   if (bytes) {
+    const isImage = !!mimeType && mimeType.startsWith("image/");
     await replyDocumentBytes(
       session,
       bytes,
-      "application/pdf",
-      "signed-consent.pdf",
+      isImage ? mimeType! : "application/pdf",
+      isImage ? `signed-consent.${mimeType!.slice(6).split(";")[0] || "jpg"}` : "signed-consent.pdf",
       headline,
     );
   } else if (url) {
