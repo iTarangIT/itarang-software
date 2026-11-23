@@ -124,6 +124,25 @@ export async function GET(
     const requires_supporting_docs =
       SUPPORTING_DOC_STATUSES.has(status) && summary.total > 0;
 
+    // E-394 — extra documents asked for the co-borrower (e.g. an NBFC's
+    // "Approve with conditions" → Co-borrower PAN) must show even when the
+    // lead has no co-borrower KYC flow open (has_co_borrower = false).
+    const cbExtraDocs = await db
+      .select({ upload_status: otherDocumentRequests.upload_status })
+      .from(otherDocumentRequests)
+      .where(
+        and(
+          eq(otherDocumentRequests.lead_id, leadId),
+          eq(otherDocumentRequests.doc_for, "co_borrower"),
+        ),
+      );
+    const co_borrower_extra_docs = {
+      total: cbExtraDocs.length,
+      pending: cbExtraDocs.filter(
+        (d) => !["uploaded", "verified"].includes(d.upload_status ?? ""),
+      ).length,
+    };
+
     const requires_co_borrower =
       CO_BORROWER_STATUSES.has(status) || lead.has_co_borrower === true;
 
@@ -149,6 +168,7 @@ export async function GET(
             }
           : null,
         supporting_docs_summary: summary,
+        co_borrower_extra_docs,
       },
     });
   } catch (error) {

@@ -21,10 +21,10 @@
  * is a short guessable string. The id says WHICH lead; the phone says WHETHER.
  */
 
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 
 import { db } from "@/lib/db/index";
-import { leads } from "@/lib/db/schema";
+import { leadDealerReviews, leads, users, whatsappOperators } from "@/lib/db/schema";
 
 import {
   normalizeMobile,
@@ -138,7 +138,19 @@ export async function handleLeadAction(
   const press = parseLeadAction(event.text);
   if (!press) return false;
 
-  const auth = await authorizeLeadAction(event.waPhone, press.leadId);
+  let auth = await authorizeLeadAction(event.waPhone, press.leadId);
+  // 23 Nov 2026 (Battery Pool) — the iTarang salesperson who sent this file in
+  // may open and ACCEPT its financing offer from their own WhatsApp. Offer
+  // buttons only; every other journey action still needs the dealer or the
+  // customer.
+  let viaInitiator = false;
+  if (!auth.ok && OFFER_ACTIONS.has(press.action)) {
+    const dealer = await initiatorDealerForLead(event.waPhone, press.leadId);
+    if (dealer) {
+      auth = { ok: true, actor: "dealer", dealer };
+      viaInitiator = true;
+    }
+  }
   if (!auth.ok) {
     // One message for every reason — wrong number, wrong lead, lead deleted.
     // Distinguishing them tells whoever is probing which lead ids are real.
@@ -166,6 +178,9 @@ export async function handleLeadAction(
   await mergeContext(session, (ctx) => {
     ctx.lead = { ...(ctx.lead ?? {}), leadId: press.leadId };
     if (auth.actor === "customer") ctx.flow = "customer";
+    // An internal operator's hub runs journey states only in the customer
+    // flow (operator-orchestrator) — same as an operator-started customer KYC.
+    if (viaInitiator && session.session_kind === "operator_hub") ctx.flow = "customer";
   });
 
   // E-278 — the tap itself onto the lead's history stream. This path runs in
@@ -212,6 +227,50 @@ export function registerLeadAction(
 }
 
 // --- helpers ------------------------------------------------------------
+
+/** The journey actions the file's iTarang initiator may take (offer only). */
+export const OFFER_ACTIONS: ReadonlySet<LeadActionKey> = new Set<LeadActionKey>(["of_view", "of_pick"]);
+
+/**
+ * 23 Nov 2026 — is this phone the iTarang salesperson who sent the lead in
+ * (lead_dealer_reviews.initiator_wa_phone, or the initiating login's phone /
+ * WhatsApp operator number)? Returns the lead's dealer to act through, else null.
+ */
+export async function initiatorDealerForLead(
+  waPhone: string,
+  leadId: string,
+): Promise<ActiveDealer | null> {
+  const caller = normalizeMobile(waPhone);
+  if (!caller) return null;
+  const [lead] = await db
+    .select({ dealer_id: leads.dealer_id, uploader_id: leads.uploader_id })
+    .from(leads)
+    .where(eq(leads.id, leadId))
+    .limit(1);
+  if (!lead?.dealer_id) return null;
+  const reviews = await db
+    .select({
+      phone: leadDealerReviews.initiator_wa_phone,
+      userId: leadDealerReviews.initiated_by_user_id,
+    })
+    .from(leadDealerReviews)
+    .where(eq(leadDealerReviews.lead_id, leadId));
+  if (reviews.length === 0) return null;
+  const phones: (string | null)[] = reviews.map((r) => r.phone);
+  const userIds = [...new Set(reviews.map((r) => r.userId).filter((u): u is string => !!u))];
+  if (userIds.length) {
+    const us = await db.select({ phone: users.phone }).from(users).where(inArray(users.id, userIds));
+    phones.push(...us.map((u) => u.phone));
+    const ops = await db
+      .select({ phone: whatsappOperators.wa_phone })
+      .from(whatsappOperators)
+      .where(and(inArray(whatsappOperators.user_id, userIds), eq(whatsappOperators.is_active, true)));
+    phones.push(...ops.map((o) => o.phone));
+  }
+  const match = phones.some((p) => p && normalizeMobile(p) === caller);
+  if (!match) return null;
+  return await dealerForLead(lead.dealer_id, lead.uploader_id);
+}
 
 /**
  * The dealer that owns a lead, as an ActiveDealer. Falls back to the house

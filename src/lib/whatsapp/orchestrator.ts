@@ -15,7 +15,7 @@
 // Decentro / Meta network calls — that would tie up a connection from the small
 // (max 5) pool for seconds. Rapid interleaved uploads are a Phase-2 concern.
 
-import { interceptSubmitForLoanAmount, registerIntakeContinuation } from "./intake-loan-flow";
+import { askLoanBeforeSubmit, interceptSubmitForLoanAmount, registerIntakeContinuation } from "./intake-loan-flow";
 import { and, desc, eq, inArray, ne, notInArray, sql } from "drizzle-orm";
 import { linkOnboardingToLead } from "@/lib/onboarding/linkToLead";
 import { attachOnboardingToLead } from "@/lib/onboarding/leadMatch";
@@ -4903,6 +4903,10 @@ async function afterConsentCaptured(session: SessionRow): Promise<void> {
 
 /** Move to the consent-review step and show the "Submit to iTarang" button. */
 async function promptSubmitToITarang(session: SessionRow): Promise<void> {
+  // 23 Nov 2026 — a finance file's loan amount (and, for an admin / sales
+  // head, the NBFC scheme) is asked BEFORE the Submit button; the intake step
+  // hands back here when done.
+  if (await askLoanBeforeSubmit(session)) return;
   await setSession(session.id, { current_state: "DC_LEAD_CONSENT_REVIEW" });
   await reply(
     session,
@@ -5039,8 +5043,8 @@ async function onConsentReview(
 ): Promise<void> {
   const id = (event.text ?? "").trim().toLowerCase();
   if (id === "consent_send" || /\b(send|submit)\b/.test(id)) {
-    // 23 Nov 2026 — a finance file must carry the loan amount (and, for an
-    // admin / sales head, the NBFC scheme) before it goes to iTarang.
+    // 23 Nov 2026 — safety net: a finance file never goes in without the
+    // loan amount (normally asked before the button was shown).
     if (await interceptSubmitForLoanAmount(session)) return;
     return await finalizeLead(session);
   }
@@ -6155,8 +6159,8 @@ registerExtraDocsContinuation(async (session, dealer, next, leadId) => {
   await promptSubmitToITarang(session);
 });
 
-// 23 Nov 2026 — the loan-amount / scheme step hands back to the real submit.
-registerIntakeContinuation((session) => finalizeLead(session));
+// 23 Nov 2026 — the loan-amount / scheme step hands back to the Submit button.
+registerIntakeContinuation((session) => promptSubmitToITarang(session));
 
 async function finalizeLead(session: SessionRow): Promise<void> {
   // Terminal step for a Hot + finance lead: documents collected, consent signed.

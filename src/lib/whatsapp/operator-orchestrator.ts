@@ -71,6 +71,8 @@ import {
 } from "@/lib/leads/pushToDealer";
 import { resolveWhatsAppDealer } from "./dealer-identity";
 import { getAdapter } from "./index";
+import { parseLeadAction } from "./leadActionButton";
+import { OFFER_ACTIONS, handleLeadAction } from "./leadActionReply";
 import type { WhatsAppOperator } from "./operator-identity";
 import { toWaPhone } from "./operator-identity";
 import {
@@ -205,6 +207,15 @@ async function runOperatorTurnInner(
     // message. Works from any state: it answers that message, not the menu.
     const fix = parseDealerFixRowId(text);
     if (fix) return await onDealerFix(hub, operator, fix);
+
+    // 23 Nov 2026 (Battery Pool) — "View offers" / "Accept offer" on a file
+    // this salesperson sent in. Works from any state; handleLeadAction checks
+    // the number is the file's initiator and moves the hub into the offer step.
+    const press = parseLeadAction(text);
+    if (press && OFFER_ACTIONS.has(press.action)) {
+      await handleLeadAction(hub, event);
+      return;
+    }
 
     // The operator is browsing their OWN dealer console (only possible when
     // their number is also an approved dealer). Hand the message straight over,
