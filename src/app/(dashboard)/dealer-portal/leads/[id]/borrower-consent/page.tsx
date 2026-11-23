@@ -1464,12 +1464,12 @@ export default function BorrowerConsentPage() {
                                 </div>
                             </div>
                         ) : (
-                            /* ── Choose Consent Path: Digital (OTP via call) + Manual ── */
+                            /* ── Choose Consent Path: Digital (OTP via SMS / call) + Manual ── */
                             <div className="space-y-4">
                                 <p className="text-sm text-gray-500">Choose one method to obtain co-borrower consent.</p>
 
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    {/* Digital Consent Card — OTP via call */}
+                                    {/* Digital Consent Card — OTP via SMS (call fallback) */}
                                     <div className="relative p-5 rounded-2xl border-2 border-gray-200 bg-white">
                                         <div className="flex items-start gap-3 mb-3">
                                             <div className="w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center flex-shrink-0">
@@ -1477,7 +1477,7 @@ export default function BorrowerConsentPage() {
                                             </div>
                                             <div>
                                                 <h4 className="text-sm font-bold text-gray-900">Digital Consent (OTP)</h4>
-                                                <p className="text-xs text-gray-500 mt-0.5">Verify the co-borrower with a 6-digit OTP delivered by an automated call.</p>
+                                                <p className="text-xs text-gray-500 mt-0.5">Verify the co-borrower with a 6-digit OTP delivered by SMS (or an automated call).</p>
                                             </div>
                                         </div>
                                         <ConsentOtpCard
