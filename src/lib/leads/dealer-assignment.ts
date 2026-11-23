@@ -174,6 +174,22 @@ export async function openDealerReview(opts: {
 }): Promise<{ id: string } | null> {
   try {
     const now = new Date();
+    // 23 Nov: name the salesperson by their CRM login (users.name) — the
+    // person who owns the dealers. A WhatsApp operator's display_name is an
+    // admin-typed label on the hub number and need not be the person's name.
+    let initiatorName = opts.initiator.name;
+    if (opts.initiator.userId) {
+      try {
+        const [u] = await db
+          .select({ name: users.name })
+          .from(users)
+          .where(eq(users.id, opts.initiator.userId))
+          .limit(1);
+        if (u?.name?.trim()) initiatorName = u.name.trim();
+      } catch {
+        /* keep the name we were given */
+      }
+    }
     const id = await db.transaction(async (tx) => {
       // A re-push / re-pick replaces any check still open on this lead.
       await tx
@@ -189,7 +205,7 @@ export async function openDealerReview(opts: {
           candidates: (opts.candidates ?? []).slice(0, 50),
           channel: opts.channel,
           initiated_by_user_id: opts.initiator.userId,
-          initiated_by_name: opts.initiator.name,
+          initiated_by_name: initiatorName,
           initiator_wa_phone: opts.initiator.waPhone ?? null,
           status: "pending",
           created_at: now,
@@ -203,7 +219,7 @@ export async function openDealerReview(opts: {
       return row.id;
     });
 
-    void notifyHouseOfDealerCheck(opts.leadId, opts.dealerId, opts.reasonKind, opts.initiator.name);
+    void notifyHouseOfDealerCheck(opts.leadId, opts.dealerId, opts.reasonKind, initiatorName);
     // 23 Nov (point 4): email + WhatsApp with an act-on-it link to the alert list.
     void (async () => {
       const { noticeDealerCheckOpened } = await import("./dealer-check-notify");
@@ -213,7 +229,8 @@ export async function openDealerReview(opts: {
         leadId: opts.leadId,
         dealerName: names.get(opts.dealerId) ?? opts.dealerId,
         reasonLabel: dealerCheckKindLabel(opts.reasonKind),
-        initiatorName: opts.initiator.name,
+        reasonKind: opts.reasonKind,
+        initiatorName,
       });
     })().catch((err) => console.warn("[dealer-assignment] alert notice failed", err));
     return { id };

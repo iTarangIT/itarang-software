@@ -91,10 +91,8 @@ async function onCashName(
 
   // Both columns: `full_name` is what the sale and the warranty read,
   // `owner_name` is what several lead list views fall back to.
-  await db
-    .update(leads)
-    .set({ full_name: name, owner_name: name, updated_at: new Date() })
-    .where(eq(leads.id, leadId));
+  const { setCustomerLeadName } = await import("./customer-name");
+  await setCustomerLeadName(leadId, name);
   // ID 201 (28 Oct gap 1): cash-sale details given on WhatsApp, in the KYC history.
   await recordWhatsAppKycStep({ session, leadId, action: "Entered the customer's name (cash sale)" });
 

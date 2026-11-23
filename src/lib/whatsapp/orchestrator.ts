@@ -6021,14 +6021,8 @@ async function fillCustomerLeadFromDoc(
   // overwriting the "Customer" placeholder set at lead creation.
   const extractedName = str(fields.name);
   if (extractedName && (docType === "aadhaar_front" || docType === "pan_card")) {
-    await db
-      .update(leads)
-      .set({
-        full_name: extractedName,
-        owner_name: extractedName,
-        updated_at: new Date(),
-      })
-      .where(eq(leads.id, leadId));
+    const { setCustomerLeadName } = await import("./customer-name");
+    await setCustomerLeadName(leadId, extractedName);
   }
 
   // RC copy → the lead's vehicle registration number.
