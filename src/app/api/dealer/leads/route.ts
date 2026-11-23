@@ -1,5 +1,6 @@
 
 import { createClient } from '@/lib/supabase/server';
+import { visibleToDealerSql } from "@/lib/leads/dealer-check-visibility";
 import { maskAadhaarDeep } from '@/lib/kyc/aadhaarMask';
 import { withErrorHandler, successResponse, errorResponse, generateId } from '@/lib/api-utils';
 import { z } from 'zod';
@@ -256,6 +257,9 @@ export const GET = withErrorHandler(async (req: Request) => {
                 // E-285 — the dealer deleted it from THIS dashboard. The
                 // application itself may still be live with the admin and lender.
                 isNull(leads.deleted_by_dealer_at),
+                // 23 Nov — not shown to the dealer until iTarang House approves
+                // the dealer check (the house still sees it via sentOutIds).
+                visibleToDealerSql(),
             ),
             ...(sentOutIds.length ? [and(inArray(leads.id, sentOutIds), ne(leads.dealer_id, dealer_id))] : []),
         )!,

@@ -1,4 +1,5 @@
 import { withErrorHandler, successResponse, errorResponse } from '@/lib/api-utils';
+import { visibleToDealerSql } from "@/lib/leads/dealer-check-visibility";
 import { db } from '@/lib/db';
 import { leads, dealerOnboardingApplications, productSelections } from '@/lib/db/schema';
 import { and, desc, eq, ilike, isNull, or } from 'drizzle-orm';
@@ -33,6 +34,8 @@ export const GET = withErrorHandler(async (req: Request) => {
         eq(leads.kyc_status, 'draft'),
         // E-285 — deleted from the dealer's dashboard; don't resurface it here.
         isNull(leads.deleted_by_dealer_at),
+        // 23 Nov — hidden until iTarang House approves the dealer check.
+        visibleToDealerSql(),
     ];
     if (search) {
         kycConditions.push(
@@ -94,6 +97,7 @@ export const GET = withErrorHandler(async (req: Request) => {
             and(
                 eq(leads.dealer_id, dealer_id),
                 isNull(leads.deleted_by_dealer_at),
+                visibleToDealerSql(),
                 eq(productSelections.admin_decision, 'draft'),
                 ...(search
                     ? [

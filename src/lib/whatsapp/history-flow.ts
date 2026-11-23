@@ -22,6 +22,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db/index";
 import { doneByHistoryText, mergeTimeline } from "@/lib/leads/actForDealer";
 import { dealerSalespersons, leads } from "@/lib/db/schema";
+import { visibleToDealerSql } from "@/lib/leads/dealer-check-visibility";
 
 import {
   listTeamLeads,
@@ -269,7 +270,7 @@ export async function leadHistoryCard(
     .leftJoin(dealerSalespersons, eq(dealerSalespersons.id, leads.salesperson_id))
     // Scoped to the asking dealer — the row id (`hl:<leadId>`) arrives as free
     // text, so a typed foreign lead id must not read another dealer's history.
-    .where(and(eq(leads.id, leadId), eq(leads.dealer_id, dealer.dealerCode)))
+    .where(and(eq(leads.id, leadId), eq(leads.dealer_id, dealer.dealerCode), visibleToDealerSql()))
     .limit(1);
   if (!row) return null;
 

@@ -18,6 +18,7 @@ import { and, desc, eq, inArray, isNotNull, isNull, ne, notInArray, or, sql } fr
 import { generateId } from "@/lib/api-utils";
 import { db } from "@/lib/db/index";
 import { nextReference } from "@/lib/leads/draftService";
+import { visibleToDealerSql } from "@/lib/leads/dealer-check-visibility";
 // E-278 — best-effort history stream; both imports swallow their own errors.
 import { actorOf, recordLeadFlowEvent } from "./lead-events";
 import { notifyLeadCreated } from "@/lib/notifications/events";
@@ -559,6 +560,10 @@ export async function listDealerDrafts(
   // E-277 — when a SALESPERSON is driving the console, narrow to leads they
   // created. The dealer passes undefined and sees the whole dealership.
   salespersonId?: string,
+  // 23 Nov — hide files waiting for the iTarang House dealer check. True for
+  // the real dealer; false when an iTarang operator drives this dealer's
+  // console (they made the file and must be able to finish it).
+  hideDealerCheckHolds = false,
 ): Promise<DealerDraft[]> {
   // Lead ids already submitted for KYC review — excluded from the draft list.
   const submitted = await db
@@ -588,6 +593,7 @@ export async function listDealerDrafts(
   if (salespersonId) {
     conds.push(eq(leads.salesperson_id, salespersonId));
   }
+  if (hideDealerCheckHolds) conds.push(visibleToDealerSql());
   if (submittedIds.length) {
     // notInArray → `leads.id not in ($1, …)`. (A hand-rolled `sql\`... <> all()\``
     // splats the JS array into a tuple `all(($1,$2,…))`, which Postgres rejects
@@ -738,6 +744,8 @@ export async function listTeamLeads(
     eq(leads.dealer_id, dealerCode),
     // ID 33 — History (includeOwn) also shows web leads iTarang pushed here.
     inConsoleScope(),
+    // 23 Nov — not until iTarang House approves this dealer (dealer-only list).
+    visibleToDealerSql(),
   ];
   if (!opts.includeOwn) conds.push(isNotNull(leads.salesperson_id));
 

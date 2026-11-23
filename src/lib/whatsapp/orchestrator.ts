@@ -3758,6 +3758,9 @@ async function listAllDrafts(
     dealer.dealerCode,
     10,
     actorScope(dealer),
+    // 23 Nov — the real dealer does not see files still in the dealer check;
+    // an iTarang operator driving this console does (they are finishing it).
+    !dealer.pushedBy,
   );
   const seen = new Set(drafts.map((d) => d.leadId));
   const fresh = await loadSession(session.id);
