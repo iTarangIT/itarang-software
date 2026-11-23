@@ -51,7 +51,7 @@ import { selectOfferWinner } from "@/lib/leads/select-winner";
 import type { ActiveDealer } from "./customer-lead";
 import { leadActionId } from "./leadActionButton";
 import { registerLeadAction } from "./leadActionReply";
-import { pushToLead, pushToLeadAndInitiator, type LeadPushTarget } from "./lead-push";
+import { pushToLead, pushToLeadAndInitiator, type LeadMessage, type LeadPushTarget } from "./lead-push";
 import { registerLeadState } from "./lead-states";
 import { labelFor, schemeLabelsForLead } from "./scheme-name";
 import {
@@ -157,7 +157,7 @@ export async function pushOfferToWhatsApp(
 
   // 23 Nov 2026 — the iTarang salesperson who sent the file in also gets the
   // offer, with a one-tap Accept (of_pick) — see initiatorDealerForLead.
-  const initiatorMsg = (t: LeadPushTarget) => ({
+  const initiatorMsg = (t: LeadPushTarget): LeadMessage => ({
     prompt: {
       kind: "text" as const,
       body:
