@@ -57,7 +57,11 @@ export function readDealerCheckToken(token: string | null | undefined): { review
   return { reviewId: m[1], userId: m[2] };
 }
 
+export function appBaseUrl(): string {
+  return (process.env.APP_URL || process.env.NEXT_PUBLIC_APP_URL || "https://crm.itarang.com").replace(/\/+$/, "");
+}
+
 export function dealerCheckActionUrl(token: string): string {
-  const base = (process.env.APP_URL || process.env.NEXT_PUBLIC_APP_URL || "https://crm.itarang.com").replace(/\/+$/, "");
+  const base = appBaseUrl();
   return `${base}/dealer-check-action/${encodeURIComponent(token)}`;
 }

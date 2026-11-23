@@ -13,6 +13,7 @@ type Recipient = {
   emailOn: boolean;
   whatsappOn: boolean;
 };
+type SendResult = { ok: boolean; error: string | null };
 type Person = { id: string; name: string; email: string | null; phone: string | null; role: string | null };
 
 const ROLE_LABEL: Record<string, string> = {
@@ -60,6 +61,41 @@ export default function DealerCheckAlertsForm() {
 
   function patch(i: number, change: Partial<Recipient>) {
     setRows((cur) => (cur ? cur.map((r, j) => (j === i ? { ...r, ...change } : r)) : cur));
+  }
+
+  // "Send test" — one sample alert to this row, as typed (works before Save).
+  const [testing, setTesting] = useState<string | null>(null);
+  async function sendTest(r: Recipient) {
+    setTesting(r.userId);
+    try {
+      const res = await fetch("/api/admin/settings/dealer-check/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(r),
+      });
+      const j = await res.json().catch(() => null);
+      if (!j?.success) throw new Error(j?.error?.message || "Could not send the test");
+      const d = j.data as { email: SendResult | null; whatsapp: SendResult | null };
+      const parts: string[] = [];
+      let allOk = true;
+      if (d.email) {
+        parts.push(d.email.ok ? `Email sent to ${r.email}` : `Email failed: ${d.email.error}`);
+        allOk &&= d.email.ok;
+      }
+      if (d.whatsapp) {
+        parts.push(
+          d.whatsapp.ok
+            ? `WhatsApp sent to ${r.whatsapp}`
+            : `WhatsApp not delivered (${d.whatsapp.error}) — the number must have messaged the iTarang WhatsApp in the last 24 hours`,
+        );
+        allOk &&= d.whatsapp.ok;
+      }
+      (allOk ? toast.success : toast.error)(`Test to ${r.name}: ${parts.join(" · ")}`, { duration: 8000 });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not send the test");
+    } finally {
+      setTesting(null);
+    }
   }
 
   async function save() {
@@ -127,7 +163,13 @@ export default function DealerCheckAlertsForm() {
                       className="w-36 rounded border border-gray-300 px-2 py-1" />
                   </label>
                 </td>
-                <td className="px-3 py-2 text-right">
+                <td className="px-3 py-2 text-right whitespace-nowrap">
+                  <button type="button" disabled={testing !== null || (!(r.emailOn && r.email) && !(r.whatsappOn && r.whatsapp))}
+                    onClick={() => sendTest(r)}
+                    title="Send this person a sample dealer-check alert by the ticked channels"
+                    className="mr-3 rounded border border-[#0047AB] px-2 py-1 text-xs font-semibold text-[#0047AB] disabled:opacity-40">
+                    {testing === r.userId ? "Sending…" : "Send test"}
+                  </button>
                   <button type="button" className="text-xs font-semibold text-red-600"
                     onClick={() => setRows(rows.filter((_, j) => j !== i))}>
                     Remove
