@@ -293,7 +293,7 @@ export async function decideCibilReview(opts: {
   decision: "approve" | "approve_with_conditions" | "reject";
   reason: string | null;
   conditions?: string | null;
-  /** E-393 — keys from condition-docs.ts picked in the multi-select. */
+  /** E-394 — keys from condition-docs.ts picked in the multi-select. */
   conditionDocs?: string[] | null;
   req?: Request;
 }) {
@@ -349,7 +349,7 @@ export async function decideCibilReview(opts: {
     created_at: now,
   });
 
-  // E-393 — the picked documents go out as an additional-documents request
+  // E-394 — the picked documents go out as an additional-documents request
   // (one per party) through the normal NBFC → admin → dealer / salesperson
   // loop, linked to this review so the panel lists them and the approver is
   // told when they come back. The approval itself is not held on them.

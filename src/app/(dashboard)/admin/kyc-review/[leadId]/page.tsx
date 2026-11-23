@@ -33,7 +33,7 @@ export default async function CaseReviewPage({
       {/* 23 Nov 2026 — NBFC rejected the file: resume it after corrected
           documents (same dealer, or a new case for another dealer). */}
       <ResumeRejectedPanel leadId={leadId} />
-      {/* E-393 — admin / sales head choose the NBFC scheme before the file goes out. */}
+      {/* E-394 — admin / sales head choose the NBFC scheme before the file goes out. */}
       <SchemePickCard leadId={leadId} />
       {/* ID 33: Push to dealer (Admin / Sales Head) + push history. */}
       <PushToDealerPanel leadId={leadId} />

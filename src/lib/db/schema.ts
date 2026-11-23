@@ -4911,7 +4911,7 @@ export const nbfcCibilReviews = pgTable(
     decision_reason: text("decision_reason"),
     // E-389 — "Approve with conditions": the conditions the parent recorded.
     conditions: text("conditions"),
-    // E-393 — documents the approval is conditional on (keys of
+    // E-394 — documents the approval is conditional on (keys of
     // src/lib/nbfc/condition-docs.ts), picked from a multi-select.
     condition_docs: jsonb("condition_docs").$type<string[]>().default([]).notNull(),
     decided_by: uuid("decided_by"),
@@ -14221,11 +14221,11 @@ export const kycDocumentSkips = pgTable(
   }),
 );
 
-// E-393 (23 Nov 2026, Battery Pool) — the iTarang admin / sales head picks the
+// E-394 (23 Nov 2026, Battery Pool) — the iTarang admin / sales head picks the
 // NBFC scheme (lender + loan product) before the file is submitted. One row per
 // lead (latest pick wins). resolveRoutingTarget() uses it before the routing
 // rules while the product still passes the BRE. A separate table, not leads
-// columns, so lead INSERTs keep working on a DB that has not run E-393 yet.
+// columns, so lead INSERTs keep working on a DB that has not run E-394 yet.
 export const leadSchemePicks = pgTable("lead_scheme_picks", {
   lead_id: varchar("lead_id", { length: 255 }).primaryKey().notNull(),
   nbfc_id: integer("nbfc_id").notNull(),
@@ -14236,7 +14236,7 @@ export const leadSchemePicks = pgTable("lead_scheme_picks", {
   picked_at: timestamp("picked_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
-// E-393 — resume a file an NBFC rejected once the customer sends corrected
+// E-394 — resume a file an NBFC rejected once the customer sends corrected
 // documents. Same dealer → the old lead is re-opened (new_lead_id = old);
 // another dealer → a NEW lead (new case) is created for that dealer and the
 // rejected one stays as it was, linked here as history.
@@ -14262,3 +14262,6 @@ export const leadResumes = pgTable(
     newIdx: index("lead_resumes_new_lead_idx").on(t.new_lead_id),
   }),
 );
+
+// E-393 — LinkedIn Outreach tables (own file, see schema-linkedin.ts).
+export * from "./schema-linkedin";

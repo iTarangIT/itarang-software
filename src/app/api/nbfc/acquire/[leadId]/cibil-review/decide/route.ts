@@ -1,7 +1,7 @@
 /**
  * POST /api/nbfc/acquire/[leadId]/cibil-review/decide
  *   body { decision: "approve" | "approve_with_conditions" | "reject", reason?: string, conditions?: string,
- *          condition_docs?: string[] (E-393 — documents the approval depends on) }
+ *          condition_docs?: string[] (E-394 — documents the approval depends on) }
  *
  * E-387 — the parent (or another NBFC admin, never the submitter) approves or
  * rejects the pending CIBIL report. Reject needs a reason and closes the file
@@ -31,7 +31,7 @@ const Body = z.object({
   decision: z.enum(["approve", "approve_with_conditions", "reject"]),
   reason: z.string().trim().max(2000).optional().nullable(),
   conditions: z.string().trim().max(2000).optional().nullable(),
-  // E-393 — documents the approval is conditional on (multi-select keys).
+  // E-394 — documents the approval is conditional on (multi-select keys).
   condition_docs: z.array(z.string().max(64)).max(30).optional().nullable(),
 });
 

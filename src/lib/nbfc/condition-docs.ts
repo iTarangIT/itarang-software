@@ -1,5 +1,5 @@
 /**
- * E-393 — "Approve with conditions" document list (Battery Pool, 23 Nov 2026).
+ * E-394 — "Approve with conditions" document list (Battery Pool, 23 Nov 2026).
  *
  * The CIBIL approver picks, from a multi-select, the documents the approval is
  * conditional on (RC, co-borrower papers …). Pure + client-safe: the panel

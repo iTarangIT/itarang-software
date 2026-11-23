@@ -90,7 +90,7 @@ async function categoryName(raw: string | null): Promise<string | null> {
 export type RoutingTarget =
   | {
       ok: true;
-      /** null when the target is the sales head's scheme pick (E-393), not a rule. */
+      /** null when the target is the sales head's scheme pick (E-394), not a rule. */
       rule: RoutingRuleRow | null;
       source: "rule" | "scheme_pick";
       nbfcId: number;
@@ -107,7 +107,7 @@ export function describeRoutingSource(t: { rule: RoutingRuleRow | null; scope: s
 }
 
 /**
- * E-393 — the iTarang admin / sales head picked the NBFC scheme before the
+ * E-394 — the iTarang admin / sales head picked the NBFC scheme before the
  * file was submitted. It wins over the routing rules while its product still
  * passes the BRE for this lead; otherwise the rules decide as before.
  */
@@ -146,7 +146,7 @@ async function resolveSchemePick(
 
 /**
  * Which NBFC this lead goes to, after the BRE check: the sales head's scheme
- * pick (E-393) when it still fits, else the most specific routing rule. Read-only.
+ * pick (E-394) when it still fits, else the most specific routing rule. Read-only.
  */
 export async function resolveRoutingTarget(leadId: string): Promise<RoutingTarget> {
   const lead = await leadRow(leadId);

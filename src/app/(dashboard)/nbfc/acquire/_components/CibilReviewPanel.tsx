@@ -25,7 +25,7 @@ type Review = {
   decision_reason: string | null;
   /** E-389 — set when approved with conditions. */
   conditions: string | null;
-  /** E-393 — documents picked in the conditions multi-select. */
+  /** E-394 — documents picked in the conditions multi-select. */
   condition_docs?: string[];
   /** E-389 — document requests the approver raised from this review. */
   doc_requests: Array<{
@@ -546,7 +546,7 @@ export default function CibilReviewPanel({ leadId, closed }: { leadId: string; c
             </>
           ) : withConditions ? (
             <div className="w-full space-y-2">
-              {/* E-393 — multi-select of the documents the approval depends on.
+              {/* E-394 — multi-select of the documents the approval depends on.
                   They go out as a document request to the dealer / salesperson. */}
               <div className="relative">
                 <label className="block text-[11px] font-semibold text-slate-600 mb-1">Documents required (pick one or more)</label>

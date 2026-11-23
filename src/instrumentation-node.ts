@@ -2384,3 +2384,49 @@ export async function startDigilockerExpiryTicker() {
 
   console.log("[instrumentation] digilocker-expiry (15m) started in-process");
 }
+
+/**
+ * E-393 — LinkedIn Outreach (tasks/linkedin-outreach-dev-plan.md). One 60s tick
+ * runs the three jobs the plan put on BullMQ queues (li-search, li-poll,
+ * li-send): BullMQ is dead code on the pm2 boxes, so like every other worker
+ * here this is an in-process ticker. Pacing lives in the data (caps counted
+ * from li_action_log, a random gap from the last send, FOR UPDATE SKIP LOCKED
+ * claims), so the tick rate does not change how fast anything is sent.
+ * Sends happen only on the live CRM or with LI_ALLOW_SENDS=1 / ALLOW_JOB_SENDS=1.
+ * Twin: /api/cron/linkedin/tick.
+ */
+export async function startLinkedInTicker() {
+  if (process.env.VERCEL === "1") return;
+  if (process.env.ENABLE_LI_WORKER === "0") return;
+
+  const TICK_INTERVAL_MS = Number(process.env.LI_TICK_INTERVAL_MS || "") || 60_000;
+  let inFlight = false;
+
+  const tick = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const { runLinkedInTick } = await import("@/lib/linkedin/workers/searchTick");
+      const r = await runLinkedInTick();
+      if (r.send.sent || r.send.refused || r.poll.polled || r.search.started || r.search.refreshed) {
+        console.log(
+          `[instrumentation:linkedin] sent ${r.send.sent}, refused ${r.send.refused}, polled ${r.poll.polled}, ` +
+            `search started ${r.search.started} / refreshed ${r.search.refreshed}`,
+        );
+      }
+    } catch (err) {
+      // Most likely a database without E-393 — every tick throws "relation li_accounts does not exist".
+      console.error("[instrumentation:linkedin] tick failed:", err instanceof Error ? err.message : err);
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  const kickoff = setTimeout(trackTick(tick), 300_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+
+  const interval = setInterval(trackTick(tick), TICK_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log(`[instrumentation] linkedin outreach (${Math.round(TICK_INTERVAL_MS / 1000)}s) started in-process`);
+}

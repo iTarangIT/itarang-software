@@ -7,7 +7,7 @@ import {
   normaliseConditionDocs,
 } from "../condition-docs";
 
-describe("condition docs (E-393)", () => {
+describe("condition docs (E-394)", () => {
   it("keeps only known keys, de-duplicated, in catalogue order", () => {
     expect(normaliseConditionDocs(["cb_pan", "rc_copy", "nope", "rc_copy", 5])).toEqual(["rc_copy", "cb_pan"]);
     expect(normaliseConditionDocs("rc_copy")).toEqual([]);

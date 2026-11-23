@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * E-393 (23 Nov 2026, Battery Pool) — "sales_head can choose the NBFC scheme
+ * E-394 (23 Nov 2026, Battery Pool) — "sales_head can choose the NBFC scheme
  * before submitting the lead". Admin / sales head pick the lender + loan
  * product; the file goes there when Step 4 opens (beats the routing rules
  * while the BRE allows it). Renders nothing when the API refuses (other roles).

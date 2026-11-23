@@ -1,5 +1,5 @@
 /**
- * E-393 (23 Nov 2026, Battery Pool) — the iTarang admin / sales head chooses
+ * E-394 (23 Nov 2026, Battery Pool) — the iTarang admin / sales head chooses
  * the NBFC scheme (lender + loan product) BEFORE the lead is submitted, on
  * WhatsApp or on the web. Stored in lead_scheme_picks; resolveRoutingTarget()
  * (nbfc-routing.ts) prefers it over the routing rules while the product still

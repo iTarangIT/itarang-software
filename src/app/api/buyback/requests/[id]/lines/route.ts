@@ -25,18 +25,21 @@ import {
 } from "@/lib/db/schema";
 import { loadOwnRequest, requireDealer } from "@/lib/buyback/auth";
 import { NotFoundError, ValidationError } from "@/lib/buyback/errors";
-import { lineSpecSchema, specColumnsFromBody } from "@/lib/buyback/line-spec";
+import {
+  UNIT_INSERT_CHUNK,
+  lineSpecSchema,
+  quantitySchema,
+  specColumnsFromBody,
+} from "@/lib/buyback/line-spec";
 import { loadDealForUpdate } from "@/lib/buyback/transition";
 
 export const runtime = "nodejs";
 
-/** A sane ceiling: the intake UI only renders 20 unit chips before collapsing. */
-const MAX_QTY_PER_LINE = 500;
-
 const bodySchema = z
   .object({
     variant_id: z.string().uuid(),
-    quantity: z.number().int().min(1).max(MAX_QTY_PER_LINE),
+    // Ceiling shared with the PATCH route and the intake form (line-spec.ts).
+    quantity: quantitySchema,
     condition: z.enum(["WORKING", "DEAD"]),
     /** Dealer-editable. Defaults to the catalog estimate for the chosen condition. */
     expected_price_per_unit: z.number().nonnegative().nullish(),
@@ -104,13 +107,18 @@ export const POST = withErrorHandler(
         })
         .returning();
 
-      // qty N → Unit 1..N, right now, in this transaction.
-      await tx.insert(buybackUnits).values(
-        Array.from({ length: body.quantity }, (_, i) => ({
-          line_id: row.id,
-          unit_no: i + 1,
-        })),
-      );
+      // qty N → Unit 1..N, right now, in this transaction. Chunked: a lot of
+      // thousands of cells is one line, and one giant INSERT would approach
+      // postgres's bind-parameter limit.
+      for (let start = 0; start < body.quantity; start += UNIT_INSERT_CHUNK) {
+        const end = Math.min(start + UNIT_INSERT_CHUNK, body.quantity);
+        await tx.insert(buybackUnits).values(
+          Array.from({ length: end - start }, (_, i) => ({
+            line_id: row.id,
+            unit_no: start + i + 1,
+          })),
+        );
+      }
 
       return row;
     });

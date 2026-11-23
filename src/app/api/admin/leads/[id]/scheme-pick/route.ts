@@ -1,5 +1,5 @@
 /**
- * GET/POST /api/admin/leads/[id]/scheme-pick — E-393 (23 Nov 2026, Battery Pool).
+ * GET/POST /api/admin/leads/[id]/scheme-pick — E-394 (23 Nov 2026, Battery Pool).
  *
  * The iTarang admin / sales head chooses the NBFC scheme (lender + loan
  * product) before the lead goes to a lender. The pick beats the NBFC routing
@@ -68,7 +68,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    // A DB without E-393 has no lead_scheme_picks table.
+    // A DB without E-394 has no lead_scheme_picks table.
     return NextResponse.json({ ok: false, error: msg }, { status: 500 });
   }
 }

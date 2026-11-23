@@ -1,4 +1,4 @@
--- E-393 — Battery Pool / NBFC workflow changes (23 Nov 2026).
+-- E-394 (was E-393 until 23 Nov merge; main took E-393 for LinkedIn) — Battery Pool / NBFC workflow changes (23 Nov 2026).
 --
 -- 1. nbfc_cibil_reviews.condition_docs — "Approve with conditions" now carries
 --    a multi-select of the documents the approval depends on (RC copy,

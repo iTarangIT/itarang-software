@@ -1,4 +1,4 @@
-// One-off: apply E-393 (Battery Pool workflow, 23 Nov 2026) to
+// One-off: apply E-393 (LinkedIn Outreach tables) to
 // database-1 (sandbox) or database-2 (prod).
 //
 //   node scripts/_apply-e393.mjs database-1
@@ -20,7 +20,7 @@ if (!host.startsWith(`${target}.`)) throw new Error(`host mismatch: ${host}`);
 console.log("target:", host.split(".")[0]);
 
 const opts = { max: 1, prepare: false, ssl: { rejectUnauthorized: false } };
-const file = readFileSync("drizzle/E-393_battery_pool_workflow_23nov.sql", "utf8");
+const file = readFileSync("drizzle/E-393_linkedin_outreach.sql", "utf8");
 const sql = postgres(url, { ...opts, onnotice: (n) => console.log("notice:", n.message) });
 try {
   for (const pass of [1, 2]) {
@@ -31,16 +31,40 @@ try {
   await sql.end();
 }
 
+const TABLES = [
+  "li_provider_credentials",
+  "li_accounts",
+  "li_settings",
+  "li_search_runs",
+  "li_prospects",
+  "li_search_results",
+  "li_attachments",
+  "li_campaigns",
+  "li_approvals",
+  "li_campaign_prospects",
+  "li_conversations",
+  "li_messages",
+  "li_outbox",
+  "li_action_log",
+];
+const INDEXES = [
+  "li_prospects_profile_uniq",
+  "li_prospects_url_uniq",
+  "li_approvals_live_uniq",
+  "li_campaign_prospects_one_live_uniq",
+  "li_messages_provider_uniq",
+  "li_action_log_caps_idx",
+];
+
 const check = postgres(url, opts);
 try {
-  const [r] = await check`
-    SELECT to_regclass('public.lead_scheme_picks')::text AS scheme_picks,
-           to_regclass('public.lead_resumes')::text AS resumes,
-           to_regclass('public.lead_resumes_old_lead_idx')::text AS resumes_idx,
-           (SELECT count(*)::int FROM information_schema.columns
-             WHERE table_name = 'nbfc_cibil_reviews' AND column_name = 'condition_docs') AS condition_docs`;
-  console.log(r);
-  if (!r.scheme_picks || !r.resumes || !r.resumes_idx || r.condition_docs !== 1) process.exitCode = 1;
+  const missing = [];
+  for (const name of [...TABLES, ...INDEXES]) {
+    const [r] = await check`SELECT to_regclass(${"public." + name})::text AS t`;
+    if (!r.t) missing.push(name);
+  }
+  console.log(missing.length ? { missing } : `all ${TABLES.length} tables + ${INDEXES.length} indexes present`);
+  if (missing.length) process.exitCode = 1;
 } finally {
   await check.end();
 }

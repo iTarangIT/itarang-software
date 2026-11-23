@@ -62,7 +62,7 @@ export interface CibilReviewRow {
   note: string;
   decision_reason: string | null;
   conditions: string | null;
-  /** E-393 — condition-docs.ts keys. */
+  /** E-394 — condition-docs.ts keys. */
   condition_docs: string[];
   decided_by: string | null;
   decided_at: Date | null;

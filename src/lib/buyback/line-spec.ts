@@ -21,8 +21,29 @@ export const FORM_FACTORS = ["CELL", "PRISMATIC", "CYLINDRICAL"] as const;
 export type Chemistry = (typeof CHEMISTRIES)[number];
 export type FormFactor = (typeof FORM_FACTORS)[number];
 
-/** Matches MAX_QTY_PER_LINE in the line routes — the split cannot exceed it. */
-const MAX_SPLIT_QTY = 500;
+/**
+ * The most units one battery line may hold. Shared by both line routes, the
+ * functional/non-functional split below, and the intake form's Qty guard.
+ *
+ * Was 500, held in three separate copies. A dealer selling a lot of 2,714 cells
+ * (BB-1058) had EVERY save of that row rejected with a bare "Validation failed"
+ * — the client sends quantity on every save, so brand, chemistry and weight
+ * were lost too, and the submit gate then complained about the stale server
+ * line. No DB constraint caps quantity (E-185 has only `>= 1`).
+ */
+export const MAX_QTY_PER_LINE = 10_000;
+
+/** Unit rows inserted per statement — keeps far below postgres's 65,535 params. */
+export const UNIT_INSERT_CHUNK = 1_000;
+
+export const quantitySchema = z
+  .number()
+  .int()
+  .min(1, "Quantity must be at least 1.")
+  .max(
+    MAX_QTY_PER_LINE,
+    `Quantity can be at most ${MAX_QTY_PER_LINE.toLocaleString("en-IN")} per line — split the lot or add another line.`,
+  );
 
 /**
  * What an IOT battery's brand is ASSUMED to be when the dealer leaves it blank.
@@ -71,8 +92,8 @@ export const lineSpecSchema = z.object({
   nominal_ampere: z.number().positive().max(10000).nullish(),
   unit_weight_kg: z.number().positive().max(10000).nullish(),
   warranty_cycles: z.number().int().nonnegative().max(100000).nullish(),
-  functional_qty: z.number().int().nonnegative().max(MAX_SPLIT_QTY).nullish(),
-  non_functional_qty: z.number().int().nonnegative().max(MAX_SPLIT_QTY).nullish(),
+  functional_qty: z.number().int().nonnegative().max(MAX_QTY_PER_LINE).nullish(),
+  non_functional_qty: z.number().int().nonnegative().max(MAX_QTY_PER_LINE).nullish(),
   iot_battery: z.boolean().nullish(),
   iot_brand_name: z.string().trim().max(120).nullish(),
 });
