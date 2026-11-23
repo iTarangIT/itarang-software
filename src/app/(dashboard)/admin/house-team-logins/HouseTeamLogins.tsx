@@ -18,6 +18,8 @@ interface Login {
   /** E-390 — the iTarang sales person who uses this login (his owned dealers show at Step 1). */
   staffUserId: string | null;
   staffName: string | null;
+  /** 23 Nov — may approve / change / reject dealer checks (always true for the shared login). */
+  canApprove: boolean;
 }
 
 interface Staff {
@@ -35,7 +37,7 @@ export default function HouseTeamLogins() {
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [saving, setSaving] = useState(false);
-  const [created, setCreated] = useState<{ email: string; temporaryPassword: string } | null>(null);
+  const [created, setCreated] = useState<{ email: string; temporaryPassword: string; emailed: boolean } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -66,7 +68,7 @@ export default function HouseTeamLogins() {
       });
       const json = await res.json();
       if (!json.success) throw new Error(json.error?.message || "Could not create the login");
-      setCreated({ email: json.data.email, temporaryPassword: json.data.temporaryPassword });
+      setCreated({ email: json.data.email, temporaryPassword: json.data.temporaryPassword, emailed: !!json.data.emailed });
       setName("");
       setEmail("");
       setPhone("");
@@ -88,6 +90,20 @@ export default function HouseTeamLogins() {
     const json = await res.json().catch(() => null);
     if (!json?.success) toast.error(json?.error?.message || "Could not change the login");
     else await load();
+  }
+
+  async function setCanApprove(l: Login, canApprove: boolean) {
+    const res = await fetch("/api/admin/house-team-logins", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: l.id, canApprove }),
+    });
+    const json = await res.json().catch(() => null);
+    if (!json?.success) toast.error(json?.error?.message || "Could not change the approval right");
+    else {
+      toast.success(canApprove ? `${l.name} can now approve dealer checks` : `${l.name} can no longer approve`);
+      await load();
+    }
   }
 
   async function setStaffLink(l: Login, staffUserId: string) {
@@ -115,7 +131,9 @@ export default function HouseTeamLogins() {
         </div>
         <p className="text-xs text-gray-500">
           The login is created under the house dealer code {houseCode ?? "…"}. The sign-in works on the sandbox and the live
-          CRM alike (one sign-in pool); the team member must change the password the first time.
+          CRM alike (one sign-in pool); the email and temporary password are emailed to the person, who must change the
+          password the first time. Every step a login takes on a file is recorded under that person&rsquo;s name. Tick
+          &ldquo;Can approve&rdquo; for the people allowed to approve, change or reject a dealer at the dealer check.
         </p>
         <button type="submit" disabled={saving} className="rounded-lg bg-[#0047AB] px-4 py-2 text-sm font-medium text-white disabled:opacity-60">
           {saving ? "Creating…" : "Create login"}
@@ -123,7 +141,11 @@ export default function HouseTeamLogins() {
         {created && (
           <div className="rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
             Temporary password for <b>{created.email}</b>: <code className="font-mono">{created.temporaryPassword}</code>
-            <span className="block text-xs">Shown once — pass it on to the person now.</span>
+            <span className="block text-xs">
+              {created.emailed
+                ? "Also emailed to them with the sign-in link. Shown here once."
+                : "The email could not be sent — pass it on to the person now. Shown once."}
+            </span>
           </div>
         )}
       </form>
@@ -140,6 +162,7 @@ export default function HouseTeamLogins() {
                 <th className="px-4 py-2" title="Step 1 lists the dealers this sales person owns (Account ownership)">
                   Sales person
                 </th>
+                <th className="px-4 py-2" title="May approve, change or reject a dealer at the dealer check">Can approve</th>
                 <th className="px-4 py-2">Since</th>
                 <th className="px-4 py-2">Status</th>
                 <th className="px-4 py-2" />
@@ -168,6 +191,15 @@ export default function HouseTeamLogins() {
                         </option>
                       ))}
                     </select>
+                  </td>
+                  <td className="px-4 py-2">
+                    <input
+                      type="checkbox"
+                      checked={l.canApprove}
+                      disabled={l.shared || !l.isActive}
+                      title={l.shared ? "The shared house login always approves" : "Approve / change / reject dealer checks"}
+                      onChange={(e) => void setCanApprove(l, e.target.checked)}
+                    />
                   </td>
                   <td className="px-4 py-2">{new Date(l.createdAt).toLocaleDateString("en-IN")}</td>
                   <td className="px-4 py-2">{l.isActive ? "Active" : "Off"}</td>

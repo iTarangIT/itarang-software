@@ -10,7 +10,7 @@ import { listDealerReviews, mayDecideDealerChecks, mayViewHouseDealerChecks } fr
 
 export const dynamic = "force-dynamic";
 
-const VIEW_ONLY_ROLES = ["admin", "sales_head"];
+const VIEW_ONLY_ROLES = ["admin", "sales_head", "ceo", "partner"];
 
 export const GET = withErrorHandler(async (req: Request) => {
   const user = await requireAuth();

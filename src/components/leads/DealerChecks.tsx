@@ -59,7 +59,7 @@ export default function DealerChecks({ mode }: { mode: "house" | "admin" }) {
       const json = await res.json();
       if (!json.success) throw new Error(json.error?.message || "Could not load the dealer checks");
       setRows(json.data.rows);
-      setCanDecide(mode === "house" && !!json.data.canDecide);
+      setCanDecide(!!json.data.canDecide);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not load the dealer checks");
@@ -220,8 +220,8 @@ function CheckCard({
         </p>
       ) : !canDecide ? (
         <p className="text-xs text-amber-800">
-          Waiting for iTarang House (dealer@itarang.com) to approve, change or reject the dealer. The file comes to KYC
-          review after that.
+          Waiting for an authorised iTarang House login or a person on the dealer check alert list to approve, change or
+          reject the dealer. The file comes to KYC review after that.
         </p>
       ) : mode === null ? (
         <div className="flex flex-wrap gap-2">

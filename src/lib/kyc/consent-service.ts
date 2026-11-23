@@ -610,7 +610,21 @@ export async function storeSignedConsent(opts: {
 }): Promise<StoreSignedResult> {
   const role = toRole(opts.consentFor);
 
-  const signature = await checkConsentSignature(opts.buffer, opts.mimeType ?? "");
+  // 23 Nov (point 1): the upload must be THIS file's consent form — the printed
+  // lead id / customer name are compared with the file.
+  const owner = await resolveSigner(opts.leadId, role).catch(() => null);
+  const issued = await db
+    .select({ id: consentRecords.id })
+    .from(consentRecords)
+    .where(eq(consentRecords.lead_id, opts.leadId))
+    .catch(() => [] as Array<{ id: string }>);
+  const expected = {
+    leadId: opts.leadId,
+    names: [owner?.signer.name, role === "primary" ? owner?.lead.owner_name : null].filter((n): n is string => !!n && n !== "Customer" && n !== "Co-borrower"),
+    consentIds: issued.map((r) => r.id),
+  };
+
+  const signature = await checkConsentSignature(opts.buffer, opts.mimeType ?? "", expected);
   if (signature.verdict !== "signed" && signature.verdict !== "unknown") {
     return { ok: false, status: 422, error: signature.message ?? "The customer's signature could not be confirmed.", signature };
   }
@@ -683,7 +697,9 @@ export async function storeSignedConsent(opts: {
   // automation did. Without this stamp the sweep can never see the record.
   // 20 Nov: only when the signature check CONFIRMED a signature — an upload the
   // check could not read waits for an admin.
-  if (signature.verdict === "signed") {
+  // 23 Nov (point 1): and only when the form was confirmed to be THIS file's —
+  // an unconfirmed one waits for an admin to check whose consent it is.
+  if (signature.verdict === "signed" && signature.ownership === "match") {
     stampConsentAutoVerifyDeadline(opts.leadId).catch(() => {});
   }
 
