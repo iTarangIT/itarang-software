@@ -621,15 +621,16 @@ async function startConsent(
  * without a printed route those cases simply stall.
  */
 const CONSENT_CHANNEL_BUTTONS: ReplyButton[] = [
-  { id: "cb_consent_call", title: "📞 Voice call" },
+  // 23 Nov: SMS (MSG91 DLT template) first; voice call is the fallback.
   { id: "cb_consent_sms", title: "💬 SMS" },
+  { id: "cb_consent_call", title: "📞 Voice call" },
   { id: "cb_consent_manual", title: "✍ Print & sign" },
 ];
 
 /** 21 Nov: the code options offered while waiting for a signed form. */
 const CB_MANUAL_CODE_BUTTONS: ReplyButton[] = [
-  { id: "cb_consent_call", title: "📞 Call OTP" },
   { id: "cb_consent_sms", title: "💬 SMS OTP" },
+  { id: "cb_consent_call", title: "📞 Call OTP" },
 ];
 
 /**

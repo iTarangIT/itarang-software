@@ -54,7 +54,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
     if (!gate.ok) return gate.response;
     const { actor, lead } = gate;
     const body = await req.json().catch(() => ({}));
-    const channel = String(body?.channel || "call").toLowerCase();
+    const channel = String(body?.channel || "sms").toLowerCase();
 
     if (!["call", "sms", "whatsapp"].includes(channel)) {
       return NextResponse.json(

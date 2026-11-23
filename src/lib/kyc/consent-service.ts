@@ -29,7 +29,7 @@ import {
 import { consentOtpResendBlocked } from "@/lib/leads/actForDealer";
 import { generateConsentHtml } from "@/lib/consent/consent-pdf-template";
 import { sendEmail } from "@/lib/email/mailer";
-import { sendMsg91Otp } from "@/lib/msg91";
+import { sendMsg91Flow } from "@/lib/msg91";
 import { sendTwoFactorVoiceOtp, twoFactorConfigured } from "@/lib/twofactor";
 import {
   maskCalcPhone,
@@ -751,16 +751,23 @@ function hashOtp(otp: string): string {
   return crypto.createHash("sha256").update(otp).digest("hex");
 }
 
-function smsOtpConfigured(): boolean {
-  return !!(
-    (process.env.MSG91_AUTH_KEY?.trim()?.length ?? 0) > 5 &&
-    (process.env.MSG91_TEMPLATE_ID?.trim()?.length ?? 0) > 5
-  );
+// 23 Nov: consent OTP by SMS goes through the DLT-verified MSG91 Flow template
+// "Demo" (account itarang2): "##var1## is your iTarang sign-in code. It is valid
+// for 10 minutes. …" — var1 carries the OTP. Override with
+// MSG91_CONSENT_OTP_TEMPLATE_ID if the template is replaced.
+const DEFAULT_CONSENT_SMS_TEMPLATE_ID = "6aedb442ef85891fce0e8c15";
+
+function consentSmsTemplateId(): string {
+  return process.env.MSG91_CONSENT_OTP_TEMPLATE_ID?.trim() || DEFAULT_CONSENT_SMS_TEMPLATE_ID;
 }
 
-/** OTP delivery channel. 'call' = 2Factor automated voice call (primary);
- *  'whatsapp' = Meta (currently "coming soon" in the UI); 'sms' = MSG91 (legacy);
- *  'email' = transactional email via the shared mailer. */
+function smsOtpConfigured(): boolean {
+  return (process.env.MSG91_AUTH_KEY?.trim()?.length ?? 0) > 5;
+}
+
+/** OTP delivery channel. 'sms' = MSG91 Flow template (primary, 23 Nov);
+ *  'call' = 2Factor automated voice call (fallback); 'whatsapp' = Meta
+ *  (currently "coming soon" in the UI); 'email' = the shared mailer. */
 export type ConsentOtpChannel = "call" | "sms" | "whatsapp" | "email";
 
 export type SendConsentOtpResult =
@@ -968,7 +975,13 @@ export async function sendConsentOtp(opts: {
         : channel === "whatsapp"
           ? (await sendCalcOtpWhatsApp(normalized || `91${tenDigit}`, otp, signer.name)).ok
           : channel === "sms"
-            ? (await sendMsg91Otp({ mobile_number: signer.phone!, otp, otp_expiry_minutes: 10 })).success
+            ? (
+                await sendMsg91Flow({
+                  mobile_number: signer.phone!,
+                  template_id: consentSmsTemplateId(),
+                  variables: { var1: otp },
+                })
+              ).success
             : (await sendTwoFactorVoiceOtp({ mobile_number: signer.phone!, otp })).success;
     if (!delivered) {
       // Record the failed attempt so send_count still counts against the cap.
