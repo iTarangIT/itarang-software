@@ -6166,6 +6166,10 @@ async function finalizeLead(session: SessionRow): Promise<void> {
     // back to DC_MENU here, which is indistinguishable from parking.
     await recordLeadSubmitted(lead.leadId, session);
     await recordWhatsAppKycStep({ session, leadId: lead.leadId, action: "Submitted to iTarang for KYC review", notify: true });
+    // 23 Nov: the dealer-check people are alerted (email + WhatsApp) only now,
+    // on Submit — never while the salesperson is still filling the file in.
+    const { noticeDealerCheckSubmitted } = await import("@/lib/leads/dealer-check-notify");
+    await noticeDealerCheckSubmitted(lead.leadId);
   }
 
   const fresh = await loadSession(session.id);

@@ -364,6 +364,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         }));
 
         await recordKycMilestone(gate.actor, 'submitted the KYC for verification');
+        // 23 Nov: dealer-check people are alerted (email + WhatsApp) on Submit only.
+        {
+            const { noticeDealerCheckSubmitted } = await import('@/lib/leads/dealer-check-notify');
+            await noticeDealerCheckSubmitted(leadId);
+        }
         return NextResponse.json({
             success: true,
             verificationsInitiated: allVers.length,
