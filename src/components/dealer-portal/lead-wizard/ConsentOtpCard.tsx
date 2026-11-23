@@ -2,11 +2,12 @@
 
 // OTP-based consent capture (E-180) — replaces Digio Aadhaar e-sign.
 //
-// The OTP is delivered to the customer by an automated VOICE CALL (2Factor). The
-// dealer taps "Send OTP via Call", the customer answers, reads out the 6 digits,
-// the dealer types them here, ticks the confirmation checkbox, and verifies — the
-// consent is then recorded as verified. A small card lets anyone view the consent
-// PDF first. WhatsApp delivery is "coming soon".
+// 23 Nov: the OTP is delivered to the customer by SMS (MSG91 DLT template). The
+// dealer taps "Send OTP via SMS", the customer reads out the 6 digits, the dealer
+// types them here, ticks the confirmation checkbox, and verifies — the consent is
+// then recorded as verified. The automated VOICE CALL (2Factor) stays as a
+// fallback for when the SMS does not arrive. A small card lets anyone view the
+// consent PDF first. WhatsApp delivery is "coming soon".
 
 import { useEffect, useRef, useState } from "react";
 import {
@@ -16,10 +17,12 @@ import {
   FileText,
   Loader2,
   MessageCircle,
+  MessageSquare,
   Phone,
 } from "lucide-react";
 
 type ConsentFor = "customer" | "borrower";
+type OtpChannel = "sms" | "call";
 
 interface Props {
   leadId: string;
@@ -44,6 +47,8 @@ export default function ConsentOtpCard({
   className = "",
 }: Props) {
   const [stage, setStage] = useState<"idle" | "sent">("idle");
+  const [channel, setChannel] = useState<OtpChannel>("sms");
+  const [sendingVia, setSendingVia] = useState<OtpChannel | null>(null);
   const [otpSentTo, setOtpSentTo] = useState<string | null>(null);
   const [digits, setDigits] = useState<string[]>(["", "", "", "", "", ""]);
   const [secondsLeft, setSecondsLeft] = useState(0);
@@ -92,27 +97,31 @@ export default function ConsentOtpCard({
     }
   };
 
-  const send = async () => {
+  const send = async (via: OtpChannel = channel) => {
     setSending(true);
+    setSendingVia(via);
     setError(null);
     setAttemptsLeft(null);
+    const failMsg = via === "sms" ? "Failed to send the OTP SMS" : "Failed to place the OTP call";
     try {
       if (beforeSend) {
         const ok = await beforeSend();
         if (!ok) {
           setSending(false);
+          setSendingVia(null);
           return;
         }
       }
       const res = await fetch(`/api/kyc/${leadId}/send-consent`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ channel: "call", consent_for: consentFor, method: "otp" }),
+        body: JSON.stringify({ channel: via, consent_for: consentFor, method: "otp" }),
       });
       const json = await res.json();
       if (!res.ok || !json?.success) {
-        throw new Error(json?.error?.message || "Failed to place the OTP call");
+        throw new Error(json?.error?.message || failMsg);
       }
+      setChannel(via);
       setStage("sent");
       setConfirmed(false);
       setOtpSentTo(json.data?.otpSentTo ?? null);
@@ -124,9 +133,10 @@ export default function ConsentOtpCard({
       if (json.data?.previewUrl) setPdfUrl(json.data.previewUrl);
       setTimeout(() => inputsRef.current[0]?.focus(), 0);
     } catch (e: any) {
-      setError(e?.message || "Failed to place the OTP call");
+      setError(e?.message || failMsg);
     } finally {
       setSending(false);
+      setSendingVia(null);
     }
   };
 
@@ -223,20 +233,28 @@ export default function ConsentOtpCard({
       {stage === "idle" ? (
         <div className="space-y-3">
           <p className="text-xs text-gray-500">
-            An automated call reads a 6-digit OTP to the customer. Ask them to share it, then enter
-            it below to record their consent.
+            The customer gets a 6-digit OTP by SMS. Ask them to share it, then enter it below to
+            record their consent.
           </p>
           <div className="flex items-center gap-2 text-xs text-gray-700">
-            <Phone className="w-3.5 h-3.5 text-gray-400" />
-            OTP call to <span className="font-bold font-mono">{phone || "—"}</span>
+            <MessageSquare className="w-3.5 h-3.5 text-gray-400" />
+            OTP SMS to <span className="font-bold font-mono">{phone || "—"}</span>
           </div>
           <button
-            onClick={send}
+            onClick={() => send("sms")}
             disabled={sending}
             className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-[#0047AB] hover:bg-[#003580] text-white rounded-xl font-bold text-sm transition-colors disabled:opacity-50"
           >
-            {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Phone className="w-4 h-4" />}
-            {sending ? "Calling…" : "Send OTP via Call"}
+            {sendingVia === "sms" ? <Loader2 className="w-4 h-4 animate-spin" /> : <MessageSquare className="w-4 h-4" />}
+            {sendingVia === "sms" ? "Sending…" : "Send OTP via SMS"}
+          </button>
+          <button
+            onClick={() => send("call")}
+            disabled={sending}
+            className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 border-2 border-gray-200 hover:border-[#0047AB] text-gray-700 rounded-xl font-bold text-xs transition-colors disabled:opacity-50"
+          >
+            {sendingVia === "call" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Phone className="w-3.5 h-3.5" />}
+            {sendingVia === "call" ? "Calling…" : "Send OTP via Call instead"}
           </button>
           <div className="flex flex-col">
             <button
@@ -251,7 +269,7 @@ export default function ConsentOtpCard({
       ) : (
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center gap-2 text-xs">
-            <span className="text-gray-500">OTP called to:</span>
+            <span className="text-gray-500">{channel === "sms" ? "OTP sent by SMS to:" : "OTP called to:"}</span>
             <span className="font-bold font-mono text-gray-900">{otpSentTo ?? phone}</span>
             <span className="ml-auto inline-flex items-center gap-1.5 px-2.5 py-1 bg-gray-100 rounded-full text-gray-700 font-bold">
               <Clock className="w-3 h-3" />
@@ -296,18 +314,29 @@ export default function ConsentOtpCard({
           <div className="flex flex-col sm:flex-row sm:items-center gap-3 text-xs">
             <div className="flex items-center gap-3">
               <button
-                onClick={send}
+                onClick={() => send(channel)}
                 disabled={sending || resendCoolingDown || resendMaxedOut}
                 className="text-[#0047AB] font-bold hover:underline disabled:opacity-50 disabled:no-underline disabled:text-gray-400"
               >
                 {resendMaxedOut
-                  ? "Max calls reached — try again later"
+                  ? "Max sends reached — try again later"
                   : resendCoolingDown
                     ? `Resend available in ${secondsLeft - 570}s`
-                    : "Resend OTP call"}
+                    : channel === "sms"
+                      ? "Resend SMS"
+                      : "Resend OTP call"}
               </button>
+              {channel === "sms" && !resendCoolingDown && !resendMaxedOut && (
+                <button
+                  onClick={() => send("call")}
+                  disabled={sending}
+                  className="text-gray-600 font-bold hover:underline disabled:opacity-50"
+                >
+                  Get it by call
+                </button>
+              )}
               <span className="text-gray-400">
-                {sendCount}/{maxSends} calls used
+                {sendCount}/{maxSends} sends used
               </span>
             </div>
             <button

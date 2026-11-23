@@ -622,6 +622,13 @@ const ROLE_TRAILING_SECTIONS: Record<string, any[]> = {
           icon: FileCheck,
           href: "/admin/settings/customer-kyc-docs",
         },
+        {
+          // 23 Nov — who gets the act-on-it email / WhatsApp at the dealer check.
+          id: "sh-dealer-check-alerts",
+          label: "Dealer check alerts",
+          icon: Bell,
+          href: "/admin/settings/dealer-check",
+        },
         dealerValidationDigestItem("sh"),
         kycReviewDigestItem("sh"),
         scrapBuybackDigestItem("sh"),
@@ -1785,6 +1792,13 @@ const roleNavigation: Record<string, any[]> = {
           label: "Customer KYC documents",
           icon: FileCheck,
           href: "/admin/settings/customer-kyc-docs",
+        },
+        {
+          // 23 Nov — who gets the act-on-it email / WhatsApp at the dealer check.
+          id: "admin-dealer-check-alerts",
+          label: "Dealer check alerts",
+          icon: Bell,
+          href: "/admin/settings/dealer-check",
         },
         dealerValidationDigestItem("admin"),
         kycReviewDigestItem("admin"),

@@ -4471,8 +4471,11 @@ async function logDocumentSend(
 
 // ── Console: customer KYC consent (Hot + finance leads) ──────────────────────
 
+// 23 Nov: SMS OTP (MSG91 DLT template) is the first choice; Call stays as the
+// fallback when the SMS doesn't arrive.
 const CONSENT_CHANNEL_BUTTONS: ReplyButton[] = [
-  { id: "consent_call", title: "📞 Call" },
+  { id: "consent_sms", title: "💬 SMS OTP" },
+  { id: "consent_call", title: "📞 Call OTP" },
   { id: "consent_manual", title: "✍ Manual" },
 ];
 
@@ -4499,6 +4502,10 @@ const CONSENT_CHECK_BUTTON: ReplyButton = {
 const CONSENT_CALL_OTP_BUTTON: ReplyButton = {
   id: "consent_call",
   title: "📞 Call OTP",
+};
+const CONSENT_SMS_OTP_BUTTON: ReplyButton = {
+  id: "consent_sms",
+  title: "💬 SMS OTP",
 };
 
 // At the OTP-wait step the dealer can send the customer a fresh OTP.
@@ -4548,7 +4555,8 @@ async function onConsentChannel(
   }
 
   const isManual = id === "consent_manual" || /manual/.test(id);
-  const isCall = id === "consent_call" || /\bcall\b/.test(id);
+  const isSms = id === "consent_sms" || /\b(sms|text)\b/.test(id);
+  const isCall = !isSms && (id === "consent_call" || /\bcall\b/.test(id));
 
   if (isManual) {
     const gen = await generateManualConsentPdf({
@@ -4575,8 +4583,9 @@ async function onConsentChannel(
     return;
   }
 
-  if (isCall) {
-    const channel = "call";
+  if (isSms || isCall) {
+    const channel: "sms" | "call" = isSms ? "sms" : "call";
+    const via = channel === "sms" ? "SMS" : "Call";
     const res = await sendConsentOtp({
       leadId: lead.leadId,
       channel,
@@ -4593,22 +4602,27 @@ async function onConsentChannel(
     await mergeContext(session, (ctx) => {
       ctx.lead = { ...(ctx.lead ?? {}), consentOtpAttempts: 0, consentOtpChannel: channel };
     });
-    await recordWhatsAppKycStep({ session, dealer, leadId: lead.leadId, action: "Consent code sent to the customer (call)" });
+    await recordWhatsAppKycStep({ session, dealer, leadId: lead.leadId, action: `Consent code sent to the customer (${channel})` });
     await setSession(session.id, { current_state: "DC_LEAD_CONSENT_OTP_WAIT" });
     await reply(
       session,
-      `🔐 A 6-digit OTP was sent to the customer via *Call* on ${res.otpSentTo}.\n\n` +
+      `🔐 A 6-digit OTP was sent to the customer via *${via}* on ${res.otpSentTo}.\n\n` +
         `Ask the customer to read it out, then *type the 6 digits here* to record their consent.\n\n` +
+        (channel === "sms"
+          ? `_SMS didn't arrive? Tap *Call OTP* to get the code by call._\n`
+          : "") +
         `_Have a signed consent form instead? Upload it here._` +
         (res.devOtp ? `\n\n_(dev/test: OTP is ${res.devOtp})_` : ""),
-      [CONSENT_RESEND_OTP_BUTTON],
+      channel === "sms"
+        ? [CONSENT_RESEND_OTP_BUTTON, CONSENT_CALL_OTP_BUTTON]
+        : [CONSENT_RESEND_OTP_BUTTON],
     );
     return;
   }
 
   await reply(
     session,
-    "Please tap *Call* or *Manual*.",
+    "Please tap *SMS OTP*, *Call OTP* or *Manual*.",
     CONSENT_CHANNEL_BUTTONS,
   );
 }
@@ -4626,11 +4640,20 @@ async function onConsentWait(
     if (
       event.type !== "document" &&
       event.type !== "image" &&
-      (t === "consent_call" || t === "consent_manual" || /\b(call|otp)\b/.test(t) || t === "manual")
+      (t === "consent_call" || t === "consent_sms" || t === "consent_manual" ||
+        /\b(call|otp|sms)\b/.test(t) || t === "manual")
     ) {
       return await onConsentChannel(
         session,
-        { ...event, text: t === "consent_manual" || t === "manual" ? "consent_manual" : "consent_call" },
+        {
+          ...event,
+          text:
+            t === "consent_manual" || t === "manual"
+              ? "consent_manual"
+              : t === "consent_call" || /\bcall\b/.test(t)
+                ? "consent_call"
+                : "consent_sms",
+        },
         dealer,
       );
     }
@@ -4669,9 +4692,9 @@ async function onConsentWait(
           ? `❌ ${res.error}\n\n` +
               `You can:\n` +
               `• *Upload the signed form* here again, or\n` +
-              `• Tap *Call OTP* — the customer gets a call with a 6-digit code instead of signing.`
-          : `Couldn't save the signed consent: ${res.error}. Please resend, or tap *Call OTP*.`,
-        [CONSENT_CALL_OTP_BUTTON],
+              `• Tap *SMS OTP* (or *Call OTP*) — the customer gets a 6-digit code instead of signing.`
+          : `Couldn't save the signed consent: ${res.error}. Please resend, or tap *SMS OTP*.`,
+        [CONSENT_SMS_OTP_BUTTON, CONSENT_CALL_OTP_BUTTON],
       );
       return;
     }
@@ -4721,9 +4744,9 @@ async function onConsentWait(
     session,
     "⏳ Waiting for the customer's consent.\n\n" +
       "• *Upload the signed consent* PDF or photo here, or\n" +
-      "• Tap *Call OTP* — the customer gets a call with a 6-digit code instead.\n\n" +
+      "• Tap *SMS OTP* or *Call OTP* — the customer gets a 6-digit code instead.\n\n" +
       "Send *menu* to exit.",
-    [CONSENT_CALL_OTP_BUTTON, CONSENT_CHECK_BUTTON],
+    [CONSENT_SMS_OTP_BUTTON, CONSENT_CALL_OTP_BUTTON, CONSENT_CHECK_BUTTON],
   );
 }
 
@@ -4791,7 +4814,19 @@ async function onConsentOtpWait(
   }
 
   const raw = (event.text ?? "").trim();
-  const channel = lead.consentOtpChannel ?? "call";
+  const channel = lead.consentOtpChannel ?? "sms";
+
+  // 23 Nov: switch channel mid-wait (e.g. SMS didn't arrive → Call OTP).
+  {
+    const t = raw.toLowerCase();
+    if (t === "consent_call" || t === "consent_sms" || t === "call" || t === "sms") {
+      return await onConsentChannel(
+        session,
+        { ...event, text: t.includes("sms") ? "consent_sms" : "consent_call" },
+        dealer,
+      );
+    }
+  }
 
   // Resend button / typed "resend".
   if (

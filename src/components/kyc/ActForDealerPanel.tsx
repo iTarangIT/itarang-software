@@ -94,7 +94,7 @@ export default function ActForDealerPanel({ leadId }: { leadId: string }) {
   const [docType, setDocType] = useState(DOC_TYPES[0][0]);
   const [docFor, setDocFor] = useState<"customer" | "borrower">("customer");
   const [file, setFile] = useState<File | null>(null);
-  const [channel, setChannel] = useState("call");
+  const [channel, setChannel] = useState("sms");
   const [consentFor, setConsentFor] = useState<"customer" | "borrower">("customer");
   const [otp, setOtp] = useState("");
   const [coupon, setCoupon] = useState("");
