@@ -261,6 +261,14 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "nbfc.cibil_approved_conditions": "NBFC Requests",
   "nbfc.cibil_docs_requested": "NBFC Requests",
   "nbfc.cibil_docs_returned": "NBFC Requests",
+  // 23 Nov 2026 — a new file lands with the NBFC's credit verifier.
+  "nbfc.cibil_file_assigned": "NBFC Requests",
+  // 23 Nov 2026 — part of a document request arrived (batches).
+  "nbfc.doc_batch_received": "NBFC Requests",
+  // 23 Nov 2026 — credit check approved (iTarang + dealer milestone).
+  "nbfc.credit_approved": "NBFC Requests",
+  // 23 Nov 2026 — an NBFC-rejected file resumed (same / other lender, or new case).
+  "lead.resumed": "Loan & Sanction",
   // Emitted by /api/admin/nbfc-requests/verdicts/[verdictId]/forward. Same
   // story as onboarding_initiated above — real, emitted, and unmapped until
   // E-231.r
@@ -526,6 +534,7 @@ const WARNING = new Set([
   "nbfc.cibil_reminder",
   "nbfc.cibil_docs_requested",
   "nbfc.cibil_docs_returned",
+  "nbfc.cibil_file_assigned",
   "fi.assigned",
   "fi.reinspection",
   "vkyc.initiated",

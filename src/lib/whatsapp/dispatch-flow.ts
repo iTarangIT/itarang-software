@@ -953,6 +953,33 @@ async function askLoanAmount(
 ): Promise<void> {
   const dp = dpCtx(session);
   const margin = Number(dp.marginAmount) || 0;
+  // 23 Nov 2026 (Battery Pool, task 6) — the salesperson already gave the loan
+  // amount with the customer file (intake-loan-flow), so the dealer is not
+  // asked again: go straight to the preview with that amount.
+  const leadIdForAmount = leadIdOf(session);
+  if (leadIdForAmount) {
+    const [row] = await db
+      .select({ amount: leads.requested_loan_amount })
+      .from(leads)
+      .where(eq(leads.id, leadIdForAmount))
+      .limit(1);
+    if (row?.amount != null) {
+      await patchDp(session, { loanAmount: row.amount });
+      await reply(session, `💰 Loan amount from the customer file: *${inr(row.amount)}*.`);
+      const mode: MarginMode | null =
+        dp.marginMode === "percent" || dp.marginMode === "rupees" ? dp.marginMode : null;
+      return await showOrderPreview(
+        session,
+        leadIdForAmount,
+        battery,
+        charger,
+        margin,
+        mode && dp.marginValue !== undefined && dp.marginValue !== null
+          ? marginLabel(mode, Number(dp.marginValue))
+          : undefined,
+      );
+    }
+  }
   const total = finalPriceOf(stockValue(battery, charger), margin, marginGst(margin));
   await setSession(session.id, { current_state: DC_DP_LOAN_AMT });
   await reply(

@@ -730,7 +730,15 @@ export async function fulfilNbfcDocRequestByAdmin(opts: {
   /** The admin's note to the NBFC — required. */
   message: string;
   attachments: RequestAttachment[];
-}): Promise<{ leadId: string; tenantId: string; attachmentCount: number }> {
+  /**
+   * 23 Nov 2026 — batches: send THIS part to the NBFC and keep the request
+   * open for the rest (the dealer / salesperson can still upload the others,
+   * and the admin can send more parts). Allowed at any non-terminal hop and
+   * after a push ("one more document"). Without it the request is answered
+   * and goes to 'pushed_to_nbfc' (only while it is still with the admin).
+   */
+  keepOpen?: boolean;
+}): Promise<{ leadId: string; tenantId: string; attachmentCount: number; keptOpen: boolean }> {
   const [wrapper] = await db
     .select()
     .from(nbfcDocRequests)
@@ -745,7 +753,14 @@ export async function fulfilNbfcDocRequestByAdmin(opts: {
       "BAD_REQUEST: this is a legacy direct NBFC→dealer thread; the dealer answers it",
     );
   }
-  if (
+  const keepOpen = !!opts.keepOpen;
+  if (keepOpen) {
+    if (wrapper.status === NBFC_DOC_STATUS.CLOSED || wrapper.status === NBFC_DOC_STATUS.REJECTED) {
+      throw new Error(
+        `BAD_REQUEST: this request is '${NBFC_DOC_STATUS_LABEL[wrapper.status] ?? wrapper.status}' — ask the NBFC to raise a new one`,
+      );
+    }
+  } else if (
     wrapper.status !== NBFC_DOC_STATUS.RAISED &&
     wrapper.status !== NBFC_DOC_STATUS.ADMIN_REVIEW
   ) {
@@ -766,6 +781,25 @@ export async function fulfilNbfcDocRequestByAdmin(opts: {
   const existing = Array.isArray(wrapper.attachments)
     ? (wrapper.attachments as RequestAttachment[])
     : [];
+  if (keepOpen) {
+    // Part of the answer: files + note land on the thread now, status / SLA
+    // clock / act-token are left alone so the rest keeps moving.
+    await db
+      .update(nbfcDocRequests)
+      .set({
+        attachments: [...existing, ...opts.attachments],
+        admin_notes: [wrapper.admin_notes, `[Part sent] ${message}`].filter(Boolean).join("\n"),
+        reviewed_by: opts.adminUserId,
+        updated_at: now,
+      })
+      .where(eq(nbfcDocRequests.id, opts.requestId));
+    return {
+      leadId: wrapper.lead_id,
+      tenantId: wrapper.tenant_id,
+      attachmentCount: opts.attachments.length,
+      keptOpen: true,
+    };
+  }
   await db
     .update(nbfcDocRequests)
     .set({
@@ -787,6 +821,7 @@ export async function fulfilNbfcDocRequestByAdmin(opts: {
     leadId: wrapper.lead_id,
     tenantId: wrapper.tenant_id,
     attachmentCount: opts.attachments.length,
+    keptOpen: false,
   };
 }
 

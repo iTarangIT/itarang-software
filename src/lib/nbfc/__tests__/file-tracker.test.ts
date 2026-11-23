@@ -137,13 +137,13 @@ describe("deriveFileStage", () => {
     expect(s.since).toEqual(verified);
   });
 
-  it("reports a sanctioned file as blocking nobody", () => {
+  it("reports a sanctioned file as waiting on the NBFC to disburse", () => {
     const sanctioned = T("2026-08-10T08:00:00Z");
     const s = deriveFileStage(
       input({ assignmentStatus: "selected", sanctionedAt: sanctioned }),
     );
     expect(s.key).toBe("sanctioned");
-    expect(s.waitingOn).toBe("none");
+    expect(s.waitingOn).toBe("nbfc");
     expect(s.since).toEqual(sanctioned);
   });
 

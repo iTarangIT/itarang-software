@@ -21,6 +21,7 @@ import { idleWeeklyDigest } from "./kinds/idle-weekly";
 import { targetsPendingDigest } from "./kinds/targets-pending";
 import { kycReviewDigest } from "./kinds/kyc-review";
 import { missedCallbacksDigest } from "./kinds/missed-callbacks";
+import { nbfcDailyDigest } from "./kinds/nbfc-daily";
 import { myDayDigest } from "./kinds/my-day";
 import { myTeamDigest } from "./kinds/my-team";
 import { salesDailyDigest } from "./kinds/sales-daily";
@@ -44,6 +45,8 @@ export const DIGEST_KINDS: DigestKindDescriptor[] = [
   analystFeedbackDigest,
   // 251 item 23 — each person's AI Analyst morning questions, answered fresh.
   analystDailyDigest,
+  // 23 Nov 2026 — Battery Pool: the 9 PM NBFC files report (city-wise).
+  nbfcDailyDigest,
 ];
 
 export function digestKind(id: string): DigestKindDescriptor | null {

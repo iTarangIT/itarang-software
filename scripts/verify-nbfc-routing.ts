@@ -31,7 +31,7 @@ async function main() {
   console.log("\nLeads:");
   for (const id of ids) {
     const t = await resolveRoutingTarget(id);
-    console.log(`  ${id}: ${t.ok ? `→ ${t.nbfcName} / ${t.productName} (rule #${t.rule.id}, ${t.scope})` : `no auto-route — ${t.why}`}`);
+    console.log(`  ${id}: ${t.ok ? `→ ${t.nbfcName} / ${t.productName} (${t.rule ? `rule #${t.rule.id}, ${t.scope}` : t.scope})` : `no auto-route — ${t.why}`}`);
   }
   process.exit(0);
 }

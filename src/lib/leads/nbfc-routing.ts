@@ -88,13 +88,80 @@ async function categoryName(raw: string | null): Promise<string | null> {
 }
 
 export type RoutingTarget =
-  | { ok: true; rule: RoutingRuleRow; nbfcId: number; loanProductId: number; nbfcName: string; productName: string; scope: string }
+  | {
+      ok: true;
+      /** null when the target is the sales head's scheme pick (E-393), not a rule. */
+      rule: RoutingRuleRow | null;
+      source: "rule" | "scheme_pick";
+      nbfcId: number;
+      loanProductId: number;
+      nbfcName: string;
+      productName: string;
+      scope: string;
+    }
   | { ok: false; why: string; rule?: RoutingRuleRow };
 
-/** Which NBFC a routing rule sends this lead to, after the BRE check. Read-only. */
+/** "rule #12 (city Pune)" or "the sales head's scheme pick (Name)". */
+export function describeRoutingSource(t: { rule: RoutingRuleRow | null; scope: string }): string {
+  return t.rule ? `NBFC routing rule #${t.rule.id} (${t.scope})` : t.scope;
+}
+
+/**
+ * E-393 — the iTarang admin / sales head picked the NBFC scheme before the
+ * file was submitted. It wins over the routing rules while its product still
+ * passes the BRE for this lead; otherwise the rules decide as before.
+ */
+async function resolveSchemePick(
+  lead: NonNullable<Awaited<ReturnType<typeof leadRow>>>,
+  excludeNbfcIds: number[],
+): Promise<RoutingTarget | null> {
+  const { getLeadSchemePick } = await import("./scheme-pick");
+  const pick = await getLeadSchemePick(lead.id);
+  if (!pick) return null;
+  const options = await loadSectionGOptions(
+    {
+      dealer_id: lead.dealer_id,
+      product_category_id: lead.product_category_id,
+      state: lead.state,
+      city: lead.city,
+      resident_status: lead.resident_status,
+    },
+    lead.requested_loan_amount != null ? Number(lead.requested_loan_amount) : null,
+    { excludeNbfcIds, skipPinnedDefault: true },
+  );
+  const nbfc = options.find((o) => o.nbfcId === pick.nbfc_id);
+  const product = nbfc?.activeLoanProducts.find((p) => p.id === pick.loan_product_id);
+  if (!nbfc || !product) return null;
+  return {
+    ok: true,
+    rule: null,
+    source: "scheme_pick",
+    nbfcId: pick.nbfc_id,
+    loanProductId: pick.loan_product_id,
+    nbfcName: nbfc.shortName || nbfc.legalName,
+    productName: product.productName,
+    scope: `the scheme picked by ${pick.picked_by_name ?? "the sales head"}`,
+  };
+}
+
+/**
+ * Which NBFC this lead goes to, after the BRE check: the sales head's scheme
+ * pick (E-393) when it still fits, else the most specific routing rule. Read-only.
+ */
 export async function resolveRoutingTarget(leadId: string): Promise<RoutingTarget> {
   const lead = await leadRow(leadId);
   if (!lead) return { ok: false, why: "Lead not found" };
+  {
+    const already = await db
+      .select({ nbfc_id: nbfcLeadAssignments.nbfc_id })
+      .from(nbfcLeadAssignments)
+      .where(eq(nbfcLeadAssignments.lead_id, leadId));
+    const picked = await resolveSchemePick(lead, already.map((a) => a.nbfc_id)).catch((err) => {
+      console.warn("[nbfc-routing] scheme pick not readable", err instanceof Error ? err.message : String(err));
+      return null;
+    });
+    if (picked) return picked;
+  }
   const rules = await activeRoutingRules();
   if (!rules.length) return { ok: false, why: "No routing rules are set up" };
 
@@ -135,6 +202,7 @@ export async function resolveRoutingTarget(leadId: string): Promise<RoutingTarge
   return {
     ok: true,
     rule,
+    source: "rule",
     nbfcId: rule.nbfc_id,
     loanProductId: rule.loan_product_id,
     nbfcName: nbfc.shortName || nbfc.legalName,
@@ -144,7 +212,7 @@ export async function resolveRoutingTarget(leadId: string): Promise<RoutingTarge
 }
 
 export type AutoRouteResult =
-  | { routed: true; nbfcName: string; productName: string; ruleId: number }
+  | { routed: true; nbfcName: string; productName: string; ruleId: number | null }
   | { routed: false; why: string };
 
 /**
@@ -199,7 +267,7 @@ export async function autoRouteLead(leadId: string, opts: { trigger: string }): 
       routingResolved: true,
     });
 
-    const note = `Sent to ${target.nbfcName} — ${target.productName} automatically by NBFC routing rule #${target.rule.id} (${target.scope})`;
+    const note = `Sent to ${target.nbfcName} — ${target.productName} automatically by ${describeRoutingSource(target)}`;
     await db
       .insert(auditLogs)
       .values({
@@ -208,7 +276,8 @@ export async function autoRouteLead(leadId: string, opts: { trigger: string }): 
         entity_id: leadId,
         action: "LEAD_AUTO_ROUTED",
         changes: {
-          rule_id: target.rule.id,
+          rule_id: target.rule?.id ?? null,
+          source: target.source,
           scope: target.scope,
           nbfc_id: target.nbfcId,
           nbfc_name: target.nbfcName,
@@ -228,10 +297,10 @@ export async function autoRouteLead(leadId: string, opts: { trigger: string }): 
       customer: lead.full_name || lead.owner_name || null,
       nbfcName: target.nbfcName,
       productName: target.productName,
-      ruleId: target.rule.id,
+      ruleId: target.rule?.id ?? null,
       scope: target.scope,
     });
-    return { routed: true, nbfcName: target.nbfcName, productName: target.productName, ruleId: target.rule.id };
+    return { routed: true, nbfcName: target.nbfcName, productName: target.productName, ruleId: target.rule?.id ?? null };
   } catch (err) {
     console.error(`[nbfc-routing] auto-route ${leadId} failed`, err);
     return { routed: false, why: err instanceof Error ? err.message : "Auto-route failed" };
@@ -300,9 +369,10 @@ async function tellSalesPeople(p: {
   customer: string | null;
   nbfcName: string;
   productName: string;
-  ruleId: number;
+  ruleId: number | null;
   scope: string;
 }) {
+  const by = p.ruleId != null ? `NBFC routing rule #${p.ruleId} (${p.scope})` : p.scope;
   try {
     const { accountOwnership, leadDealerReviews, whatsappOnboardingSessions, whatsappOperators } = await import("@/lib/db/schema");
     const { inArray } = await import("drizzle-orm");
@@ -340,7 +410,7 @@ async function tellSalesPeople(p: {
 
     const [lr] = await db.select({ ref: leads.reference_id }).from(leads).where(eq(leads.id, p.leadId)).limit(1);
     const who = `${p.customer ?? "Customer"} (${lr?.ref ?? p.leadId})`;
-    const message = `${who} was sent to ${p.nbfcName} — ${p.productName}, by NBFC routing rule #${p.ruleId} (${p.scope}).`;
+    const message = `${who} was sent to ${p.nbfcName} — ${p.productName}, by ${by}.`;
 
     if (userIds.size) {
       const { emit } = await import("@/lib/notifications/emit");
@@ -370,7 +440,7 @@ async function tellSalesPeople(p: {
         if (!hub) continue;
         await reply(
           hub as unknown as Parameters<typeof reply>[0],
-          `🏦 *Sent to the lender*\n\n${who}\n*NBFC:* ${p.nbfcName}\n*Loan product:* ${p.productName}\n_By NBFC routing rule #${p.ruleId} (${p.scope})._`,
+          `🏦 *Sent to the lender*\n\n${who}\n*NBFC:* ${p.nbfcName}\n*Loan product:* ${p.productName}\n_By ${by}._`,
         ).catch((err: unknown) => console.warn("[nbfc-routing] operator WhatsApp failed", err instanceof Error ? err.message : String(err)));
       }
     }

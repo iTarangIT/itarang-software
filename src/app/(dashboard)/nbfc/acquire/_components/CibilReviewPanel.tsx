@@ -14,6 +14,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import RequestMoreDocsModal, { type DocItem } from "@/components/kyc/step3/RequestMoreDocsModal";
+import { CONDITION_DOCS, conditionDocLabel } from "@/lib/nbfc/condition-docs";
 
 type Review = {
   id: string;
@@ -24,6 +25,8 @@ type Review = {
   decision_reason: string | null;
   /** E-389 — set when approved with conditions. */
   conditions: string | null;
+  /** E-393 — documents picked in the conditions multi-select. */
+  condition_docs?: string[];
   /** E-389 — document requests the approver raised from this review. */
   doc_requests: Array<{
     id: string;
@@ -88,6 +91,8 @@ export default function CibilReviewPanel({ leadId, closed }: { leadId: string; c
   const [reason, setReason] = useState("");
   const [withConditions, setWithConditions] = useState(false);
   const [conditions, setConditions] = useState("");
+  const [conditionDocs, setConditionDocs] = useState<string[]>([]);
+  const [docMenuOpen, setDocMenuOpen] = useState(false);
   const [docsOpen, setDocsOpen] = useState(false);
   const [docsSent, setDocsSent] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -198,8 +203,8 @@ export default function CibilReviewPanel({ leadId, closed }: { leadId: string; c
 
   async function decide(decision: "approve" | "approve_with_conditions" | "reject") {
     if (decision === "reject" && !reason.trim()) return setError("A reason is required to reject.");
-    if (decision === "approve_with_conditions" && !conditions.trim()) {
-      return setError("Write the conditions for this approval.");
+    if (decision === "approve_with_conditions" && !conditions.trim() && conditionDocs.length === 0) {
+      return setError("Pick the documents (or write the conditions) for this approval.");
     }
     setBusy(true);
     setError(null);
@@ -210,7 +215,8 @@ export default function CibilReviewPanel({ leadId, closed }: { leadId: string; c
         body: JSON.stringify({
           decision,
           reason: decision === "reject" ? reason.trim() : null,
-          conditions: decision === "approve_with_conditions" ? conditions.trim() : null,
+          conditions: decision === "approve_with_conditions" ? conditions.trim() || null : null,
+          condition_docs: decision === "approve_with_conditions" ? conditionDocs : [],
         }),
       });
       const j = await res.json().catch(() => ({}));
@@ -219,6 +225,8 @@ export default function CibilReviewPanel({ leadId, closed }: { leadId: string; c
       setReason("");
       setWithConditions(false);
       setConditions("");
+      setConditionDocs([]);
+      setDocMenuOpen(false);
       await load();
       router.refresh();
     } catch (e) {
@@ -538,15 +546,66 @@ export default function CibilReviewPanel({ leadId, closed }: { leadId: string; c
             </>
           ) : withConditions ? (
             <div className="w-full space-y-2">
+              {/* E-393 — multi-select of the documents the approval depends on.
+                  They go out as a document request to the dealer / salesperson. */}
+              <div className="relative">
+                <label className="block text-[11px] font-semibold text-slate-600 mb-1">Documents required (pick one or more)</label>
+                <button
+                  type="button"
+                  onClick={() => setDocMenuOpen((v) => !v)}
+                  disabled={busy}
+                  className="w-full flex items-center justify-between border border-emerald-300 rounded px-2 py-1.5 text-sm bg-white text-left"
+                  aria-expanded={docMenuOpen}
+                >
+                  <span className={conditionDocs.length ? "text-slate-800" : "text-slate-400"}>
+                    {conditionDocs.length
+                      ? conditionDocs.map(conditionDocLabel).join(", ")
+                      : "Select documents — e.g. RC Copy, co-borrower documents"}
+                  </span>
+                  <span className="text-slate-400 text-xs ml-2">{docMenuOpen ? "▲" : "▼"}</span>
+                </button>
+                {docMenuOpen ? (
+                  <div className="absolute z-20 mt-1 w-full max-h-64 overflow-auto rounded border border-slate-200 bg-white shadow-lg p-1">
+                    {(["primary", "co_borrower"] as const).map((party) => (
+                      <div key={party} className="py-1">
+                        <p className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                          {party === "primary" ? "Customer" : "Co-borrower / guarantor"}
+                        </p>
+                        {CONDITION_DOCS.filter((d) => d.docFor === party).map((d) => {
+                          const on = conditionDocs.includes(d.key);
+                          return (
+                            <label key={d.key} className="flex items-center gap-2 px-2 py-1 text-sm rounded hover:bg-slate-50 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={on}
+                                onChange={() =>
+                                  setConditionDocs((prev) => (on ? prev.filter((k) => k !== d.key) : [...prev, d.key]))
+                                }
+                                className="accent-emerald-600"
+                              />
+                              {d.label}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
               <textarea
                 value={conditions}
                 onChange={(e) => setConditions(e.target.value)}
                 disabled={busy}
-                rows={3}
+                rows={2}
                 maxLength={2000}
                 className="w-full border border-emerald-300 rounded px-2 py-1.5 text-sm"
-                placeholder="Conditions (required) — e.g. co-borrower's bank statement before sanction, max tenure 12 months…"
+                placeholder="Other conditions (optional) — e.g. max tenure 12 months…"
               />
+              {conditionDocs.length ? (
+                <p className="text-[11px] text-slate-500">
+                  The picked documents are sent to the iTarang admin as a document request; the dealer / salesperson can upload them in one go or in parts.
+                </p>
+              ) : null}
               <div className="flex gap-2">
                 <button
                   onClick={() => decide("approve_with_conditions")}

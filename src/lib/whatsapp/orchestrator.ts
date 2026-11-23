@@ -15,6 +15,7 @@
 // Decentro / Meta network calls — that would tie up a connection from the small
 // (max 5) pool for seconds. Rapid interleaved uploads are a Phase-2 concern.
 
+import { interceptSubmitForLoanAmount, registerIntakeContinuation } from "./intake-loan-flow";
 import { and, desc, eq, inArray, ne, notInArray, sql } from "drizzle-orm";
 import { linkOnboardingToLead } from "@/lib/onboarding/linkToLead";
 import { attachOnboardingToLead } from "@/lib/onboarding/leadMatch";
@@ -5035,6 +5036,9 @@ async function onConsentReview(
 ): Promise<void> {
   const id = (event.text ?? "").trim().toLowerCase();
   if (id === "consent_send" || /\b(send|submit)\b/.test(id)) {
+    // 23 Nov 2026 — a finance file must carry the loan amount (and, for an
+    // admin / sales head, the NBFC scheme) before it goes to iTarang.
+    if (await interceptSubmitForLoanAmount(session)) return;
     return await finalizeLead(session);
   }
   if (id === "xd_open" || /\bextra\b/.test(id)) {
@@ -6147,6 +6151,9 @@ registerExtraDocsContinuation(async (session, dealer, next, leadId) => {
   }
   await promptSubmitToITarang(session);
 });
+
+// 23 Nov 2026 — the loan-amount / scheme step hands back to the real submit.
+registerIntakeContinuation((session) => finalizeLead(session));
 
 async function finalizeLead(session: SessionRow): Promise<void> {
   // Terminal step for a Hot + finance lead: documents collected, consent signed.

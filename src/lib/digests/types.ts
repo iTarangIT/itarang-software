@@ -33,7 +33,9 @@ export type DigestKindId =
   | "emi_messages"
   | "missed_callbacks"
   | "analyst_feedback"
-  | "analyst_daily";
+  | "analyst_daily"
+  // 23 Nov 2026 — Battery Pool: files received / accepted / disbursed, 9 PM.
+  | "nbfc_daily";
 
 /** One figure about the covered day. */
 export type ActivityLine = {
@@ -267,7 +269,13 @@ export type DigestKindDescriptor = {
    * defaults in schedule.ts (enabled, the default recipient). A kind that must
    * not mail anyone until an admin says so sets `{ enabled: false, recipients: [] }`.
    */
-  defaults?: { enabled?: boolean; recipients?: string[]; roles?: Record<string, boolean> };
+  defaults?: {
+    enabled?: boolean;
+    recipients?: string[];
+    roles?: Record<string, boolean>;
+    eveningHour?: number;
+    eveningMinute?: number;
+  };
   /**
    * ID 194 — role switches shown on the settings screen ("ISRs", "ASMs"). Keys
    * are user roles; the stored `roles` setting turns each on or off. Only a
@@ -286,6 +294,11 @@ export type DigestKindDescriptor = {
     resolve(settings: { roles: Record<string, boolean> }): Promise<DigestPerson[]>;
     /** That person's figures. Must never throw — ok:false skips (and retries) them. */
     collect(istDay: string, person: DigestPerson): Promise<{ ok: boolean; figures: DigestFigures; error?: string }>;
+    /**
+     * 23 Nov 2026 — runs after that person's mail went out (e.g. a WhatsApp
+     * copy). Best-effort: a failure here never marks the send failed.
+     */
+    afterSend?(person: DigestPerson, figures: DigestFigures, settings: { sections: Record<string, boolean> }): Promise<void>;
   };
   /**
    * Recipients worked out at send time and added to the stored list — people

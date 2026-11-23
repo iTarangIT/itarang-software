@@ -237,6 +237,12 @@ export async function reselectFinancing(opts: {
     console.error("[reselect-financing] notification failed:", err);
   }
 
+  // 23 Nov 2026 — tell the NBFC's credit verifier(s) a file is waiting for
+  // their CIBIL review (bell + email + WhatsApp). Best-effort, not awaited.
+  void import("@/lib/nbfc/cibil-review")
+    .then((m) => m.notifyCibilVerifiersOfAssignment(leadId))
+    .catch(() => {});
+
   return {
     leadId,
     nbfcId,

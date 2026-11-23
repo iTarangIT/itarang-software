@@ -120,6 +120,8 @@ export default function AgreementTrackPanel({ leadId }: { leadId: string }) {
   const [nbfcSignerName, setNbfcSignerName] = useState("");
   const [nbfcSignerEmail, setNbfcSignerEmail] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
+  const signedRef = useRef<HTMLInputElement>(null);
+  const [showEsign, setShowEsign] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -157,7 +159,7 @@ export default function AgreementTrackPanel({ leadId }: { leadId: string }) {
     }
   }
 
-  async function uploadPdf(file: File) {
+  async function uploadPdf(file: File, signed = false) {
     if (file.type && file.type !== "application/pdf") {
       setError("Only PDF files are accepted.");
       return;
@@ -167,6 +169,8 @@ export default function AgreementTrackPanel({ leadId }: { leadId: string }) {
     try {
       const fd = new FormData();
       fd.append("file", file);
+      // 23 Nov — the signed copy goes straight to 'signed'; no eSign runs.
+      if (signed) fd.append("signed", "1");
       const res = await fetch(`/api/nbfc/agreement/${leadId}/upload`, { method: "POST", body: fd });
       const j = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
       if (!res.ok || j.ok === false) throw new Error(j.error ?? `HTTP ${res.status}`);
@@ -247,7 +251,7 @@ export default function AgreementTrackPanel({ leadId }: { leadId: string }) {
             <h3 className="text-sm font-semibold tracking-tight text-slate-900">Loan Agreement</h3>
             {latest && !notApplicable && <StatusPill statusKey={pillKey} />}
           </div>
-          <p className="mt-0.5 text-[11px] text-slate-400">Sign &amp; file the loan agreement · iTarang eSign</p>
+          <p className="mt-0.5 text-[11px] text-slate-400">Upload the signed loan agreement · e-sign optional</p>
         </div>
       </div>
 
@@ -262,8 +266,34 @@ export default function AgreementTrackPanel({ leadId }: { leadId: string }) {
             {/* pending: upload, then send */}
             {(status === "pending" || !latest) && (
               <>
-                {!canAct && <p className="text-[11px] text-slate-400">Awaiting operations to upload the agreement.</p>}
-                {canAct && !hasSource && (
+                {!canAct && <p className="text-[11px] text-slate-400">Awaiting operations to upload the signed agreement.</p>}
+                {canAct && (
+                  <div
+                    onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+                    onDragLeave={() => setDragOver(false)}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      setDragOver(false);
+                      const f = e.dataTransfer.files?.[0];
+                      if (f) void uploadPdf(f, true);
+                    }}
+                    onClick={() => signedRef.current?.click()}
+                    className={`cursor-pointer rounded-xl border-2 border-dashed p-5 text-center transition ${
+                      dragOver ? "border-emerald-400 bg-emerald-50" : "border-emerald-200 bg-emerald-50/40 hover:bg-emerald-50"
+                    } ${uploading ? "opacity-60" : ""}`}
+                  >
+                    <FileInput inputRef={signedRef} onPick={(f) => void uploadPdf(f, true)} />
+                    <AgreementGlyph className="mx-auto h-6 w-6 text-emerald-400" />
+                    <p className="mt-2 text-xs font-semibold text-slate-700">{uploading ? "Uploading…" : "Upload the signed agreement (PDF)"}</p>
+                    <p className="mt-0.5 text-[10px] text-slate-400">Signed by the customer already · marks the agreement signed · PDF up to 15 MB</p>
+                  </div>
+                )}
+                {canAct && (
+                  <button onClick={() => setShowEsign((v) => !v)} className="text-[11px] font-medium text-slate-400 underline-offset-2 hover:underline">
+                    {showEsign || hasSource ? "Hide e-sign option" : "Optional: send an unsigned agreement for e-sign instead"}
+                  </button>
+                )}
+                {canAct && !hasSource && showEsign && (
                   <div
                     onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
                     onDragLeave={() => setDragOver(false)}
@@ -375,6 +405,10 @@ export default function AgreementTrackPanel({ leadId }: { leadId: string }) {
                     <button onClick={() => void initiate({ resend: true })} disabled={busy} className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-brand-sky)] shadow-sm transition hover:bg-slate-50 disabled:opacity-40">
                       {busy ? "Resending…" : "Resend link"}
                     </button>
+                    <button onClick={() => signedRef.current?.click()} disabled={uploading} className="rounded-lg border border-emerald-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-emerald-700 shadow-sm transition hover:bg-emerald-50 disabled:opacity-40">
+                      {uploading ? "Uploading…" : "Upload signed copy instead"}
+                    </button>
+                    <FileInput inputRef={signedRef} onPick={(f) => void uploadPdf(f, true)} />
                     <button onClick={() => setShowManual((s) => !s)} className="text-[11px] font-medium text-slate-400 underline-offset-2 hover:underline">
                       {showManual ? "Hide manual fallback" : "Manual fallback"}
                     </button>
@@ -426,14 +460,14 @@ export default function AgreementTrackPanel({ leadId }: { leadId: string }) {
                   >
                     Download agreement
                   </a>
-                  <a
+                  {latest?.method !== "upload" && <a
                     href={`/api/nbfc/agreement/${leadId}/audit-trail`}
                     target="_blank"
                     rel="noreferrer"
                     className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
                   >
                     Download audit trail
-                  </a>
+                  </a>}
                 </div>
               </div>
             )}
@@ -451,6 +485,10 @@ export default function AgreementTrackPanel({ leadId }: { leadId: string }) {
                         {busy ? "Retrying…" : "Retry"}
                       </button>
                     )}
+                    <button onClick={() => signedRef.current?.click()} disabled={uploading} className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:brightness-110 disabled:opacity-40">
+                      {uploading ? "Uploading…" : "Upload signed agreement"}
+                    </button>
+                    <FileInput inputRef={signedRef} onPick={(f) => void uploadPdf(f, true)} />
                     <button onClick={() => fileRef.current?.click()} disabled={uploading} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40">
                       {uploading ? "Uploading…" : "Re-upload PDF"}
                     </button>
