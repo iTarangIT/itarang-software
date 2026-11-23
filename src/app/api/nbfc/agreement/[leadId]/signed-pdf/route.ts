@@ -69,11 +69,24 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
     if (!row || row.status !== "signed") {
       return NextResponse.json({ ok: false, error: "Agreement is not yet signed" }, { status: 400 });
     }
-    if (!row.digio_document_id) {
-      return NextResponse.json({ ok: false, error: "Agreement has no eSign document on file" }, { status: 400 });
-    }
-
     const cacheKey = `agreements/${leadId}/signed.pdf`;
+
+    // 23 Nov — a signed copy uploaded by the NBFC has no eSign document id;
+    // serve the uploaded PDF straight from the bucket.
+    if (!row.digio_document_id) {
+      const uploaded = await getNbfcObject(cacheKey);
+      if (uploaded && isValidPdfBuffer(uploaded)) {
+        return new NextResponse(new Uint8Array(uploaded), {
+          status: 200,
+          headers: {
+            "Content-Type": "application/pdf",
+            "Content-Disposition": `inline; filename="loan-agreement-${leadId}.pdf"`,
+            "Cache-Control": "private, no-store",
+          },
+        });
+      }
+      return NextResponse.json({ ok: false, error: "Agreement has no signed PDF on file" }, { status: 400 });
+    }
 
     // 1) Bucket cache.
     let pdf = await getNbfcObject(cacheKey);

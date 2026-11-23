@@ -33,7 +33,8 @@ import { rejectNbfcFile } from "@/lib/nbfc/reject-file";
 import { getActiveAssignment } from "@/lib/nbfc/vkyc";
 import { NBFC_DOC_STATUS_LABEL } from "@/lib/nbfc/doc-requests";
 import { raiseNbfcDocRequest, type RaiseItem } from "@/lib/nbfc/raise-doc-request";
-import { emit, tenantDisplayName, toAdmins } from "@/lib/notifications/emit";
+import { describeConditions, groupConditionDocs, normaliseConditionDocs } from "@/lib/nbfc/condition-docs";
+import { emit, tenantDisplayName } from "@/lib/notifications/emit";
 import { nbfcParty } from "@/lib/notifications/provenance";
 import {
   decideCibilDecision,
@@ -81,7 +82,10 @@ async function userLabels(ids: string[]): Promise<Map<string, { name: string; em
   return new Map(rows.map((r) => [r.id, { name: r.name || r.email || "—", email: r.email ?? null }]));
 }
 
-/** One-person notification (approver / submitter). Never throws. */
+/**
+ * One-person notification (approver / submitter): email AND (23 Nov 2026,
+ * Battery Pool) WhatsApp to the login's mobile (users.phone). Never throws.
+ */
 async function mailUser(opts: {
   userId: string;
   subject: string;
@@ -89,6 +93,7 @@ async function mailUser(opts: {
   rows: Array<[string, string | null | undefined]>;
   leadId: string;
 }) {
+  void whatsAppNotice(opts);
   try {
     const who = (await userLabels([opts.userId])).get(opts.userId);
     if (!who?.email) return;
@@ -114,6 +119,27 @@ async function mailUser(opts: {
     });
   } catch (err) {
     console.warn("[cibil-review] notification email failed", err instanceof Error ? err.message : String(err));
+  }
+}
+
+async function whatsAppNotice(opts: {
+  userId: string;
+  heading: string;
+  rows: Array<[string, string | null | undefined]>;
+  leadId: string;
+}) {
+  try {
+    const { whatsAppUser } = await import("@/lib/whatsapp/staff-notify");
+    const origin = process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || "";
+    const link = origin ? `${origin.replace(/\/$/, "")}/nbfc/acquire/${encodeURIComponent(opts.leadId)}` : "";
+    const lines = opts.rows
+      .filter(([, v]) => v != null && String(v).trim() !== "")
+      .map(([k, v]) => `${k}: ${v}`);
+    const body = [`*${opts.heading}*`, ...lines, link ? `Open: ${link}` : null].filter(Boolean).join("\n");
+    const customer = opts.rows.find(([k]) => k === "Customer")?.[1] ?? opts.leadId;
+    await whatsAppUser(opts.userId, body, { customer: String(customer), ref: opts.leadId, what: opts.heading });
+  } catch (err) {
+    console.warn("[cibil-review] WhatsApp notice failed", err instanceof Error ? err.message : String(err));
   }
 }
 
@@ -267,13 +293,20 @@ export async function decideCibilReview(opts: {
   decision: "approve" | "approve_with_conditions" | "reject";
   reason: string | null;
   conditions?: string | null;
+  /** E-394 — keys from condition-docs.ts picked in the multi-select. */
+  conditionDocs?: string[] | null;
+  req?: Request;
 }) {
   const { actor, leadId, decision } = opts;
   const reason = opts.reason?.trim() || null;
-  const conditions = decision === "approve_with_conditions" ? opts.conditions?.trim().slice(0, 2000) || null : null;
+  const conditionDocs = decision === "approve_with_conditions" ? normaliseConditionDocs(opts.conditionDocs ?? []) : [];
+  const conditionNote = decision === "approve_with_conditions" ? opts.conditions?.trim().slice(0, 2000) || null : null;
+  // Stored text = picked documents + the free note, so every existing reader
+  // of `conditions` (bell, email, admin card) shows the documents too.
+  const conditions = decision === "approve_with_conditions" ? describeConditions(conditionDocs, conditionNote) : null;
   if (decision === "reject" && !reason) throw new Error("BAD_REQUEST: a reason is required to reject");
   if (decision === "approve_with_conditions" && !conditions) {
-    throw new Error("BAD_REQUEST: write the conditions for this approval");
+    throw new Error("BAD_REQUEST: pick the documents (or write the conditions) for this approval");
   }
   const approve = decision !== "reject";
 
@@ -293,7 +326,15 @@ export async function decideCibilReview(opts: {
   // Guarded on status='pending' so two approvers clicking at once can't both win.
   const updated = await db
     .update(nbfcCibilReviews)
-    .set({ status, decision_reason: reason, conditions, decided_by: actor.user_id, decided_at: now, updated_at: now })
+    .set({
+      status,
+      decision_reason: reason,
+      conditions,
+      condition_docs: conditionDocs,
+      decided_by: actor.user_id,
+      decided_at: now,
+      updated_at: now,
+    })
     .where(and(eq(nbfcCibilReviews.id, review!.id), eq(nbfcCibilReviews.status, "pending")))
     .returning({ id: nbfcCibilReviews.id });
   if (!updated.length) throw new Error("CONFLICT: this CIBIL report was already decided — refresh the page");
@@ -304,9 +345,40 @@ export async function decideCibilReview(opts: {
     action_type: approve ? "cibil_review_approved" : "cibil_review_rejected",
     action_id: review!.id,
     before_state: { lead_id: leadId, status: "pending" },
-    after_state: { lead_id: leadId, status, reason, conditions },
+    after_state: { lead_id: leadId, status, reason, conditions, condition_docs: conditionDocs },
     created_at: now,
   });
+
+  // E-394 — the picked documents go out as an additional-documents request
+  // (one per party) through the normal NBFC → admin → dealer / salesperson
+  // loop, linked to this review so the panel lists them and the approver is
+  // told when they come back. The approval itself is not held on them.
+  if (conditionDocs.length) {
+    try {
+      const { assignment } = await loadOpenAssignment(actor.tenant_id, leadId);
+      const nbfcName = await tenantDisplayName(actor.tenant_id);
+      const groups = groupConditionDocs(conditionDocs);
+      for (const docFor of ["primary", "co_borrower"] as const) {
+        const docs = groups[docFor];
+        if (!docs.length) continue;
+        await raiseNbfcDocRequest({
+          leadId,
+          assignment,
+          tenantId: actor.tenant_id,
+          nbfcName,
+          raisedBy: actor.user_id,
+          requestType: "additional_docs",
+          docFor,
+          comments: `Condition of the CIBIL approval${conditionNote ? ` — ${conditionNote}` : ""}`,
+          items: docs.map((d) => ({ doc_label: d.label, reason: "Required by the CIBIL approval conditions", is_required: true })),
+          cibilReviewId: review!.id,
+          req: opts.req,
+        });
+      }
+    } catch (err) {
+      console.warn("[cibil-review] condition document request failed", err instanceof Error ? err.message : String(err));
+    }
+  }
 
   if (decision === "reject") {
     // Close the file for this NBFC — same path as "Reject file".
@@ -353,24 +425,22 @@ export async function decideCibilReview(opts: {
       ["Reason", reason],
     ],
   });
-  if (conditions) {
-    // The iTarang admin sees the conditions too (Battery Pool diagram 1).
-    void (async () => {
-      const nbfcName = await tenantDisplayName(actor.tenant_id);
-      await emit({
-        type: "nbfc.cibil_approved_conditions",
-        title: `${nbfcName} approved CIBIL with conditions`,
-        message: `${by} (${nbfcName}) approved the CIBIL report for ${who} with conditions: ${conditions}`,
-        leadId,
-        stage: "Acquire · CIBIL review",
-        from: nbfcParty(nbfcName, decider?.name ?? null),
-        data: { cibil_review_id: review!.id, conditions },
-        email: false,
-        to: [toAdmins({ href: `/admin/kyc-review/${encodeURIComponent(leadId)}` })],
-      });
-    })().catch((err) =>
-      console.warn("[cibil-review] admin conditions notice failed", err instanceof Error ? err.message : String(err)),
-    );
+  if (approve) {
+    // The iTarang admin / sales head and the dealer hear about the approval
+    // (with its conditions, Battery Pool diagram 1) — 23 Nov 2026: every
+    // important status change is announced, not only to the NBFC's logins.
+    void import("@/lib/notifications/events")
+      .then((m) =>
+        m.notifyCreditCheckApproved({
+          leadId,
+          tenantId: actor.tenant_id,
+          conditions,
+          approverName: decider?.name ?? null,
+        }),
+      )
+      .catch((err) =>
+        console.warn("[cibil-review] approval milestone notice failed", err instanceof Error ? err.message : String(err)),
+      );
   }
 
   return { id: review!.id, status };
@@ -389,6 +459,7 @@ export async function getCibilReviewView(tenantId: string, leadId: string) {
     report_file_name: review.report_file_name,
     decision_reason: review.decision_reason,
     conditions: review.conditions,
+    condition_docs: review.condition_docs ?? [],
     doc_requests: await listCibilDocRequests(review.id),
     created_at: review.created_at.toISOString(),
     decided_at: review.decided_at?.toISOString() ?? null,
@@ -657,7 +728,8 @@ export async function notifyCibilDocsReturned(opts: {
       .from(nbfcCibilReviews)
       .where(eq(nbfcCibilReviews.id, opts.reviewId))
       .limit(1);
-    if (!r || r.status !== "pending") return;
+    if (!r || r.status === "rejected") return;
+    const approved = r.status === "approved";
     const [lead] = await db
       .select({ full_name: leads.full_name, owner_name: leads.owner_name })
       .from(leads)
@@ -669,12 +741,99 @@ export async function notifyCibilDocsReturned(opts: {
       userId: r.approver,
       actorName: "iTarang admin",
       type: "nbfc.cibil_docs_returned",
-      title: `Requested documents are back - ${who}`,
-      message: `The documents you asked for on ${who} are verified and back with you. Review them and decide the CIBIL report.`,
+      title: approved ? `Condition documents are back - ${who}` : `Requested documents are back - ${who}`,
+      message: approved
+        ? `The documents your CIBIL approval was conditional on (${who}) are verified and back with you.`
+        : `The documents you asked for on ${who} are verified and back with you. Review them and decide the CIBIL report.`,
       leadId: opts.leadId,
       data: { cibil_review_id: opts.reviewId, request_id: opts.requestId },
     });
   } catch (err) {
     console.warn("[cibil-review] docs-returned notice failed", err instanceof Error ? err.message : String(err));
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * 23 Nov 2026 — "a file is assigned to the child user for review".
+ * ------------------------------------------------------------------ */
+
+const ASSIGNED_NOTICE_ACTION = "cibil_file_assigned_notice";
+
+/**
+ * A new loan file just landed with one or more NBFCs. For every NBFC on the
+ * lead that has credit-verifier (child) logins, tell each verifier — bell,
+ * email and WhatsApp — that the file is waiting for their CIBIL report.
+ * Once per assignment (nbfc_audit_log row keyed on the assignment id), so a
+ * re-run of the Step-4 submit never repeats it. Never throws.
+ */
+export async function notifyCibilVerifiersOfAssignment(
+  leadId: string,
+  opts?: { /** A resumed file is a new review round — notify again. */ force?: boolean },
+): Promise<void> {
+  try {
+    const rows = await db
+      .select({ id: nbfcLeadAssignments.id, tenant_id: nbfcLeadAssignments.tenant_id, status: nbfcLeadAssignments.status })
+      .from(nbfcLeadAssignments)
+      .where(eq(nbfcLeadAssignments.lead_id, leadId));
+    if (!rows.length) return;
+    const [lead] = await db
+      .select({ full_name: leads.full_name, owner_name: leads.owner_name, reference_id: leads.reference_id })
+      .from(leads)
+      .where(eq(leads.id, leadId))
+      .limit(1);
+    const customer = lead?.full_name ?? lead?.owner_name ?? leadId;
+
+    for (const a of rows) {
+      if (!a.tenant_id || isAssignmentDecided(a.status)) continue;
+      const [done] = await db
+        .select({ id: nbfcAuditLog.id })
+        .from(nbfcAuditLog)
+        .where(and(eq(nbfcAuditLog.action_type, ASSIGNED_NOTICE_ACTION), eq(nbfcAuditLog.action_id, a.id)))
+        .limit(1);
+      if (done && !opts?.force) continue;
+      const verifiers = await db
+        .select({ id: users.id, name: users.name })
+        .from(nbfcUsers)
+        .innerJoin(users, eq(users.id, nbfcUsers.user_id))
+        .where(and(eq(nbfcUsers.tenant_id, a.tenant_id), isNotNull(nbfcUsers.parent_user_id), eq(users.is_active, true)));
+      if (!verifiers.length) continue;
+
+      await db.insert(nbfcAuditLog).values({
+        tenant_id: a.tenant_id,
+        user_id: verifiers[0].id,
+        action_type: ASSIGNED_NOTICE_ACTION,
+        action_id: a.id,
+        before_state: null,
+        after_state: { lead_id: leadId, verifiers: verifiers.map((v) => v.id) },
+        created_at: new Date(),
+      });
+
+      for (const v of verifiers) {
+        void bellUser({
+          tenantId: a.tenant_id,
+          userId: v.id,
+          actorName: "iTarang",
+          type: "nbfc.cibil_file_assigned",
+          title: `New file for your CIBIL review - ${customer}`,
+          message: `A new loan file (${customer}, ${leadId}) is assigned to you. Upload the CIBIL report and send it for approval.`,
+          leadId,
+          data: { assignment_id: a.id },
+        });
+        void mailUser({
+          userId: v.id,
+          leadId,
+          subject: `New file assigned for CIBIL review - Lead ${leadId}`,
+          heading: "A new loan file is assigned to you for CIBIL review.",
+          rows: [
+            ["Lead ID", leadId],
+            ["Reference", lead?.reference_id ?? null],
+            ["Customer", customer],
+            ["Next step", "Upload the CIBIL report and send it to your approver"],
+          ],
+        });
+      }
+    }
+  } catch (err) {
+    console.warn("[cibil-review] assignment notice failed", err instanceof Error ? err.message : String(err));
   }
 }

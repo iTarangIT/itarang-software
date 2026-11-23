@@ -148,6 +148,37 @@ export const WHATSAPP_DEALER_TYPES: Record<string, Builder> = {
     whatIsNeeded: `E-NACH was waived for ${ctx.customerName}`,
   }),
 
+  // --- Credit check (CIBIL review), 23 Nov 2026 ---
+  "nbfc.credit_approved": (ctx) => {
+    const conditions = str(ctx.data?.conditions);
+    return {
+      body:
+        head("✅", conditions ? "Credit check approved with conditions" : "Credit check approved", ctx) +
+        (conditions
+          ? `\n\nConditions: ${conditions}\n\niTarang will ask you for anything still needed.`
+          : "\n\nThe lender approved the credit check. The loan offer comes next."),
+      whatIsNeeded: `the credit check for ${ctx.customerName} was approved`,
+    };
+  },
+
+  // --- Resume after an NBFC rejection, 23 Nov 2026 ---
+  "lead.resumed": (ctx) => {
+    const mode = str(ctx.data?.mode);
+    const note = str(ctx.data?.note);
+    return {
+      body:
+        head("🔁", mode === "new_dealer" ? "New case for you" : "Rejected file resumed", ctx) +
+        (mode === "new_dealer"
+          ? "\n\niTarang opened this customer's file as a new case for you (corrected documents received). Please complete the consent and submit it."
+          : "\n\nThe customer's corrected documents are in and the file is back with a lender.") +
+        (note ? `\nNote: ${note}` : ""),
+      whatIsNeeded:
+        mode === "new_dealer"
+          ? `a new case for ${ctx.customerName} needs your consent + submit`
+          : `the file for ${ctx.customerName} was resumed`,
+    };
+  },
+
   // --- Loan agreement ---
   "agreement.initiated": (ctx) => {
     const signer = str(ctx.data?.signer);

@@ -454,6 +454,11 @@ export async function emit(input: EmitInput): Promise<void> {
   void pushDealerWhatsApp(type, input).catch((err) =>
     console.error(`[notify] WhatsApp dealer push for ${type} failed:`, err),
   );
+  // 23 Nov 2026 — and the iTarang salesperson who sent the file hears the
+  // important milestones on WhatsApp too (src/lib/notifications/initiator-whatsapp.ts).
+  void import("./initiator-whatsapp")
+    .then((m) => m.pushInitiatorWhatsApp({ type, title: input.title, message: input.message, leadId: input.leadId }))
+    .catch((err) => console.error(`[notify] initiator WhatsApp for ${type} failed:`, err));
 }
 
 /** type|lead|entity → last push time, so a retried callback doesn't re-push. */

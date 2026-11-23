@@ -251,6 +251,10 @@ export const TYPE_LABELS: Record<string, string> = {
   "nbfc.cibil_approved_conditions": "CIBIL approved with conditions",
   "nbfc.cibil_docs_requested": "Documents asked before CIBIL decision",
   "nbfc.cibil_docs_returned": "Requested documents back for CIBIL decision",
+  "nbfc.cibil_file_assigned": "New file assigned for CIBIL review",
+  "nbfc.doc_batch_received": "Part of the requested documents arrived",
+  "nbfc.credit_approved": "Credit check approved by the lender",
+  "lead.resumed": "Rejected file resumed",
   nbfc_verdict_forwarded: "NBFC verdict forwarded to the dealer",
   // The flat predecessor of `nbfc.request_forwarded`. Its catalog entry landed
   // without a matching label, so verify:notifications has been failing on it

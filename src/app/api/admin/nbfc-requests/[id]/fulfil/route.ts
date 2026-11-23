@@ -86,23 +86,35 @@ export async function POST(
       );
     }
 
+    // 23 Nov 2026 — keep_open=1: send this batch, keep the request open.
+    const keepOpen = ["1", "true", "yes"].includes(String(form.get("keep_open") ?? "").toLowerCase());
     const result = await fulfilNbfcDocRequestByAdmin({
       requestId: id,
       adminUserId: appUser.id,
       message,
       attachments,
+      keepOpen,
     });
 
     // Best-effort: the NBFC's bell + thread pick this up as an admin update.
-    await notifyNbfcOfUpdate({
-      tenantId: result.tenantId,
-      leadId: result.leadId,
-      requestId: id,
-    }).catch(() => {});
+    if (result.keptOpen) {
+      const { notifyNbfcOfBatch } = await import("@/lib/nbfc/doc-request-notify");
+      await notifyNbfcOfBatch(id, attachments.map((a) => a.name)).catch(() => {});
+    } else {
+      await notifyNbfcOfUpdate({
+        tenantId: result.tenantId,
+        leadId: result.leadId,
+        requestId: id,
+      }).catch(() => {});
+    }
 
     return NextResponse.json({
       success: true,
-      data: { status: "pushed_to_nbfc", attachmentCount: result.attachmentCount },
+      data: {
+        status: result.keptOpen ? "open" : "pushed_to_nbfc",
+        keptOpen: result.keptOpen,
+        attachmentCount: result.attachmentCount,
+      },
     });
   } catch (error) {
     const message =

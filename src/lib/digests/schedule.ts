@@ -100,7 +100,14 @@ export function allSectionsOn(sections: DigestSection[]): DigestSections {
  * screen. Format defaults reproduce the plainest possible mail: summary, every
  * section, no attachment.
  */
-export type DigestDefaults = { enabled?: boolean; recipients?: string[]; roles?: Record<string, boolean> };
+export type DigestDefaults = {
+  enabled?: boolean;
+  recipients?: string[];
+  roles?: Record<string, boolean>;
+  /** 23 Nov 2026 — a kind whose evening mail is not at 19:00 (nbfc_daily: 21:00). */
+  eveningHour?: number;
+  eveningMinute?: number;
+};
 
 export function defaultSettings(
   sections: DigestSection[],
@@ -115,8 +122,8 @@ export function defaultSettings(
     recipients: overrides.recipients ?? [DEFAULT_DIGEST_RECIPIENT],
     morningHour: 9,
     morningMinute: 0,
-    eveningHour: 19,
-    eveningMinute: 0,
+    eveningHour: overrides.eveningHour ?? 19,
+    eveningMinute: overrides.eveningMinute ?? 0,
     detail: "summary",
     sections: allSectionsOn(sections),
     attachExcel: false,

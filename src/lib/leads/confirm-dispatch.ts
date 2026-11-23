@@ -234,16 +234,26 @@ export async function confirmDispatch(opts: {
     // status straight to 'disbursed' so the NBFC Portfolio Overview cards
     // (which filter on status='disbursed') reflect the live book.
     if (loan) {
+      // 23 Nov 2026 — an NBFC-portal sanction is disbursed by the NBFC's own
+      // "Disburse" action (POST /api/nbfc/sanction/[leadId] action=disburse),
+      // a separate status from sanction. Dispatch must not mark it disbursed
+      // for them; it only records the dealer's confirmation. Admin / legacy
+      // sanctions keep the old "dispatch = funds released" collapse.
+      const nbfcDisbursesLater = loan.sanctioned_by_type === "nbfc_user" && !loan.disbursed_at;
       await tx
         .update(loanSanctions)
         .set({
-          status: "disbursed",
-          disbursed_at: now,
+          ...(nbfcDisbursesLater
+            ? {}
+            : {
+                status: "disbursed",
+                disbursed_at: loan.disbursed_at ?? now,
+                // E-298 — funds released; the dealer now owes a "did it arrive?".
+                dealer_payment_status: loan.dealer_payment_status ?? "pending",
+              }),
           dealer_approved: true,
           dealer_approved_at: now,
           dealer_approved_by: performedBy,
-          // E-298 — funds released; the dealer now owes a "did it arrive?".
-          dealer_payment_status: "pending",
           updated_at: now,
         })
         .where(eq(loanSanctions.id, loan.id));
@@ -308,7 +318,30 @@ export async function confirmDispatch(opts: {
   // confirmation = funds released). There is no separate disbursal endpoint
   // anywhere in the app, so this is the only place the milestone can be
   // announced.
-  if (loan) {
+  // 23 Nov 2026 — an NBFC-portal sanction is disbursed later by the NBFC's own
+  // Disburse action, which sends these notices itself; dispatch only does it
+  // for admin / legacy sanctions.
+  const disbursedAtDispatch = !!loan && !(loan.sanctioned_by_type === "nbfc_user" && !loan.disbursed_at);
+  if (loan && !disbursedAtDispatch) {
+    (async () => {
+      const tenantId: string | null = loan.nbfc_id ?? null;
+      await sendNbfcEventEmail({
+        tenantId,
+        leadId,
+        subject: `iTarang — Battery dispatched, disbursement pending (Lead ${leadId})`,
+        eventLabel: `The battery for Lead ${leadId} has been dispatched to the customer. Use Disburse in the NBFC portal once the money is released.`,
+        customerName: lead.full_name ?? lead.owner_name ?? null,
+        dealerName: await dealerDisplayName(dealerId),
+        extraRows: [
+          ["Lender", loan.loan_approved_by],
+          ["Loan amount", loan.loan_amount ? `₹${loan.loan_amount}` : null],
+          ["Battery serial", selection.battery_serial],
+        ],
+        bodyHtml: `<p>Update: the loan is sanctioned and the battery is dispatched; it is marked disbursed when you click Disburse.</p>`,
+      });
+    })().catch(() => {});
+  }
+  if (loan && disbursedAtDispatch) {
     await notifyLoanDisbursed({
       leadId,
       lenderName: loan.loan_approved_by ?? null,

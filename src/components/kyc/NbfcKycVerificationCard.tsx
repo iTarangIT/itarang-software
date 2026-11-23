@@ -521,7 +521,7 @@ export default function NbfcKycVerificationCard({ leadId }: { leadId: string }) 
   // Answer a standalone NBFC request without going to the dealer: the
   // admin uploads the document he already holds and the wrapper goes straight
   // to 'pushed_to_nbfc'. The other half of the gate is "Forward to dealer".
-  const fulfilRequest = async (requestId: string) => {
+  const fulfilRequest = async (requestId: string, keepOpen = false) => {
     const files = fulfilFiles[requestId] ?? [];
     const message = (fulfilMsg[requestId] ?? "").trim();
     if (files.length === 0) {
@@ -538,6 +538,8 @@ export default function NbfcKycVerificationCard({ leadId }: { leadId: string }) 
     try {
       const fd = new FormData();
       fd.append("message", message);
+      // 23 Nov 2026 — batches: send this part and keep the request open.
+      if (keepOpen) fd.append("keep_open", "1");
       for (const f of files) fd.append("files", f);
       const res = await fetch(`/api/admin/nbfc-requests/${requestId}/fulfil`, {
         method: "POST",
@@ -1109,12 +1111,21 @@ export default function NbfcKycVerificationCard({ leadId }: { leadId: string }) 
                   and it goes straight back, no dealer round-trip. Hidden once
                   the request has moved on (it is then the children's story) and
                   on co-borrower asks, which have no document to send. */}
+              {/* 23 Nov 2026 — documents can go in batches: while the request
+                  is open (or after a push) the admin can send a part and keep
+                  it open; "Send to NBFC" (answer in full) stays for requests
+                  still with the admin. */}
               {!request.dealer_direct &&
               request.request_type !== "message" &&
               request.request_type !== "co_borrower" &&
-              (request.status === "nbfc_raised" ||
-                request.status === "admin_review") ? (
+              request.status !== "closed" &&
+              request.status !== "rejected" ? (
                 <AdminReplyComposer
+                  canAnswerInFull={
+                    request.status === "nbfc_raised" ||
+                    request.status === "admin_review"
+                  }
+                  onSendPart={() => fulfilRequest(request.id, true)}
                   docFor={request.doc_for}
                   replies={[]}
                   files={fulfilFiles[request.id] ?? []}
@@ -1236,6 +1247,8 @@ function AdminReplyComposer({
   onFiles,
   onMessage,
   onSend,
+  onSendPart,
+  canAnswerInFull = true,
 }: {
   docFor: string;
   replies: Entry[];
@@ -1246,6 +1259,9 @@ function AdminReplyComposer({
   onFiles: (files: File[]) => void;
   onMessage: (message: string) => void;
   onSend: () => void;
+  /** 23 Nov 2026 — send this batch and keep the request open. */
+  onSendPart?: () => void;
+  canAnswerInFull?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const applicant = docFor === "co_borrower" ? "co-borrower's" : "customer's";
@@ -1333,14 +1349,27 @@ function AdminReplyComposer({
             className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-xs"
           />
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              disabled={busy || files.length === 0 || !message.trim()}
-              onClick={onSend}
-              className="rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {busy ? "Sending…" : "Send to NBFC"}
-            </button>
+            {canAnswerInFull ? (
+              <button
+                type="button"
+                disabled={busy || files.length === 0 || !message.trim()}
+                onClick={onSend}
+                className="rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {busy ? "Sending…" : "Send to NBFC"}
+              </button>
+            ) : null}
+            {onSendPart ? (
+              <button
+                type="button"
+                disabled={busy || files.length === 0 || !message.trim()}
+                onClick={onSendPart}
+                className="rounded-md border border-sky-200 bg-sky-50 px-2.5 py-1 text-xs font-semibold text-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
+                title="The NBFC gets these files now; the request stays open for the rest"
+              >
+                {busy ? "Sending…" : "Send this part, keep open"}
+              </button>
+            ) : null}
             <span className="text-[11px] text-slate-500">
               Appears in the NBFC&apos;s request thread for this lead.
             </span>

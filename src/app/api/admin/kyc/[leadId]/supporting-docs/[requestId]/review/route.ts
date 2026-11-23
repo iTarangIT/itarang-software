@@ -153,6 +153,11 @@ export async function POST(
               leadId: pushed.leadId!,
               requestId: row.nbfc_request_id,
             }).catch(() => {});
+          } else {
+            // 23 Nov 2026 — batches: this document is verified but others on
+            // the request are still coming. The NBFC can open it right away.
+            const { notifyNbfcOfBatch } = await import("@/lib/nbfc/doc-request-notify");
+            await notifyNbfcOfBatch(row.nbfc_request_id, [row.doc_label ?? row.doc_key ?? "document"]).catch(() => {});
           }
         } catch {
           // best-effort — the manual Push to NBFC control remains as a fallback.

@@ -1,11 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { ArrowLeft, AlertTriangle } from "lucide-react";
 import {
   dealers,
   leads,
+  loanSanctions,
   nbfc,
   nbfcLeadAssignments,
   nbfcLoanProducts,
@@ -278,7 +279,17 @@ export default async function AcquireLeadDetailPage({
   const dispatched = lead.kyc_status === "dispatched";
   const delivered = lead.kyc_status === "sold";
   const sold = dispatched || delivered;
-  const sanctioned = lead.kyc_status === "loan_sanctioned" || sold;
+  // 23 Nov — Sanction and Disburse are two statuses. The sanction row is this
+  // tenant's loan_sanctions row; `disbursed` is set only by the NBFC's Disburse
+  // action (or, for legacy rows, the old sanction-time / dispatch stamp).
+  const [loanRow] = await db
+    .select({ status: loanSanctions.status, disbursed_at: loanSanctions.disbursed_at })
+    .from(loanSanctions)
+    .where(and(eq(loanSanctions.lead_id, leadId), eq(loanSanctions.nbfc_id, tenant.id)))
+    .orderBy(desc(loanSanctions.created_at))
+    .limit(1);
+  const sanctioned = !!loanRow || lead.kyc_status === "loan_sanctioned" || sold;
+  const disbursed = loanRow?.status === "disbursed" || !!loanRow?.disbursed_at;
 
   function nodeOffer(): StepperStage["state"] {
     // FI / Video KYC now live inside the Offer step and only unlock once won, so
@@ -309,7 +320,8 @@ export default async function AcquireLeadDetailPage({
     // Both live rails must be settled before the step reads as complete. An
     // opted-out rail reports satisfied, so it drops out of the check.
     const agreementOk = !agreementGate?.applicable || agreementGate.satisfied;
-    if (enachGate.satisfied && agreementOk) return "done";
+    // 23 Nov — the Sanction action lives in this step, so it completes it.
+    if (enachGate.satisfied && agreementOk && sanctioned) return "done";
     // Gate E-NACH behind FI & V-KYC completion.
     if (!verificationComplete) return "locked";
     return "active";
@@ -461,7 +473,7 @@ export default async function AcquireLeadDetailPage({
   const STEP_LABEL: Record<string, string> = {
     fivkyc: "FI & V-KYC",
     enach: "E-NACH & Agreement",
-    disburse: "Disbursal",
+    disburse: "Disburse",
   };
   const nextLiveStep = (after: "offer" | "fivkyc") => {
     if (after === "offer" && !fivkycSkipped) return "fivkyc";
@@ -646,6 +658,11 @@ export default async function AcquireLeadDetailPage({
           <AgreementTrackPanel leadId={leadId} />
         </StepLock>
       ) : null}
+      {/* 23 Nov — Sanction is its own action/status, recorded here; the last
+          step only disburses. */}
+      <StepLock reason={lockReason("sanction")}>
+        <SanctionPanel leadId={leadId} mode="sanction" />
+      </StepLock>
       <p className="text-[11px] leading-relaxed text-slate-500 border-t border-slate-100 pt-3">
         <b className="text-slate-600">Agreement &amp; documents (§11).</b>{" "}
         iTarang facilitates and files the sanction letter / loan agreement but is
@@ -658,12 +675,16 @@ export default async function AcquireLeadDetailPage({
 
   const disburseContent = won ? (
     <StepLock reason={lockReason("sanction")}>
-      <SanctionPanel leadId={leadId} />
+      <div className="space-y-3">
+        {/* Both Stage-2 rails opted out → the E-NACH & Agreement step is
+            skipped, so the Sanction action shows here instead. */}
+        {enachStepSkipped ? <SanctionPanel leadId={leadId} mode="sanction" /> : null}
+        <SanctionPanel leadId={leadId} mode="disburse" />
+      </div>
     </StepLock>
   ) : (
     <p className="text-sm text-slate-500">
-      Disbursal unlocks for the winning lead once the E-NACH mandate and
-      verification gates are satisfied.
+      Disburse unlocks for the winning lead once the loan is sanctioned.
     </p>
   );
 
@@ -748,19 +769,22 @@ export default async function AcquireLeadDetailPage({
     },
     {
       key: "disburse",
-      label: "Disbursal",
-      sub: delivered
-        ? "disbursed · delivered"
-        : dispatched
-          ? "disbursed · dispatched"
-          : sanctioned
-          ? "sanctioned · awaiting dealer OTP"
+      label: "Disburse",
+      sub: disbursed
+        ? delivered
+          ? "disbursed · delivered"
+          : dispatched
+            ? "disbursed · dispatched"
+            : "disbursed"
+        : sanctioned
+          ? dispatched || delivered
+            ? "sanctioned · dispatched · disburse pending"
+            : "sanctioned · disburse pending"
           : disbursalReady
-            ? "ready"
+            ? "sanction first"
             : "—",
-      // `sold` (post-OTP) is the terminal state we model — disbursement transfer
-      // itself is PARKED (§19.1), so we don't gate on a money-movement record.
-      state: sold ? "done" : disbursalReady || sanctioned ? "active" : "locked",
+      // 23 Nov — done only once the NBFC clicks Disburse (separate status).
+      state: disbursed ? "done" : sanctioned ? "active" : "locked",
       content: disburseContent,
     },
   ];
@@ -792,15 +816,19 @@ export default async function AcquireLeadDetailPage({
         tone: "warning",
         text: "Recalled by iTarang — changes are being made to this file. Actions are paused until it is resubmitted.",
       };
-    if (sold)
+    if (disbursed)
       return {
         tone: "success",
-        text: "Loan sanctioned and battery dispatched — origination complete. (Disbursement transfer is out of scope, §19.1.)",
+        text: sold
+          ? "Loan sanctioned, disbursed and battery dispatched — origination complete."
+          : "Loan sanctioned and disbursed — the dealer completes Step 5 (OTP + dispatch).",
       };
     if (sanctioned)
       return {
-        tone: "success",
-        text: "Loan sanctioned — the dealer can now complete Step 5 (OTP + dispatch).",
+        tone: "info",
+        text: sold
+          ? "Battery dispatched — click Disburse in the last step once the money is released."
+          : "Loan sanctioned — the dealer can now complete Step 5 (OTP + dispatch). Click Disburse in the last step once the money is released.",
       };
     // Winning lead — Field Investigation / Video KYC unlock here, then Stage 2.
     if (won) {
@@ -835,7 +863,7 @@ export default async function AcquireLeadDetailPage({
       if (disbursalReady)
         return {
           tone: "success",
-          text: "All applicable verification tracks satisfied — ready to sanction & disburse.",
+          text: "All applicable verification tracks satisfied — sanction the loan in the E-NACH & Agreement step, then Disburse.",
         };
       return {
         tone: "info",

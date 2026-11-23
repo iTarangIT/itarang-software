@@ -6,7 +6,7 @@
  * right after resolving the actor. It throws a `FORBIDDEN: …` error (→ 403 via
  * the routes' statusFromError) when the hierarchy says no.
  */
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, gte } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { nbfcCibilReviews, nbfcLeadAssignments, nbfcTenants, nbfcUsers, users } from "@/lib/db/schema";
 import {
@@ -62,6 +62,8 @@ export interface CibilReviewRow {
   note: string;
   decision_reason: string | null;
   conditions: string | null;
+  /** E-394 — condition-docs.ts keys. */
+  condition_docs: string[];
   decided_by: string | null;
   decided_at: Date | null;
   created_at: Date;
@@ -80,11 +82,22 @@ export async function getLatestCibilReview(tenantId: string, leadId: string): Pr
       note: nbfcCibilReviews.note,
       decision_reason: nbfcCibilReviews.decision_reason,
       conditions: nbfcCibilReviews.conditions,
+      condition_docs: nbfcCibilReviews.condition_docs,
       decided_by: nbfcCibilReviews.decided_by,
       decided_at: nbfcCibilReviews.decided_at,
       created_at: nbfcCibilReviews.created_at,
     })
     .from(nbfcCibilReviews)
+    // 23 Nov 2026 — only reviews of the CURRENT round: a file resumed after an
+    // NBFC rejection gets a fresh assigned_at, so the old rejected review no
+    // longer blocks a new CIBIL submission.
+    .innerJoin(
+      nbfcLeadAssignments,
+      and(
+        eq(nbfcLeadAssignments.id, nbfcCibilReviews.assignment_id),
+        gte(nbfcCibilReviews.created_at, nbfcLeadAssignments.assigned_at),
+      ),
+    )
     .where(and(eq(nbfcCibilReviews.tenant_id, tenantId), eq(nbfcCibilReviews.lead_id, leadId)))
     .orderBy(desc(nbfcCibilReviews.created_at))
     .limit(1);

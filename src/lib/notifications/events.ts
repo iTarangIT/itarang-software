@@ -912,6 +912,68 @@ export async function notifyNbfcRequestPushed(p: {
   });
 }
 
+/**
+ * 23 Nov 2026 — documents for an NBFC request can arrive in BATCHES. One part
+ * of a request was verified (or the admin sent part of it) while the rest is
+ * still being collected: the NBFC can open what has arrived now.
+ */
+export async function notifyNbfcRequestBatch(p: {
+  leadId: string;
+  requestId: string;
+  tenantId: string;
+  received: number;
+  total: number | null;
+  docLabels: string[];
+  from?: Party;
+}) {
+  const who = await leadLabel(p.leadId);
+  const label = await tenantDisplayName(p.tenantId);
+  const part = p.total ? `${p.received} of ${p.total}` : `${p.received}`;
+  await emit({
+    type: "nbfc.doc_batch_received",
+    title: "Part of the requested documents is in",
+    message: `${part} requested document(s) for ${who} are ready${
+      p.docLabels.length ? ` (${p.docLabels.join(", ")})` : ""
+    }. The rest are still being collected.`,
+    leadId: p.leadId,
+    stage: "NBFC request",
+    from: p.from ?? ADMIN_PARTY,
+    data: { requestId: p.requestId, received: p.received, total: p.total },
+    to: [toNbfc(p.tenantId, label, { href: nbfcLead(p.leadId, "#documents") })],
+  });
+}
+
+/**
+ * 23 Nov 2026 — the NBFC's credit check (CIBIL review) was approved, with or
+ * without conditions. Before this only the NBFC's own logins heard about it;
+ * iTarang (admin / sales head) and the dealer now get the milestone too. A
+ * rejection is announced by the file-rejection path (rejectNbfcFile).
+ */
+export async function notifyCreditCheckApproved(p: {
+  leadId: string;
+  tenantId: string;
+  conditions?: string | null;
+  approverName?: string | null;
+}) {
+  const who = await leadLabel(p.leadId);
+  const lender = await tenantDisplayName(p.tenantId);
+  await emit({
+    type: "nbfc.credit_approved",
+    title: p.conditions ? "Credit check approved with conditions" : "Credit check approved",
+    message: p.conditions
+      ? `${lender} approved the credit check for ${who} with conditions: ${p.conditions}`
+      : `${lender} approved the credit check for ${who}. The offer comes next.`,
+    leadId: p.leadId,
+    stage: "Acquire · CIBIL review",
+    from: nbfcParty(lender, p.approverName ?? null),
+    data: { conditions: p.conditions ?? null, entityId: p.tenantId },
+    to: [
+      toAdmins({ href: adminLead(p.leadId) }),
+      toLeadDealer(p.leadId, { href: dealerLead(p.leadId) }),
+    ],
+  });
+}
+
 /** An NBFC verified / queried / rejected one document on the lead. */
 export async function notifyNbfcDocVerdict(p: {
   leadId: string;
@@ -2423,6 +2485,57 @@ export async function notifyLeadResubmitted(p: {
       }),
       toLeadNbfcs(p.leadId, { href: nbfcLead(p.leadId) }),
     ],
+  });
+}
+
+/**
+ * 23 Nov 2026 (Battery Pool) — a file an NBFC rejected was RESUMED after the
+ * customer sent corrected documents: back to the same NBFC, on to another
+ * NBFC, or as a NEW case under another dealer (the rejected case stays as
+ * history). Told to iTarang, the dealer of the (new) lead and, when it went
+ * back to a lender, that lender.
+ */
+export async function notifyLeadResumed(p: {
+  leadId: string;
+  mode: "same_nbfc" | "other_nbfc" | "new_dealer";
+  oldLeadId?: string | null;
+  nbfcTenantId?: string | null;
+  nbfcName?: string | null;
+  note: string;
+  byName?: string | null;
+}) {
+  const who = await leadLabel(p.leadId);
+  const what =
+    p.mode === "new_dealer"
+      ? `${who}'s file was opened as a new case for you after an NBFC rejection (corrected documents received).`
+      : p.mode === "same_nbfc"
+        ? `${who}'s rejected file was sent back to ${p.nbfcName ?? "the lender"} with corrected documents.`
+        : `${who}'s rejected file was sent to ${p.nbfcName ?? "another lender"} with corrected documents.`;
+  const to = [
+    toAdmins({ href: adminLead(p.leadId) }),
+    toLeadDealer(p.leadId, {
+      href: dealerLead(p.leadId),
+      message: `${what} Note: ${p.note}`,
+    }),
+  ];
+  if (p.nbfcTenantId) {
+    to.push(
+      toNbfc(p.nbfcTenantId, p.nbfcName ?? "NBFC", {
+        href: nbfcLead(p.leadId),
+        title: "Rejected file resumed",
+        message: `${who}'s file is back with you after the customer sent corrected documents. Note: ${p.note}`,
+      }),
+    );
+  }
+  await emit({
+    type: "lead.resumed",
+    title: p.mode === "new_dealer" ? "New case from a rejected file" : "Rejected file resumed",
+    message: `${what} Note: ${p.note}`,
+    leadId: p.leadId,
+    stage: "Step 4 · Lender",
+    from: adminParty(p.byName ?? null),
+    data: { mode: p.mode, old_lead_id: p.oldLeadId ?? null, note: p.note, entityId: p.mode },
+    to,
   });
 }
 

@@ -34,7 +34,7 @@ export const GET = withErrorHandler(async (req: Request) => {
     const t = await resolveRoutingTarget(leadId.trim());
     return successResponse({
       test: t.ok
-        ? { ok: true, ruleId: t.rule.id, scope: t.scope, nbfcName: t.nbfcName, productName: t.productName }
+        ? { ok: true, ruleId: t.rule?.id ?? null, source: t.source, scope: t.scope, nbfcName: t.nbfcName, productName: t.productName }
         : { ok: false, why: t.why, ruleId: t.rule?.id ?? null },
     });
   }
