@@ -76,6 +76,8 @@ type Step3Context = {
         verified: number;
         rejected: number;
     };
+    /** Extra documents asked for the co-borrower (E-394 — NBFC approval conditions). */
+    co_borrower_extra_docs?: { total: number; pending: number };
 };
 
 // ─── Preview Customer Profile (read-only side-by-side modal) ───────────────
@@ -1191,7 +1193,7 @@ export default function BorrowerConsentPage() {
                                     <p className="text-red-600 mt-1 text-xs">Please submit a new co-borrower below.</p>
                                 </div>
                             </div>
-                        ) : (step3Ctx.requires_supporting_docs || step3Ctx.requires_co_borrower) ? (
+                        ) : (step3Ctx.requires_supporting_docs || step3Ctx.requires_co_borrower || (step3Ctx.co_borrower_extra_docs?.total ?? 0) > 0) ? (
                             <div className="mb-6 flex items-start gap-3 px-4 py-4 rounded-xl bg-blue-50 border border-blue-200">
                                 <FileText className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
                                 <div className="flex-1 text-sm">
@@ -1212,6 +1214,12 @@ export default function BorrowerConsentPage() {
                                                         <span className="block italic text-blue-700 mt-0.5">{step3Ctx.latest_co_borrower_request.reason}</span>
                                                     )}
                                                 </span>
+                                            </li>
+                                        )}
+                                        {(step3Ctx.co_borrower_extra_docs?.total ?? 0) > 0 && (
+                                            <li className="flex items-center gap-2">
+                                                <span className="w-1.5 h-1.5 rounded-full bg-blue-600 flex-shrink-0" />
+                                                Co-Borrower Documents ({step3Ctx.co_borrower_extra_docs!.total} item{step3Ctx.co_borrower_extra_docs!.total === 1 ? '' : 's'})
                                             </li>
                                         )}
                                     </ul>
@@ -1729,7 +1737,7 @@ export default function BorrowerConsentPage() {
                                 setRequestedDocs(next as unknown as RequestedDoc[])
                             }
                         />
-                        {step3Ctx?.requires_co_borrower && (
+                        {(step3Ctx?.requires_co_borrower || (step3Ctx?.co_borrower_extra_docs?.total ?? 0) > 0) && (
                             <OtherDocumentsSection
                                 leadId={leadId}
                                 docFor="co_borrower"

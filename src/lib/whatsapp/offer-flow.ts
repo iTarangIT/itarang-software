@@ -51,7 +51,7 @@ import { selectOfferWinner } from "@/lib/leads/select-winner";
 import type { ActiveDealer } from "./customer-lead";
 import { leadActionId } from "./leadActionButton";
 import { registerLeadAction } from "./leadActionReply";
-import { pushToLead } from "./lead-push";
+import { pushToLead, pushToLeadAndInitiator, type LeadPushTarget } from "./lead-push";
 import { registerLeadState } from "./lead-states";
 import { labelFor, schemeLabelsForLead } from "./scheme-name";
 import {
@@ -155,7 +155,28 @@ export async function pushOfferToWhatsApp(
   const answered = item.negotiation.some((r) => r.party === "customer");
   const note = lastLenderMessage(item);
 
-  await pushToLead(leadId, (t) => {
+  // 23 Nov 2026 — the iTarang salesperson who sent the file in also gets the
+  // offer, with a one-tap Accept (of_pick) — see initiatorDealerForLead.
+  const initiatorMsg = (t: LeadPushTarget) => ({
+    prompt: {
+      kind: "text" as const,
+      body:
+        `💰 *${label} has made an offer for ${t.customerName}* (${t.referenceId})\n\n` +
+        `${termsBlock(item, label)}` +
+        (note ? `\n\n_"${note}"_` : "") +
+        `\n\nWalk the customer through it, then tap *Accept offer* to go ahead to E-NACH and the agreement.`,
+      buttons: [
+        { id: leadActionId("of_pick", leadId, nbfcId), title: "✅ Accept offer" },
+        { id: leadActionId("of_view", leadId), title: "📋 View offers" },
+      ],
+    },
+    nudge: {
+      template: "lead_action",
+      params: [oneLine(t.greetName), oneLine(t.referenceId), `${t.customerName} has a financing offer`],
+    },
+  });
+
+  await pushToLeadAndInitiator(leadId, (t) => {
     const dealerSide = t.audience === "dealer";
     const head = answered
       ? dealerSide
@@ -187,7 +208,7 @@ export async function pushOfferToWhatsApp(
         ],
       },
     };
-  });
+  }, initiatorMsg);
 }
 
 /**
