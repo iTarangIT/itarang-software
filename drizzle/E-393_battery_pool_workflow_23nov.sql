@@ -1,4 +1,3 @@
--- migration-gate: held
 -- E-393 — Battery Pool / NBFC workflow changes (23 Nov 2026).
 --
 -- 1. nbfc_cibil_reviews.condition_docs — "Approve with conditions" now carries
