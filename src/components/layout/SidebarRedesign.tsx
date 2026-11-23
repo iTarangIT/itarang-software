@@ -128,6 +128,7 @@ const ADMIN_SALES_HEAD_GROUPS: LayoutGroup[] = [
                 children: [
                     ...both("lead-upload"),
                     "sh-ai-campaigns",
+                    { id: "sh-linkedin", label: "LinkedIn Scraper", isNew: true },
                     ...both("ai-intent"),
                     ...both("acquisition-campaigns"),
                     { id: "neodove-campaigns", label: "NeoDove campaigns" },
@@ -363,6 +364,7 @@ export const NAV_LAYOUTS: Record<string, Layout> = {
                         node: "Lead sourcing",
                         children: [
                             "ceo-acquisition-campaigns",
+                            { add: "ceo-linkedin", label: "LinkedIn Scraper", href: "/sales-head/linkedin", isNew: true },
                             { add: "ceo-ai-dialer", label: "AI dialler", href: "/ceo/ai-dialer" },
                             { id: "neodove-campaigns", label: "NeoDove campaigns" },
                             { id: "neodove-activity", label: "NeoDove sync activity" },

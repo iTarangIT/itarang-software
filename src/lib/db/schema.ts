@@ -14217,3 +14217,6 @@ export const kycDocumentSkips = pgTable(
     leadIdx: index("kyc_document_skips_lead_idx").on(t.lead_id),
   }),
 );
+
+// E-393 — LinkedIn Outreach tables (own file, see schema-linkedin.ts).
+export * from "./schema-linkedin";

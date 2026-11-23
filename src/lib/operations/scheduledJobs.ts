@@ -169,6 +169,13 @@ export const SCHEDULED_JOBS: ScheduledJob[] = [
     runner: { kind: "ticker", job: "digilocker-expiry", everyMs: 15 * MIN, offSwitch: "ENABLE_DIGILOCKER_EXPIRY_SWEEP" },
   },
   {
+    id: "linkedin-outreach",
+    title: "LinkedIn Outreach",
+    what: "Starts and refreshes LinkedIn searches, polls replies and acceptances, and sends approved invites / messages at the paced rate (E-393).",
+    cronPaths: [],
+    runner: { kind: "ticker", job: "linkedin-outreach", everyMs: MIN, offSwitch: "ENABLE_LI_WORKER" },
+  },
+  {
     id: "dealer-agreement-refresh",
     title: "Dealer agreement status",
     what: "Refreshes dealer agreement e-sign status.",
