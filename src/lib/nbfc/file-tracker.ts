@@ -176,8 +176,9 @@ export function deriveFileStage(input: FileStageInput): FileStage {
   if (input.sanctionedAt) {
     return {
       key: "sanctioned",
-      label: "Sanctioned",
-      waitingOn: "none",
+      // 23 Nov — disbursement is now a separate NBFC action.
+      label: "Sanctioned — disburse pending",
+      waitingOn: "nbfc",
       since: input.sanctionedAt,
       slaDueAt: null,
     };

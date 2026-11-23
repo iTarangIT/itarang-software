@@ -71,6 +71,7 @@ import {
   PhoneOff,
   Image as ImageIcon,
   Lightbulb,
+  Linkedin,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -499,6 +500,16 @@ function missedCallbacksDigestItem(idPrefix: string) {
   };
 }
 
+// 23 Nov 2026 — Battery Pool: the 9 PM NBFC files report.
+function nbfcDailyDigestItem(idPrefix: string) {
+  return {
+    id: `${idPrefix}-nbfc-daily-digest`,
+    label: "NBFC daily report (9 PM)",
+    icon: MailCheck,
+    href: "/admin/settings/nbfc-daily",
+  };
+}
+
 // 251 item 9 — Monday's AI Analyst thumbs-down review mail.
 function analystFeedbackDigestItem(idPrefix: string) {
   return {
@@ -635,6 +646,7 @@ const ROLE_TRAILING_SECTIONS: Record<string, any[]> = {
         salesDailyDigestItem("sh"),
         idleWeeklyDigestItem("sh"),
         missedCallbacksDigestItem("sh"),
+        nbfcDailyDigestItem("sh"),
         analystFeedbackDigestItem("sh"),
         analystDailyDigestItem("sh"),
         targetsPendingDigestItem("sh"),
@@ -1020,6 +1032,14 @@ const roleNavigation: Record<string, any[]> = {
           href: "/sales-head/campaigns",
           // Not `exact` — the detail route /sales-head/campaigns/[id] must
           // keep this item lit, same as the ASM twin.
+        },
+        {
+          // E-393 — LinkedIn Outreach: keyword search, approved paced
+          // invites / messages, reply inbox (tasks/linkedin-outreach-dev-plan.md).
+          id: "sh-linkedin",
+          label: "LinkedIn Scraper",
+          icon: Linkedin,
+          href: "/sales-head/linkedin",
         },
         {
           id: "sh-escalations",
@@ -1806,6 +1826,7 @@ const roleNavigation: Record<string, any[]> = {
         salesDailyDigestItem("admin"),
         idleWeeklyDigestItem("admin"),
         missedCallbacksDigestItem("admin"),
+        nbfcDailyDigestItem("admin"),
         analystFeedbackDigestItem("admin"),
         analystDailyDigestItem("admin"),
         targetsPendingDigestItem("admin"),

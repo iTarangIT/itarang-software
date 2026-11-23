@@ -391,13 +391,22 @@ async function fanOut(
       tally.already += 1;
       continue;
     }
-    const r = await countAndSend(kind, target.slot, target.digestDate, [person.email], settings, (d) =>
-      per.collect(d, person),
-    );
+    let figuresSent = null as DigestFigures | null;
+    const r = await countAndSend(kind, target.slot, target.digestDate, [person.email], settings, async (d) => {
+      const c = await per.collect(d, person);
+      figuresSent = c.figures;
+      return c;
+    });
     await finishPerson(id, r.ok ? "sent" : "failed", r.messageId, r.error ?? null);
     if (r.ok) {
       tally.sent += 1;
       mailed.push(person.email);
+      // 23 Nov 2026 — e.g. the NBFC Daily WhatsApp copy. Never fails the send.
+      if (per.afterSend && figuresSent) {
+        await per
+          .afterSend(person, figuresSent, { sections: settings.sections })
+          .catch((err) => console.error(`[digest:${kind.id}] afterSend for ${person.name} failed:`, err));
+      }
     } else {
       tally.failed += 1;
       errors.push(`${person.name}: ${r.error ?? "unknown"}`);

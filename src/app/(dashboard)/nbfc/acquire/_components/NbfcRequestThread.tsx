@@ -346,6 +346,16 @@ export default function NbfcRequestThread({
 
           {items.length > 0 ? (
             <ul className="mt-2 space-y-1 border-t border-slate-100 pt-2">
+              {/* 23 Nov 2026 — documents arrive in batches: a verified item is
+                  open to the NBFC straight away, before the rest is in. */}
+              {request.status !== "pushed_to_nbfc" &&
+              request.status !== "closed" &&
+              items.some((it) => it.upload_status === "verified") ? (
+                <li className="text-[11px] text-emerald-700">
+                  {items.filter((it) => it.upload_status === "verified").length} of {items.length} received so far — the
+                  rest are still being collected.
+                </li>
+              ) : null}
               {items.map((it) => (
                 <li
                   key={it.id}
@@ -354,9 +364,12 @@ export default function NbfcRequestThread({
                   <span className="text-slate-600">{it.doc_label}</span>
                   <span className="flex items-center gap-2">
                     <span className="text-slate-400">
-                      {it.upload_status ?? "not_uploaded"}
+                      {it.upload_status === "verified" ? "received" : (it.upload_status ?? "not_uploaded")}
                     </span>
-                    {it.file_url && request.status === "pushed_to_nbfc" ? (
+                    {it.file_url &&
+                    (request.status === "pushed_to_nbfc" ||
+                      request.status === "closed" ||
+                      it.upload_status === "verified") ? (
                       <a
                         href={it.file_url}
                         onClick={(e) => onFreshFileClick(e, it.file_url)}

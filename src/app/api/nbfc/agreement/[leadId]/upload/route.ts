@@ -79,8 +79,86 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
       return NextResponse.json({ ok: false, error: "BAD_REQUEST: only PDF files are accepted" }, { status: 415 });
     }
 
+    // 23 Nov — `signed=1`: the NBFC uploads the ALREADY-SIGNED agreement (wet
+    // sign / own platform). No iTarang e-sign runs; the row goes straight to
+    // 'signed' with the uploaded PDF as the signed copy. Allowed from pending,
+    // failed or an e-sign still in flight (customer signed on paper instead).
+    const signedUpload = ["1", "true", "yes"].includes(String(form.get("signed") ?? "").toLowerCase());
+
     // Guard: don't replace the source once signing is in flight / done.
     const latest = await getLatestAgreement(leadId, winner.nbfc_id);
+    if (signedUpload) {
+      if (latest?.status === "signed") {
+        return NextResponse.json(
+          { ok: false, error: "BAD_REQUEST: the agreement is already signed for this lead" },
+          { status: 400 },
+        );
+      }
+      const method: AgreementMethod | null = (
+        await resolveServiceOptIn(actor.tenant_id, winner.snapshot)
+      ).doc_agreement_method;
+      if (!method) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error:
+              "BAD_REQUEST: the loan agreement does not run through iTarang for this NBFC (Settings -> Document Handling) - handled off-platform",
+          },
+          { status: 400 },
+        );
+      }
+      const now = new Date();
+      const { url: signedUrl } = await putNbfcObject(
+        `agreements/${leadId}/signed-upload-${now.getTime()}.pdf`,
+        buf,
+        "application/pdf",
+      );
+      // signed-pdf serves this cache key first, so the download works without
+      // an eSign document id.
+      await putNbfcObject(`agreements/${leadId}/signed.pdf`, buf, "application/pdf");
+      const fields = {
+        status: "signed",
+        method: "upload",
+        signed_document_url: signedUrl,
+        provider_raw_status: "signed_copy_uploaded",
+        failure_reason: null,
+        signed_at: now,
+        updated_at: now,
+      };
+      let agreementId: string;
+      if (latest && latest.status !== "skipped") {
+        await db.update(nbfcLoanAgreements).set(fields).where(eq(nbfcLoanAgreements.id, latest.id));
+        agreementId = latest.id;
+      } else {
+        const [created] = await db
+          .insert(nbfcLoanAgreements)
+          .values({
+            lead_id: leadId,
+            nbfc_id: winner.nbfc_id,
+            tenant_id: actor.tenant_id,
+            agreement_ref: generateAgreementRef(leadId),
+            store_loan_agreement: true,
+            initiated_by: actor.user_id,
+            initiated_at: now,
+            ...fields,
+          })
+          .returning({ id: nbfcLoanAgreements.id });
+        agreementId = created.id;
+      }
+      try {
+        const { notifyLoanAgreementEvent } = await import("@/lib/notifications/events");
+        const { tenantDisplayName } = await import("@/lib/notifications/emit");
+        await notifyLoanAgreementEvent({
+          leadId,
+          event: "signed",
+          nbfcName: await tenantDisplayName(actor.tenant_id),
+          tenantId: actor.tenant_id,
+        });
+      } catch (err) {
+        console.error("[agreement/upload] signed notification failed:", err);
+      }
+      return NextResponse.json({ ok: true, agreement_id: agreementId, signed: true, size: file.size });
+    }
     if (latest && (latest.status === "in_progress" || latest.status === "signed")) {
       return NextResponse.json(
         { ok: false, error: "BAD_REQUEST: an agreement is already in progress or signed — cannot replace the source PDF" },

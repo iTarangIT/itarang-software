@@ -234,3 +234,33 @@ export async function notifyDealerOfVerdictForward(opts: {
 export function statusLabel(status: string): string {
   return NBFC_DOC_STATUS_LABEL[status] ?? status;
 }
+
+/**
+ * 23 Nov 2026 — one batch of an NBFC document request is ready (a child was
+ * verified, or the admin sent part of the documents) while the rest is still
+ * being collected. Counts the request's verified children for the "x of y".
+ * Best-effort.
+ */
+export async function notifyNbfcOfBatch(requestId: string, docLabels: string[]): Promise<void> {
+  const { otherDocumentRequests } = await import("@/lib/db/schema");
+  const [w] = await db
+    .select({ lead_id: nbfcDocRequests.lead_id, tenant_id: nbfcDocRequests.tenant_id, status: nbfcDocRequests.status })
+    .from(nbfcDocRequests)
+    .where(eq(nbfcDocRequests.id, requestId))
+    .limit(1);
+  if (!w || w.status === "closed" || w.status === "rejected") return;
+  const children = await db
+    .select({ s: otherDocumentRequests.upload_status })
+    .from(otherDocumentRequests)
+    .where(eq(otherDocumentRequests.nbfc_request_id, requestId));
+  const received = children.filter((c) => c.s === "verified").length;
+  const { notifyNbfcRequestBatch } = await import("@/lib/notifications/events");
+  await notifyNbfcRequestBatch({
+    leadId: w.lead_id,
+    requestId,
+    tenantId: w.tenant_id,
+    received: children.length ? received : docLabels.length,
+    total: children.length || null,
+    docLabels,
+  });
+}

@@ -4911,6 +4911,9 @@ export const nbfcCibilReviews = pgTable(
     decision_reason: text("decision_reason"),
     // E-389 — "Approve with conditions": the conditions the parent recorded.
     conditions: text("conditions"),
+    // E-394 — documents the approval is conditional on (keys of
+    // src/lib/nbfc/condition-docs.ts), picked from a multi-select.
+    condition_docs: jsonb("condition_docs").$type<string[]>().default([]).notNull(),
     decided_by: uuid("decided_by"),
     decided_at: timestamp("decided_at", { withTimezone: true }),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -14217,3 +14220,48 @@ export const kycDocumentSkips = pgTable(
     leadIdx: index("kyc_document_skips_lead_idx").on(t.lead_id),
   }),
 );
+
+// E-394 (23 Nov 2026, Battery Pool) — the iTarang admin / sales head picks the
+// NBFC scheme (lender + loan product) before the file is submitted. One row per
+// lead (latest pick wins). resolveRoutingTarget() uses it before the routing
+// rules while the product still passes the BRE. A separate table, not leads
+// columns, so lead INSERTs keep working on a DB that has not run E-394 yet.
+export const leadSchemePicks = pgTable("lead_scheme_picks", {
+  lead_id: varchar("lead_id", { length: 255 }).primaryKey().notNull(),
+  nbfc_id: integer("nbfc_id").notNull(),
+  loan_product_id: integer("loan_product_id").notNull(),
+  picked_by: uuid("picked_by"),
+  picked_by_name: text("picked_by_name"),
+  channel: varchar("channel", { length: 12 }).default("web").notNull(),
+  picked_at: timestamp("picked_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+// E-394 — resume a file an NBFC rejected once the customer sends corrected
+// documents. Same dealer → the old lead is re-opened (new_lead_id = old);
+// another dealer → a NEW lead (new case) is created for that dealer and the
+// rejected one stays as it was, linked here as history.
+export const leadResumes = pgTable(
+  "lead_resumes",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    old_lead_id: varchar("old_lead_id", { length: 255 }).notNull(),
+    new_lead_id: varchar("new_lead_id", { length: 255 }).notNull(),
+    from_dealer_id: varchar("from_dealer_id", { length: 255 }),
+    to_dealer_id: varchar("to_dealer_id", { length: 255 }),
+    // same_dealer | new_dealer
+    mode: varchar("mode", { length: 16 }).notNull(),
+    rejected_nbfc_id: integer("rejected_nbfc_id"),
+    rejection_reason: text("rejection_reason"),
+    note: text("note"),
+    resumed_by: uuid("resumed_by"),
+    resumed_by_name: text("resumed_by_name"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    oldIdx: index("lead_resumes_old_lead_idx").on(t.old_lead_id),
+    newIdx: index("lead_resumes_new_lead_idx").on(t.new_lead_id),
+  }),
+);
+
+// E-393 — LinkedIn Outreach tables (own file, see schema-linkedin.ts).
+export * from "./schema-linkedin";

@@ -273,6 +273,16 @@ export async function resolveDealerCode(user: {
 }
 
 /**
+ * 23 Nov: a file waiting for the iTarang House dealer check (or whose dealer
+ * the house rejected) is not the proposed dealer's yet — it is hidden from
+ * that dealer until approved. See lib/leads/dealer-check-visibility.
+ */
+async function heldFromDealer(leadId: string): Promise<boolean> {
+  const { isHiddenFromDealer } = await import("@/lib/leads/dealer-check-visibility");
+  return isHiddenFromDealer(leadId);
+}
+
+/**
  * May this dealer act on (change) a lead whose leads.dealer_id is
  * `leadDealerId`? Replaces the raw `lead.dealer_id !== user.dealer_id` compare
  * in the dealer lead routes, which refused a dealer login with no
@@ -290,7 +300,7 @@ export async function dealerMayActOnLead(
   leadId?: string | null,
 ): Promise<boolean> {
   const code = await resolveDealerCode(user);
-  if (dealerOwnsLead(leadDealerId, code)) return true;
+  if (dealerOwnsLead(leadDealerId, code) && !(leadId && (await heldFromDealer(leadId)))) return true;
   return leadId ? houseMayActOnLead(code, leadId) : false;
 }
 
@@ -304,7 +314,7 @@ export async function dealerMayViewLead(
   leadId: string,
 ): Promise<boolean> {
   const code = await resolveDealerCode(user);
-  if (dealerOwnsLead(leadDealerId, code)) return true;
+  if (dealerOwnsLead(leadDealerId, code) && !(await heldFromDealer(leadId))) return true;
   return houseMayActOnLead(code, leadId);
 }
 
@@ -321,7 +331,7 @@ export async function dealerMayDispatch(
   leadId?: string | null,
 ): Promise<boolean> {
   const code = await resolveDealerCode(user);
-  if (dealerOwnsLead(leadDealerId, code)) return true;
+  if (dealerOwnsLead(leadDealerId, code) && !(leadId && (await heldFromDealer(leadId)))) return true;
   return leadId ? houseMayActOnLead(code, leadId) : false;
 }
 
