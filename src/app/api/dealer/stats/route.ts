@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { visibleToDealerSql } from "@/lib/leads/dealer-check-visibility";
 import { createClient } from "@/lib/supabase/server";
 import { db } from "@/lib/db";
 import {
@@ -118,7 +119,7 @@ export async function GET() {
       const totalLeadsResult = await db
         .select({ count: sql<number>`count(*)` })
         .from(leads)
-        .where(eq(leads.dealer_id, dealerId || ""));
+        .where(and(eq(leads.dealer_id, dealerId || ""), visibleToDealerSql()));
 
       totalLeads = Number(totalLeadsResult[0]?.count || 0);
     } catch {}
@@ -130,7 +131,8 @@ export async function GET() {
         .where(
           and(
             eq(leads.dealer_id, dealerId || ""),
-            eq(leads.lead_status, "converted")
+            eq(leads.lead_status, "converted"),
+            visibleToDealerSql()
           )
         );
 
@@ -150,7 +152,7 @@ export async function GET() {
         .select({ count: sql<number>`count(*)` })
         .from(loanApplications)
         .innerJoin(leads, eq(loanApplications.lead_id, leads.id))
-        .where(eq(leads.dealer_id, dealerId || ""));
+        .where(and(eq(leads.dealer_id, dealerId || ""), visibleToDealerSql()));
 
       loanCount = Number(loanResult[0]?.count || 0);
     } catch {}
@@ -159,7 +161,7 @@ export async function GET() {
       recentLeads = await db
         .select()
         .from(leads)
-        .where(eq(leads.dealer_id, dealerId || ""))
+        .where(and(eq(leads.dealer_id, dealerId || ""), visibleToDealerSql()))
         .orderBy(desc(leads.created_at))
         .limit(5);
     } catch {

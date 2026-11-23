@@ -15,6 +15,7 @@ import { and, desc, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db/index";
 import { leads, whatsappDealerSessions, whatsappMessages } from "@/lib/db/schema";
+import { visibleToDealerSql } from "@/lib/leads/dealer-check-visibility";
 import { getInventorySummary } from "@/lib/inventory/summary";
 import {
   getLeadDraft,
@@ -191,7 +192,7 @@ async function onMyDrafts(
     })
     .from(leads)
     .where(
-      and(eq(leads.dealer_id, dealer.dealerCode), eq(leads.kyc_status, "draft")),
+      and(eq(leads.dealer_id, dealer.dealerCode), eq(leads.kyc_status, "draft"), visibleToDealerSql()),
     )
     .orderBy(desc(leads.updated_at))
     .limit(10);
