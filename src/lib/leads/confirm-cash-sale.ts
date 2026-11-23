@@ -247,6 +247,13 @@ export async function confirmCashSale(opts: {
   // there is otherwise no signal of it outside the dealer's own bell.
   await notifyFulfilmentToAdmin({ leadId, event: "cash_sale" }).catch(() => {});
 
+  // 23 Nov: a cash sale has no KYC Submit — confirming the sale is the submit,
+  // so this is when the dealer-check people are alerted (if a check is open).
+  {
+    const { noticeDealerCheckSubmitted } = await import("./dealer-check-notify");
+    await noticeDealerCheckSubmitted(leadId);
+  }
+
   return {
     leadStatus: "sold",
     productSelectionId,

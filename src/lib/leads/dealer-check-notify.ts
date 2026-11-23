@@ -1,10 +1,11 @@
 /**
  * 23 Nov — email + WhatsApp for the dealer check (point 4).
  *
- *   noticeDealerCheckOpened — a file reached the dealer check: every recipient on
- *                              Settings › Dealer check alerts gets an email and a
- *                              WhatsApp with THEIR OWN signed link to Approve,
- *                              Reject or Change the dealer.
+ *   noticeDealerCheckSubmitted — the salesperson submitted a file that is in the
+ *                              dealer check: every recipient on Settings › Dealer
+ *                              check alerts gets an email and a WhatsApp with THEIR
+ *                              OWN signed link to Approve, Reject or Change the
+ *                              dealer. Nothing is sent before the submit.
  *   noticeDealerCheckDecided — somebody acted (on the CRM or by a link): the
  *                              other recipients are told "Action taken by <name>"
  *                              and their links stop working (the check is decided).
@@ -19,7 +20,7 @@
 import { and, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { leadDealerReviews, leads } from "@/lib/db/schema";
+import { adminVerificationQueue, auditLogs, leadDealerReviews, leads } from "@/lib/db/schema";
 
 import { dealerCheckKindLabel } from "./dealer-assignment-rules";
 import { getDealerCheckSettings, type DealerCheckRecipient } from "./dealer-check-settings";
@@ -135,9 +136,6 @@ export interface OpenedNotice {
   initiatorName: string | null;
 }
 
-/** How long a check waits for the customer's name before alerting without it. */
-const NAME_WAIT_MS = 30 * 60 * 1000;
-
 /** One summary per send, for logs / tests. */
 export interface NoticeReport {
   recipient: string;
@@ -145,50 +143,63 @@ export interface NoticeReport {
   whatsapp: boolean | null;
 }
 
+/** Has the salesperson submitted this file to iTarang (admin KYC queue row)? */
+async function isSubmitted(leadId: string): Promise<boolean> {
+  const [q] = await db
+    .select({ id: adminVerificationQueue.id })
+    .from(adminVerificationQueue)
+    .where(eq(adminVerificationQueue.lead_id, leadId))
+    .limit(1);
+  return !!q;
+}
+
 /**
- * Called when a check opens. A WhatsApp lead is created before the customer's
- * PAN / Aadhaar is read, so its name is still the "Customer" placeholder: the
- * alert then waits — noticeDealerCheckNameArrived sends it the moment the name
- * lands, and a 30-minute fallback sends it with the mobile if no name ever
- * comes (a warm / cold lead saved without documents).
+ * Claim the one-and-only alert of a check. audit_logs.id is the primary key, so
+ * the insert succeeds exactly once per review — a double tap on Submit, or the
+ * open and the submit racing, can never send it twice. No migration needed.
+ */
+async function claimAlert(reviewId: string, leadId: string): Promise<boolean> {
+  const rows = await db
+    .insert(auditLogs)
+    .values({
+      id: `DCALERT-${reviewId}`,
+      entity_type: "lead",
+      entity_id: leadId,
+      action: "DEALER_CHECK_ALERT_SENT",
+      changes: { review_id: reviewId },
+      timestamp: new Date(),
+    })
+    .onConflictDoNothing()
+    .returning({ id: auditLogs.id });
+  return rows.length > 0;
+}
+
+/**
+ * Called when a check opens. 23 Nov: the email + WhatsApp go to the alert list
+ * only once the salesperson SUBMITS the file ("Submit to iTarang" on WhatsApp,
+ * Submit on the web, or a confirmed cash sale) — see noticeDealerCheckSubmitted.
+ * A check that opens on a file already submitted (re-pick after a rejection)
+ * alerts straight away.
  */
 export async function noticeDealerCheckOpened(n: OpenedNotice): Promise<NoticeReport[]> {
   try {
-    const f = await leadFacts(n.leadId);
-    if (!f.name) {
-      console.log(`[dealer-check-notify] ${n.reviewId}: waiting for the customer's name before alerting`);
-      const t = setTimeout(() => {
-        void sendIfStillWaiting(n).catch((err) => console.warn("[dealer-check-notify] fallback failed", err));
-      }, NAME_WAIT_MS);
-      t.unref?.();
+    if (!(await isSubmitted(n.leadId))) {
+      console.log(`[dealer-check-notify] ${n.reviewId}: not submitted yet — alert waits for Submit`);
       return [];
     }
+    if (!(await claimAlert(n.reviewId, n.leadId))) return [];
   } catch (err) {
-    console.warn("[dealer-check-notify] name check failed", err instanceof Error ? err.message : String(err));
+    console.warn("[dealer-check-notify] open-time check failed", err instanceof Error ? err.message : String(err));
+    return [];
   }
   return sendOpenedNotice(n);
 }
 
-/** Fallback: still pending and still no name after the wait → alert with the mobile. */
-async function sendIfStillWaiting(n: OpenedNotice) {
-  const f = await leadFacts(n.leadId);
-  if (f.name) return; // the name arrived — noticeDealerCheckNameArrived already sent it
-  const [rev] = await db
-    .select({ status: leadDealerReviews.status })
-    .from(leadDealerReviews)
-    .where(eq(leadDealerReviews.id, n.reviewId))
-    .limit(1);
-  if (rev?.status !== "pending") return;
-  await sendOpenedNotice(n);
-}
-
 /**
- * The customer's name has just been written onto the lead for the first time
- * (placeholder → real name). Send the alert of every check still open on it.
- * Callers must only call this on that transition, so it goes out once.
- * Never throws.
+ * The salesperson has just submitted the file. Send the alert of every dealer
+ * check still open on it (once per check). Never throws.
  */
-export async function noticeDealerCheckNameArrived(leadId: string): Promise<void> {
+export async function noticeDealerCheckSubmitted(leadId: string): Promise<void> {
   try {
     const open = await db
       .select({
@@ -203,6 +214,7 @@ export async function noticeDealerCheckNameArrived(leadId: string): Promise<void
     const { dealerDisplayNames } = await import("./pushGuards");
     const names = await dealerDisplayNames(open.map((o) => o.dealerId));
     for (const o of open) {
+      if (!(await claimAlert(o.id, leadId))) continue;
       await sendOpenedNotice({
         reviewId: o.id,
         leadId,
@@ -213,7 +225,7 @@ export async function noticeDealerCheckNameArrived(leadId: string): Promise<void
       });
     }
   } catch (err) {
-    console.warn("[dealer-check-notify] name-arrived notice failed", err instanceof Error ? err.message : String(err));
+    console.warn("[dealer-check-notify] submit notice failed", err instanceof Error ? err.message : String(err));
   }
 }
 

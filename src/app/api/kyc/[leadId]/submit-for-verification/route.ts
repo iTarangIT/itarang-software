@@ -233,6 +233,11 @@ export async function POST(
     // 14 Oct: tell the iTarang house dealer when the dealer moves a file it pushed.
     await recordKycMilestone(writer.actor, 'submitted the KYC for verification');
     await notifyHouseOfDealerStep(leadId, "submitted the KYC for verification", leadGate.user.dealer_id);
+    // 23 Nov: dealer-check people are alerted (email + WhatsApp) on Submit only.
+    {
+      const { noticeDealerCheckSubmitted } = await import("@/lib/leads/dealer-check-notify");
+      await noticeDealerCheckSubmitted(leadId);
+    }
     return NextResponse.json({
       success: true,
       leadStatus: "pending_itarang_verification",
