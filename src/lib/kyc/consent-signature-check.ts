@@ -19,7 +19,10 @@
  */
 import { readDocumentWithPrompt } from "@/lib/whatsapp/extraction";
 
-export type ConsentSignatureVerdict = "signed" | "unsigned" | "not_consent" | "unreadable" | "unknown";
+import { consentBelongsToFile, type ConsentExpected, type ConsentOwnership } from "./consent-ownership";
+
+/** 23 Nov: + wrong_file — the form printed for ANOTHER customer / file (refused). */
+export type ConsentSignatureVerdict = "signed" | "unsigned" | "not_consent" | "unreadable" | "unknown" | "wrong_file";
 
 export interface ConsentSignatureCheck {
   verdict: ConsentSignatureVerdict;
@@ -27,6 +30,8 @@ export interface ConsentSignatureCheck {
   note: string;
   /** Dealer / operator facing reason when refused. */
   message?: string;
+  /** 23 Nov (point 1): is it THIS file's form? Absent when the check could not run. */
+  ownership?: ConsentOwnership;
 }
 
 const PROMPT = `You are checking a scanned or photographed customer CONSENT FORM before it is accepted.
@@ -45,11 +50,19 @@ Look at every page and answer in strict JSON:
   "signed_boxes": number,          // SIGNATURE boxes holding a handwritten signature, initials or a thumb impression
   "signature_present": boolean,    // true if at least one SIGNATURE box is really signed by hand
   "looks_digitally_added": boolean,// true if the "signature" is typed text or a pasted image, not ink
+  "printed_lead_id": string|null,  // the id after "Lead:" in the "Ref: … | Lead: …" line, exactly as printed (e.g. LEAD-20261120-d476195a)
+  "printed_consent_ref": string|null, // the id after "Ref:" (e.g. CONSENT-20261120-0042)
+  "printed_customer_name": string|null, // the name after "Dear" / in the NAME box, as PRINTED (not handwritten); null if blank
   "reason": string                 // one short sentence
 }
 Typed text, the printed customer name, a stamp of the company or the empty line itself are NOT a signature.`;
 
-export async function checkConsentSignature(buffer: Buffer, mimeType: string): Promise<ConsentSignatureCheck> {
+export async function checkConsentSignature(
+  buffer: Buffer,
+  mimeType: string,
+  /** 23 Nov (point 1): the file the upload must belong to. Omitted = signature only. */
+  expected?: ConsentExpected,
+): Promise<ConsentSignatureCheck> {
   const mime = normaliseMime(buffer, mimeType);
   if (!mime) {
     return { verdict: "unknown", note: "Signature check skipped: unsupported file type — needs a human check." };
@@ -87,6 +100,25 @@ export async function checkConsentSignature(buffer: Buffer, mimeType: string): P
       message: "This doesn't look like the iTarang consent form. Please upload the consent form we sent, signed by the customer.",
     };
   }
+  // 23 Nov (point 1): the form must be THIS customer's — another file's signed
+  // consent is refused even when it is properly signed.
+  const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+  const own = expected
+    ? consentBelongsToFile(
+        { leadId: str(parsed.printed_lead_id), consentRef: str(parsed.printed_consent_ref), customerName: str(parsed.printed_customer_name) },
+        expected,
+      )
+    : null;
+  if (own?.ownership === "mismatch") {
+    return {
+      verdict: "wrong_file",
+      ownership: "mismatch",
+      note: `Ownership check: ${own.note}`,
+      message:
+        "This signed consent form belongs to a different customer's file. Please upload the consent form printed for this customer (its \"Lead:\" number and name must match this file).",
+    };
+  }
+
   if (!signed || digital) {
     return {
       verdict: "unsigned",
@@ -97,7 +129,10 @@ export async function checkConsentSignature(buffer: Buffer, mimeType: string): P
   }
   return {
     verdict: "signed",
-    note: `Signature check: customer signature found (${signedBoxes}/${boxes || "?"} signature boxes signed).`,
+    ownership: own?.ownership,
+    note:
+      `Signature check: customer signature found (${signedBoxes}/${boxes || "?"} signature boxes signed).` +
+      (own ? ` Ownership check: ${own.note}` : ""),
   };
 }
 

@@ -69,21 +69,28 @@ export async function mayViewHouseDealerChecks(user: {
 }
 
 /**
- * May this login DECIDE dealer checks? Only the main iTarang House login
- * (dealer@itarang.com, or WHATSAPP_HOUSE_DEALER_EMAIL) — matched by user id.
- * House team logins (sales persons under the house code) see the queue view only,
- * so nobody approves a dealer they picked themselves. 20 Nov decision.
+ * May this login DECIDE dealer checks?
+ *  - the main iTarang House login (dealer@itarang.com / WHATSAPP_HOUSE_DEALER_EMAIL);
+ *  - 23 Nov: a house team login marked "Can approve" (Admin › House team logins);
+ *  - 23 Nov: a person on Settings › Dealer check alerts (Chirag, Anirudh, Admin,
+ *    Sanchit …) — they get the email / WhatsApp link and may also act on the CRM.
+ * Other house team logins see the queue only. Every decision records the
+ * person's own user id and name.
  */
 export async function mayDecideDealerChecks(user: {
   id: string;
   role: string | null | undefined;
   dealer_id?: string | null;
 }): Promise<boolean> {
-  if (user.role !== "dealer") return false;
   try {
+    const { getDealerCheckSettings } = await import("./dealer-check-settings");
+    const settings = await getDealerCheckSettings();
+    if (settings.recipients.some((r) => r.userId === user.id)) return true;
+    if (user.role !== "dealer") return false;
     const { resolveHouseDealer } = await import("@/lib/whatsapp/customer-lead");
     const house = await resolveHouseDealer();
-    return !!house && house.uploaderId === user.id && user.dealer_id === house.dealerCode;
+    if (!house || user.dealer_id !== house.dealerCode) return false;
+    return house.uploaderId === user.id || settings.houseApproverIds.includes(user.id);
   } catch (err) {
     console.warn("[dealer-assignment] house login lookup failed", err instanceof Error ? err.message : String(err));
     return false;
@@ -197,6 +204,18 @@ export async function openDealerReview(opts: {
     });
 
     void notifyHouseOfDealerCheck(opts.leadId, opts.dealerId, opts.reasonKind, opts.initiator.name);
+    // 23 Nov (point 4): email + WhatsApp with an act-on-it link to the alert list.
+    void (async () => {
+      const { noticeDealerCheckOpened } = await import("./dealer-check-notify");
+      const names = await dealerDisplayNames([opts.dealerId]);
+      await noticeDealerCheckOpened({
+        reviewId: id,
+        leadId: opts.leadId,
+        dealerName: names.get(opts.dealerId) ?? opts.dealerId,
+        reasonLabel: dealerCheckKindLabel(opts.reasonKind),
+        initiatorName: opts.initiator.name,
+      });
+    })().catch((err) => console.warn("[dealer-assignment] alert notice failed", err));
     return { id };
   } catch (err) {
     console.error("[dealer-assignment] openDealerReview failed", err);
@@ -215,10 +234,12 @@ async function leadLabel(leadId: string): Promise<{ name: string; ref: string }>
 
 async function notifyHouseOfDealerCheck(leadId: string, dealerId: string, kind: string, by: string | null) {
   try {
-    // Only the main house login decides, so only it gets the bell.
+    // The main house login and the house logins marked "Can approve" get the bell.
     const { resolveHouseDealer } = await import("@/lib/whatsapp/customer-lead");
     const house = await resolveHouseDealer();
     if (!house) return;
+    const { getDealerCheckSettings } = await import("./dealer-check-settings");
+    const approvers = (await getDealerCheckSettings()).houseApproverIds.filter((id) => id !== house.uploaderId);
     const [{ name, ref }, names] = await Promise.all([leadLabel(leadId), dealerDisplayNames([dealerId])]);
     await emit({
       type: "lead.dealer_check_pending",
@@ -228,7 +249,11 @@ async function notifyHouseOfDealerCheck(leadId: string, dealerId: string, kind: 
       }. Approve, change or reject the dealer — the file goes to the iTarang KYC review after that.`,
       leadId,
       stage: "Dealer assignment",
-      to: [{ audience: { kind: "user", userId: house.uploaderId }, as: ADMIN_PARTY, href: DEALER_CHECKS_HREF }],
+      to: [house.uploaderId, ...approvers].map((userId) => ({
+        audience: { kind: "user" as const, userId },
+        as: ADMIN_PARTY,
+        href: DEALER_CHECKS_HREF,
+      })),
     });
   } catch (err) {
     console.warn("[dealer-assignment] house notice failed", err instanceof Error ? err.message : String(err));
@@ -384,7 +409,7 @@ export class DealerCheckError extends Error {
  */
 export async function decideDealerReview(opts: {
   reviewId: string;
-  actor: { id: string; name: string | null; role: string | null };
+  actor: { id: string; name: string | null; role: string | null; via?: "crm" | "link" };
   decision: DealerDecision;
   newDealerId?: string | null;
   reason?: string | null;
@@ -529,6 +554,49 @@ export async function decideDealerReview(opts: {
     }
   }
 
+  // 23 Nov (point 3): the internal audit line — WHO approved / changed /
+  // rejected, on the CRM or by the email / WhatsApp link. The KYC timeline on
+  // the review page shows the name to iTarang; the dealer sees "iTarang team".
+  const { decisionPhrase } = await import("./dealer-check-settings-rules");
+  const phrase = decisionPhrase(opts.decision, fromName, target?.name);
+  try {
+    const { recordKycEvent } = await import("@/lib/kyc/kycEventLog");
+    const actorIsHouse = opts.actor.role === "dealer";
+    await recordKycEvent({
+      leadId: lead.id,
+      action: `Dealer check: ${phrase}${reason ? ` — ${reason}` : ""}`,
+      actor: {
+        id: opts.actor.id,
+        name: opts.actor.name,
+        role: opts.actor.role,
+        type: actorIsHouse ? "house" : "itarang",
+        channel: "web",
+      },
+      detail: {
+        dealer_check_id: review.id,
+        dealer_check_decision: opts.decision,
+        dealer_check_via: opts.actor.via ?? "crm",
+        from_dealer_id: currentDealerId,
+        to_dealer_id: target?.dealerId ?? null,
+      },
+      notify: false,
+    });
+  } catch (err) {
+    console.warn("[dealer-assignment] audit line failed", err instanceof Error ? err.message : String(err));
+  }
+
+  // 23 Nov (point 4): everyone else on the alert list — "action taken by <name>".
+  void (async () => {
+    const { noticeDealerCheckDecided } = await import("./dealer-check-notify");
+    await noticeDealerCheckDecided({
+      leadId: lead.id,
+      actorUserId: opts.actor.id,
+      actorName: opts.actor.name ?? "iTarang House",
+      phrase,
+      reason,
+    });
+  })().catch((err) => console.warn("[dealer-assignment] decided notice failed", err));
+
   return { id: review.id, status, dealer: target ? { dealerId: target.dealerId, name: target.name } : null };
 }
 
@@ -622,13 +690,15 @@ async function notifyInitiatorOfDecision(opts: {
         ? "Dealer rejected — pick the correct dealer"
         : decision === "change"
           ? "iTarang House changed the dealer"
-          : "Dealer approved";
+          : "Paperwork accepted — KYC still under review";
+    // 23 Nov (point 5): an approval accepts the paperwork — it is not KYC approval.
+    const { PAPERWORK_ACCEPTED_NOTE } = await import("./dealer-check-settings-rules");
     const message =
       decision === "reject"
         ? `iTarang House rejected ${dealerName} for ${name} (${ref}): ${reason}. Pick the correct dealer again.`
         : decision === "change"
-          ? `iTarang House moved ${name} (${ref}) to ${dealerName}. It now goes to the iTarang KYC review.`
-          : `iTarang House approved ${dealerName} for ${name} (${ref}). It now goes to the iTarang KYC review.`;
+          ? `iTarang House moved ${name} (${ref}) to ${dealerName}. ${PAPERWORK_ACCEPTED_NOTE}`
+          : `iTarang House confirmed ${dealerName} for ${name} (${ref}). ${PAPERWORK_ACCEPTED_NOTE}`;
 
     if (review.initiated_by_user_id) {
       await emit({
@@ -718,7 +788,13 @@ async function whatsappNoticeToInitiator(
     },
     nudge: {
       template: "lead_action",
-      params: [t.greetName, t.referenceId, rejected ? "the dealer on this application needs correcting" : "the dealer on this application is confirmed"],
+      params: [
+        t.greetName,
+        t.referenceId,
+        rejected
+          ? "the dealer on this application needs correcting"
+          : "paperwork accepted for processing — KYC is not approved yet",
+      ],
     },
   }));
 }

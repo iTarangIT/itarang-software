@@ -1,8 +1,9 @@
 // E-390 — Battery Pool diagram 1. POST /api/leads/dealer-checks/[id]/decide
 //   body { decision: "approve" | "change" | "reject", dealer_id?, reason? }
 //
-// Only the main iTarang House login dealer@itarang.com (20 Nov — moved from
-// Admin / Sales Head; house team logins may not decide).
+// Who may decide: the main iTarang House login, house team logins marked
+// "Can approve", and the people on Settings › Dealer check alerts (23 Nov).
+// The decision is recorded against the person's own user id and name.
 // Approve / Change → the file goes on to the Admin / Sales Head KYC review and
 // may go to a lender. Reject (reason required) → the initiator picks again.
 
@@ -23,7 +24,7 @@ const Body = z.object({
 export const POST = withErrorHandler(async (req: Request, { params }: { params: Promise<{ id: string }> }) => {
   const user = await requireAuth();
   if (!(await mayDecideDealerChecks(user))) {
-    return errorResponse("Only the main iTarang House login (dealer@itarang.com) can approve, change or reject a dealer.", 403);
+    return errorResponse("You are not authorised to approve, change or reject a dealer. Ask the Sales Head to give your login approval rights.", 403);
   }
   const parsed = Body.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return errorResponse(parsed.error.issues[0]?.message ?? "Invalid request", 400);
@@ -31,7 +32,7 @@ export const POST = withErrorHandler(async (req: Request, { params }: { params: 
   try {
     const result = await decideDealerReview({
       reviewId: id,
-      actor: { id: user.id, name: user.name ?? null, role: user.role ?? null },
+      actor: { id: user.id, name: user.name ?? null, role: user.role ?? null, via: "crm" },
       decision: parsed.data.decision,
       newDealerId: parsed.data.dealer_id ?? null,
       reason: parsed.data.reason ?? null,

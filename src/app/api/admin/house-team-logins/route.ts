@@ -5,7 +5,8 @@
 //   POST  { name, email, phone? } → create the Supabase Auth user + a users row
 //         with role 'dealer' and dealer_id = the house code. Answers the
 //         temporary password ONCE (shown on the Admin screen; the person must
-//         change it on first sign-in). Nothing is emailed.
+//         change it on first sign-in). 23 Nov: the email + temporary password
+//         are also emailed to the new login, with the sign-in link.
 //   PATCH { userId, active } → switch a team login off / on (never the shared
 //         house login, which resolveHouseDealer keys on).
 //
@@ -31,6 +32,8 @@ import { generateTemporaryPassword } from "@/lib/auth/generateTemporaryPassword"
 import { hashPassword } from "@/lib/auth/hashPassword";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { resolveHouseDealer } from "@/lib/whatsapp/customer-lead";
+import { getDealerCheckSettings, setHouseApprover } from "@/lib/leads/dealer-check-settings";
+import { sendEmail } from "@/lib/email/mailer";
 
 export const dynamic = "force-dynamic";
 
@@ -47,14 +50,18 @@ const createSchema = z.object({
 });
 
 // `active` switches a login on/off; `staffUserId` (E-390) links the login to
-// the iTarang sales person who uses it (null = unlink). Either or both.
+// the iTarang sales person who uses it (null = unlink); `canApprove` (23 Nov)
+// lets the login approve / change / reject dealer checks. Any combination.
 const patchSchema = z
   .object({
     userId: z.string().uuid(),
     active: z.boolean().optional(),
     staffUserId: z.string().uuid().nullable().optional(),
+    canApprove: z.boolean().optional(),
   })
-  .refine((b) => b.active !== undefined || b.staffUserId !== undefined, { message: "Nothing to change" });
+  .refine((b) => b.active !== undefined || b.staffUserId !== undefined || b.canApprove !== undefined, {
+    message: "Nothing to change",
+  });
 
 async function staffLinks(loginIds: string[]): Promise<Map<string, string>> {
   if (!loginIds.length) return new Map();
@@ -96,13 +103,15 @@ export const GET = withErrorHandler(async () => {
     .from(users)
     .where(and(eq(users.dealer_id, h.code), eq(users.role, "dealer")))
     .orderBy(asc(users.created_at));
-  const [links, staff] = await Promise.all([staffLinks(rows.map((r) => r.id)), staffOptions()]);
+  const [links, staff, dcs] = await Promise.all([staffLinks(rows.map((r) => r.id)), staffOptions(), getDealerCheckSettings()]);
   const staffName = new Map(staff.map((s) => [s.id, s.name]));
   return successResponse({
     houseDealerCode: h.code,
     logins: rows.map((r) => ({
       ...r,
       shared: r.id === h.sharedUserId,
+      // The main login always decides dealer checks; others when switched on.
+      canApprove: r.id === h.sharedUserId || dcs.houseApproverIds.includes(r.id),
       staffUserId: links.get(r.id) ?? null,
       staffName: links.has(r.id) ? staffName.get(links.get(r.id)!) ?? null : null,
     })),
@@ -165,7 +174,40 @@ export const POST = withErrorHandler(async (req: Request) => {
   }
 
   console.log(`[house-team-logins] ${admin.id} created house login ${created.user.id} (${email})`);
-  return successResponse({ userId: created.user.id, email, name, temporaryPassword }, 201);
+
+  // 23 Nov (point 2): email the sign-in details to the new login.
+  let emailed = false;
+  try {
+    const base = (process.env.APP_URL || process.env.NEXT_PUBLIC_APP_URL || "https://crm.itarang.com").replace(/\/+$/, "");
+    const loginUrl = `${base}/login`;
+    const esc = (x: string) => x.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+    const res = await sendEmail({
+      to: email,
+      subject: "[iTarang] Your iTarang House login",
+      text:
+        `Hi ${name},
+
+${admin.name || "iTarang"} created an iTarang House login for you.
+
+` +
+        `Sign in: ${loginUrl}
+Email: ${email}
+Temporary password: ${temporaryPassword}
+
+` +
+        `You will be asked to set your own password the first time you sign in. Every step you take on a customer file is recorded under your name.
+
+iTarang`,
+      html:
+        `<p>Hi ${esc(name)},</p><p>${esc(admin.name || "iTarang")} created an <b>iTarang House</b> login for you.</p>` +
+        `<p>Sign in: <a href="${esc(loginUrl)}">${esc(loginUrl)}</a><br/>Email: <b>${esc(email)}</b><br/>Temporary password: <code style="font-size:15px">${esc(temporaryPassword)}</code></p>` +
+        `<p>You will be asked to set your own password the first time you sign in. Every step you take on a customer file is recorded under your name.</p><p>iTarang</p>`,
+    });
+    emailed = !!res?.messageId && !(res.rejected && res.rejected.length);
+  } catch (err) {
+    console.warn("[house-team-logins] credentials email failed", err instanceof Error ? err.message : String(err));
+  }
+  return successResponse({ userId: created.user.id, email, name, temporaryPassword, emailed }, 201);
 });
 
 export const PATCH = withErrorHandler(async (req: Request) => {
@@ -198,11 +240,22 @@ export const PATCH = withErrorHandler(async (req: Request) => {
     }
   }
 
+  // 23 Nov (point 2): "Can approve" — this login may decide dealer checks.
+  if (parsed.data.canApprove !== undefined && parsed.data.userId !== h.sharedUserId) {
+    await setHouseApprover(login.id, parsed.data.canApprove);
+    console.log(`[house-team-logins] ${admin.id} set canApprove=${parsed.data.canApprove} on ${login.id}`);
+  }
+
   if (parsed.data.active !== undefined) {
     if (parsed.data.userId === h.sharedUserId) {
       return errorResponse("The shared house login can't be switched off here — WhatsApp customer files are created under it.", 409);
     }
     await db.update(users).set({ is_active: parsed.data.active, updated_at: new Date() }).where(eq(users.id, login.id));
   }
-  return successResponse({ userId: parsed.data.userId, active: parsed.data.active, staffUserId: parsed.data.staffUserId });
+  return successResponse({
+    userId: parsed.data.userId,
+    active: parsed.data.active,
+    staffUserId: parsed.data.staffUserId,
+    canApprove: parsed.data.canApprove,
+  });
 });

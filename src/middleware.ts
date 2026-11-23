@@ -511,7 +511,9 @@ export async function middleware(request: NextRequest) {
     path === "/logout" ||
     path === "/reset-password" ||
     path === "/auctions" ||
-    path.startsWith("/recovery-agent/");
+    path.startsWith("/recovery-agent/") ||
+    // 23 Nov — the dealer-check email / WhatsApp link; the signed token is the credential.
+    path.startsWith("/dealer-check-action/");
 
   const isProtectedRoute =
     Object.values(roleDashboards).some((dashboardPath) =>
