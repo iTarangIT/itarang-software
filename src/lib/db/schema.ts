@@ -4330,7 +4330,7 @@ export const dealerLeads = pgTable("dealer_leads", {
   intent_overridden_by: uuid("intent_overridden_by"),
   intent_overridden_at: timestamp("intent_overridden_at", { withTimezone: true }),
   // E-296 — "Type of Business": battery_sale | buyback | scrap | other (finance
-  // retired by E-331),
+  // retired by E-331; products live in `segments` — 24 Nov tree, E-395),
   // enforced in src/lib/leads/businessType.ts (no CHECK).
   business_type: varchar("business_type", { length: 30 }),
 });

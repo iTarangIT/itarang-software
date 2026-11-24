@@ -451,15 +451,10 @@ export type OwnerDrillLead = {
 
 // ──────────────────────────── Bulk upload ─────────────────────────────────
 
-// BRD §0.4 — segment multi-value enum.
-export const UPLOAD_SEGMENTS = [
-    "3W",
-    "2W",
-    "Solar",
-    "Inverter",
-    "Auto-Parts",
-    "Battery",
-] as const;
+// BRD §0.4 — segment multi-value enum. 24 Nov tree: the one lead Segment list
+// (src/lib/leads/segments.ts). An uploaded "3W" / "2W" still reads as
+// "3W batteries" / "2W batteries" (parseSegments).
+export { LEAD_SEGMENTS as UPLOAD_SEGMENTS } from "@/lib/leads/segments";
 
 // One parsed CSV row before validation.
 export type UploadParsedRow = {

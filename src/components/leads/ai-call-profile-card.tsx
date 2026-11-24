@@ -156,12 +156,12 @@ export function AiCallProfileCard({ leadId, className = "" }: { leadId: string; 
                     {contacts.map((c) => (
                         <li key={c.id} className="flex flex-wrap items-center gap-2">
                             <span className="text-gray-500">{KIND_LABEL[c.kind]}:</span>
-                            <a
-                                href={`tel:${c.phone}`}
+                            {/* 24 Nov: shown, not dialled — calls go through NeoDove. */}
+                            <span
                                 className={`font-mono ${c.status === "wrong" ? "text-gray-400 line-through" : "text-gray-900"}`}
                             >
                                 {c.phone}
-                            </a>
+                            </span>
                             {c.name && <span>({c.name})</span>}
                             <span className="text-gray-400">
                                 heard on an AI call{" "}

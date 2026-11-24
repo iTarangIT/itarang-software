@@ -14,6 +14,12 @@ const execute = vi.fn(async (q: SQL) => {
 });
 vi.mock("@/lib/db", () => ({ db: { execute } }));
 const findLeadInScope = vi.fn();
+// 24 Nov: the visit business-type rule reads the lead; by default it is already typed.
+vi.mock("@/lib/leads/visitBusinessType", async (orig) => ({
+    ...(await orig<typeof import("@/lib/leads/visitBusinessType")>()),
+    currentLeadType: vi.fn(async () => ({ business_type: "battery_sale", segments: ["3W batteries"] })),
+    applyVisitBusinessType: vi.fn(async () => undefined),
+}));
 vi.mock("../scope", async (orig) => ({ ...(await orig<typeof import("../scope")>()), findLeadInScope }));
 const createPending = vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => ({ id: "act-1", expiresAt: new Date() }));
 vi.mock("../actions", async (orig) => ({ ...(await orig<typeof import("../actions")>()), createPending }));

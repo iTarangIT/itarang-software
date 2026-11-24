@@ -224,6 +224,7 @@ export function AsmLeadDetailView({ leadId, viewerId, viewerRole }: Props) {
                 <div className="grid min-h-0 overflow-hidden rounded-xl border border-gray-200">
                     <LeadDetailRightPane
                         bundle={bundle}
+                        viewerId={viewerId}
                         viewerRole={viewerRole}
                         focusQuoteId={focusQuoteId}
                         onReviseQuote={

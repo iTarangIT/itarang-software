@@ -14,6 +14,9 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { InfoTip } from "@/components/ui/info-tip";
 import { LEAD_STATUS_LABEL } from "@/lib/leads/queueFilters";
+import { isBusinessType, type BusinessType } from "@/lib/leads/businessType";
+import { storedSegments } from "@/lib/leads/segments";
+import { BusinessTypeSegmentPicker, typeSegmentProblem } from "@/components/leads/BusinessTypeSegmentPicker";
 import { PhotoUploader } from "./PhotoUploader";
 import { VerifiedVisitCapture, type CapturedVisit } from "@/components/visits/VerifiedVisitCapture";
 import { istDay } from "@/lib/visits/verifiedCapture";
@@ -61,7 +64,17 @@ const VISIT_STATUS_TARGETS = [
 type VisitStatusTarget = (typeof VISIT_STATUS_TARGETS)[number];
 
 /** The lead as the form needs it to pre-fill status / temperature. */
-export type VisitLeadState = { lead_status: string | null; interest_level: string | null };
+export type VisitLeadState = {
+    lead_status: string | null;
+    interest_level: string | null;
+    /** 24 Nov: pre-fills the required Type of business. */
+    business_type?: string | null;
+    /** 24 Nov tree: pre-fills the Segment (required for a Battery Sale). */
+    segments?: string[] | null;
+};
+
+const leadBusinessType = (lead?: VisitLeadState): BusinessType | "" =>
+    isBusinessType(lead?.business_type) ? lead.business_type : "";
 
 export function useVisitForm(open: boolean, lead?: VisitLeadState) {
     const today = istDay(new Date());
@@ -85,6 +98,9 @@ export function useVisitForm(open: boolean, lead?: VisitLeadState) {
     const [nextAction, setNextAction] = useState<VisitNextAction>("next_visit");
     const [nextVisitDate, setNextVisitDate] = useState("");
     const [submitting, setSubmitting] = useState(false);
+    // 24 Nov (CRM item 4): Type of business is required on every visit.
+    const [businessType, setBusinessType] = useState<BusinessType | "">(leadBusinessType(lead));
+    const [segments, setSegments] = useState<string[]>(storedSegments(lead?.segments));
     // Status / temperature to save with the visit ("" = leave as is), filled
     // from the shared auto rule (lib/leads/autoProgress.ts) until the ASM
     // changes them — the same values the WhatsApp Assistant proposes.
@@ -134,8 +150,19 @@ export function useVisitForm(open: boolean, lead?: VisitLeadState) {
             setNextVisitDate("");
             setSubmitting(false);
             setCapture(null);
+            setBusinessType(leadBusinessType(lead));
+            setSegments(storedSegments(lead?.segments));
         }
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- reset on close only
     }, [open, today]);
+
+    // The lead loads after the form mounts on some screens: take its type
+    // when the form has none yet.
+    useEffect(() => {
+        if (!businessType && isBusinessType(lead?.business_type)) setBusinessType(lead.business_type);
+        if (segments.length === 0 && lead?.segments?.length) setSegments(storedSegments(lead.segments));
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [lead?.business_type, lead?.segments]);
 
     const captureGps = () => {
         if (!("geolocation" in navigator)) {
@@ -171,6 +198,11 @@ export function useVisitForm(open: boolean, lead?: VisitLeadState) {
      * Returns null on validation failure or request error.
      */
     const submit = async (leadId: string): Promise<VisitSaveResult | null> => {
+        const typeProblem = typeSegmentProblem(businessType, segments);
+        if (typeProblem) {
+            toast.error(typeProblem);
+            return null;
+        }
         if (!remarks.trim()) {
             toast.error("Visit remarks are required.");
             return null;
@@ -194,6 +226,8 @@ export function useVisitForm(open: boolean, lead?: VisitLeadState) {
                 visit_status: visitStatus,
                 visit_remarks: remarks.trim(),
                 next_action: nextAction,
+                business_type: businessType,
+                segments: storedSegments(segments).filter((x) => x !== "Auto-Parts" && x !== "Battery"),
             };
             if (visitStatus === "visited") {
                 // ID 196: the server dates, places and photographs a done
@@ -284,6 +318,10 @@ export function useVisitForm(open: boolean, lead?: VisitLeadState) {
         interestTo,
         setInterestTo,
         auto,
+        businessType,
+        setBusinessType,
+        segments,
+        setSegments,
     };
 }
 
@@ -318,6 +356,10 @@ export function VisitFields({ form, leadId }: { form: UseVisitForm; leadId: stri
         interestTo,
         setInterestTo,
         auto,
+        businessType,
+        setBusinessType,
+        segments,
+        setSegments,
     } = form;
 
     return (
@@ -356,6 +398,13 @@ export function VisitFields({ form, leadId }: { form: UseVisitForm; leadId: stri
                     )}
                 </div>
             </div>
+
+            <BusinessTypeSegmentPicker
+                type={businessType}
+                segments={segments}
+                onType={setBusinessType}
+                onSegments={setSegments}
+            />
 
             {visitStatus === "visited" && (
                 <div>

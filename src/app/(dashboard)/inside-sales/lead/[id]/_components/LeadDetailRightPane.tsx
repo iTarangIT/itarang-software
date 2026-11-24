@@ -32,6 +32,8 @@ import { InfoTip } from "@/components/ui/info-tip";
 import { neodoveCampaignLine } from "@/lib/neodove/leadCampaignText";
 import { INTEREST_OPTIONS, LEAD_STATUS_LABEL } from "@/lib/leads/queueFilters";
 import { dayWords, isBlank, missingDealerDetails, shortAppId } from "@/lib/leads/leadPage246";
+import { canEditLead } from "@/lib/leads/access";
+import { EditLeadDetailsButton } from "@/components/leads/EditLeadDetailsDialog";
 
 type GroupKey = "snapshot" | "business" | "commercials" | "workflow" | "attribution" | "ownership";
 
@@ -61,6 +63,8 @@ const INTEREST_LABEL: Record<string, string> = Object.fromEntries(
 
 type Props = {
     bundle: LeadDetailBundle;
+    /** 24 Nov: who is looking — decides whether "Edit details" shows (canEditLead). */
+    viewerId?: string;
     /** ID 172: the Sales Head may change a locked deal card. */
     viewerRole?: string | null;
     /** ID 216: set for whoever may update commercials — "Revise" on a rejected quote. */
@@ -74,7 +78,7 @@ type Props = {
 /** ID 246: Dealer, Quotes first; then the AI review and call recordings; then the rest. */
 const TOP_GROUPS: GroupKey[] = ["snapshot", "commercials"];
 
-export function LeadDetailRightPane({ bundle, viewerRole, onReviseQuote, focusQuoteId, onUpdateQuote }: Props) {
+export function LeadDetailRightPane({ bundle, viewerId, viewerRole, onReviseQuote, focusQuoteId, onUpdateQuote }: Props) {
     const [open, setOpen] = useState<Record<GroupKey, boolean>>({
         snapshot: true,
         business: true,
@@ -94,6 +98,14 @@ export function LeadDetailRightPane({ bundle, viewerRole, onReviseQuote, focusQu
     const queryClient = useQueryClient();
     // ID 186: whether the dealer is already onboarded — information only (16 Oct).
     const onboarded = bundle.dealer_onboarded?.onboarded ? bundle.dealer_onboarded : null;
+    // 24 Nov (CRM item 2): the same rule PATCH /api/dealer-leads/[id] enforces.
+    const canEditDetails = canEditLead({
+        role: viewerRole,
+        userId: viewerId,
+        currentOwnerId: lead.current_owner_id,
+        asmId: lead.asm_id,
+    });
+    const refresh = () => void queryClient.invalidateQueries();
 
     // ID 60 / 61: the quote the dealer can answer is the newest approved,
     // not-withdrawn QUOTE — which is not always the newest row. Final terms, a
@@ -244,6 +256,11 @@ export function LeadDetailRightPane({ bundle, viewerRole, onReviseQuote, focusQu
                                 <div className="px-4 pb-4 pt-1">
                                     {g.key === "snapshot" && (
                                         <div className="grid grid-cols-2 gap-3">
+                                            {canEditDetails && (
+                                                <div className="col-span-2 flex justify-end">
+                                                    <EditLeadDetailsButton lead={lead} onSaved={refresh} />
+                                                </div>
+                                            )}
                                             {/* ID 214: a duplicate found after onboarding — this lead is
                                                 the same dealer as an onboarding already on the CRM. */}
                                             {onboarded &&
@@ -335,6 +352,15 @@ export function LeadDetailRightPane({ bundle, viewerRole, onReviseQuote, focusQu
                                                                     ) : (
                                                                         <Field key={label} label={label} value="Not set" />
                                                                     ),
+                                                                )}
+                                                                {canEditDetails && (
+                                                                    <div className="col-span-2">
+                                                                        <EditLeadDetailsButton
+                                                                            lead={lead}
+                                                                            onSaved={refresh}
+                                                                            label="Fill in these details"
+                                                                        />
+                                                                    </div>
                                                                 )}
                                                             </div>
                                                         )}

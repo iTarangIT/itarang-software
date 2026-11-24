@@ -42,7 +42,7 @@ export function hitsToProfiles(hits: WebHit[]): ProfileRecord[] {
 
 export async function discoverProfiles(input: SearchInput): Promise<ProfileRecord[]> {
   const key = firecrawlKey();
-  if (!key) throw new ProviderNotConfiguredError("FIRECRAWL_API_KEY is not set on this server (profile discovery).");
+  if (!key) throw new ProviderNotConfiguredError("No Firecrawl key on this server (SCRAPPER_API_KEY or FIRECRAWL_API_KEY) — profile discovery is off.");
   const limit = Math.min(Math.max(input.limit ?? 25, 1), 100);
   const res = await fetch("https://api.firecrawl.dev/v2/search", {
     method: "POST",
@@ -50,7 +50,15 @@ export async function discoverProfiles(input: SearchInput): Promise<ProfileRecor
     body: JSON.stringify({ query: discoveryQuery(input), limit, sources: [{ type: "web" }] }),
     signal: AbortSignal.timeout(45_000),
   });
-  if (!res.ok) throw new Error(`Profile discovery failed: Firecrawl ${res.status} ${(await res.text()).slice(0, 200)}`);
+  if (!res.ok) {
+    const text = await res.text();
+    if (res.status === 402) {
+      const resets = /"resets_at"\s*:\s*"([^"]+)"/.exec(text)?.[1];
+      const when = resets ? ` Credits reset ${new Date(resets).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })} IST.` : "";
+      throw new Error(`Profile discovery failed: the Firecrawl key has no credits left.${when} Top it up or set SCRAPPER_API_KEY to a key with credits.`);
+    }
+    throw new Error(`Profile discovery failed: Firecrawl ${res.status} ${text.slice(0, 200)}`);
+  }
   const body = (await res.json()) as { data?: { web?: WebHit[] } | WebHit[] };
   const hits = Array.isArray(body.data) ? body.data : (body.data?.web ?? []);
   return hitsToProfiles(hits);

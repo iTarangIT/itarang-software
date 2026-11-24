@@ -30,6 +30,8 @@ export type SearchJob = {
   providerJobId: string;
   /** Some paths (discovery without enrichment) have results immediately. */
   immediate?: ProfileRecord[];
+  /** The run still has results, but a step was skipped (shown on the run). */
+  warning?: string;
 };
 
 export type JobStatus = "running" | "ready" | "failed";

@@ -32,6 +32,16 @@ export const DEFAULT_PEOPLE_DATASET = "gd_l1viktl72bvl7bjuj0";
 /** Job id for a discovery-only run (no Bright Data token): results are immediate. */
 export const IMMEDIATE_JOB = "immediate";
 
+/** A Bright Data failure → one line the Sales Head can act on. */
+export function enrichWarning(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  const lead = "Saved without full profile details — Bright Data";
+  if (/customer is not active/i.test(msg)) return `${lead} account is not active (finish sign-up / add billing in the Bright Data dashboard).`;
+  if (/\b401\b|\b403\b|unauthori[sz]ed|invalid token/i.test(msg)) return `${lead} token was refused (check it on LinkedIn › Accounts).`;
+  if (/\b402\b|balance|insufficient/i.test(msg)) return `${lead} balance is too low.`;
+  return `${lead} failed: ${msg.slice(0, 200)}`;
+}
+
 type BdRecord = Record<string, unknown>;
 
 const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
@@ -79,12 +89,17 @@ export class BrightDataProvider implements SearchProvider {
     if (!(await this.token()) || discovered.length === 0) {
       return { providerJobId: IMMEDIATE_JOB, immediate: discovered };
     }
-    const job = await this.enrichProfiles(
-      discovered.map((d) => d.profileUrl),
-      input,
-    );
-    // Keep the discovered rows too: saved now, enriched when the snapshot lands.
-    return { ...job, immediate: discovered };
+    try {
+      const job = await this.enrichProfiles(
+        discovered.map((d) => d.profileUrl),
+        input,
+      );
+      // Keep the discovered rows too: saved now, enriched when the snapshot lands.
+      return { ...job, immediate: discovered };
+    } catch (err) {
+      // Enrichment is optional: keep what discovery found rather than fail the run.
+      return { providerJobId: IMMEDIATE_JOB, immediate: discovered, warning: enrichWarning(err) };
+    }
   }
 
   async enrichProfiles(urls: string[], input?: Pick<SearchInput, "webhookUrl" | "webhookSecret">): Promise<SearchJob> {

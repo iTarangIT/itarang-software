@@ -16,8 +16,8 @@ import {
     loadExistingByPhone,
     normalizePhone,
 } from "@/lib/leads/dedupe";
+import { parseSegments as parseLeadSegments } from "@/lib/leads/segments";
 import {
-    UPLOAD_SEGMENTS,
     type UploadHeaderReport,
     type UploadInsertPayload,
     type UploadParsedRow,
@@ -170,13 +170,9 @@ export function parseCsv(text: string): UploadParsedRow[] {
 // implementation. Re-exported because several call sites import it from here.
 export { normalizePhone };
 
+/** 24 Nov tree: the lead Segment list; "3W", "e-rickshaw", "BESS"… all read. */
 function parseSegments(raw: string | undefined): string[] {
-    if (!raw) return [];
-    const canon = new Map(UPLOAD_SEGMENTS.map((s) => [s.toLowerCase(), s]));
-    return raw
-        .split(",")
-        .map((s) => canon.get(s.trim().toLowerCase()))
-        .filter((s): s is (typeof UPLOAD_SEGMENTS)[number] => !!s);
+    return raw ? parseLeadSegments(raw) : [];
 }
 
 // ── Validation + dedupe ────────────────────────────────────────────────────

@@ -16,6 +16,11 @@
 
 import { z } from "zod";
 
+// 24 Nov tree: Type of business is WHAT DEAL we do with the dealer — one of
+// these four. The products he deals in (3W / 2W batteries, Solar, Inverter,
+// BESS, ESS) are the lead's Segment (src/lib/leads/segments.ts), not a type.
+// Two-Wheeler / Three-Wheeler / Lithium Battery / Solar were briefly types
+// (23–24 Nov); E-395 moved those rows to Battery Sale + their segment.
 export const BUSINESS_TYPES = [
     "battery_sale",
     "buyback",
@@ -107,6 +112,16 @@ export function normalizeBusinessType(input: unknown): BusinessType | null {
         finance: "battery_sale",
         financing: "battery_sale",
         loan: "battery_sale",
+        // A product named where a type is asked (old sheets, the 23–24 Nov
+        // types, chat) is a battery sale; the product itself is a Segment.
+        two_wheeler: "battery_sale",
+        three_wheeler: "battery_sale",
+        lithium_battery: "battery_sale",
+        solar: "battery_sale",
+        "2w": "battery_sale",
+        "3w": "battery_sale",
+        e_rickshaw: "battery_sale",
+        lithium: "battery_sale",
         scrap_sale: "scrap",
         scrapping: "scrap",
         others: "other",

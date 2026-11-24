@@ -40,6 +40,8 @@ import type { Preview, ToolResult } from "../../types";
 import { defineTool, LeadId, ownedLeadOr, type ToolFactory } from "../spec";
 import { leadUrl, visitCaptureUrl } from "../leads";
 import { hasVerifiedVisits } from "@/lib/visits/verifiedStore";
+import { applyVisitBusinessType } from "@/lib/leads/visitBusinessType";
+import { resolveVisitType, visitTypeInputShape, visitTypePlanShape } from "./visitType";
 import { defineApplier } from "../../applierSpec";
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
@@ -89,6 +91,8 @@ export const LogVisitPlan = z.object({
         })
         .nullable()
         .default(null),
+    /** 24 Nov tree: a Type of Business / Segments stated with the visit, written with it (null / [] = the lead's own stay). */
+    ...visitTypePlanShape,
 });
 export type LogVisitPlan = z.infer<typeof LogVisitPlan>;
 
@@ -128,6 +132,7 @@ export const logVisit: ToolFactory = () =>
                 lost_reason: LostReason.optional(),
                 photo_ids: z.array(AttachmentId).max(10).optional(),
                 location_id: AttachmentId.optional(),
+                ...visitTypeInputShape,
             })
             .refine((v) => v.visit_status !== "visited" || !!v.outcome, {
                 message: "outcome is required when visit_status is visited",
@@ -165,6 +170,11 @@ export const logVisit: ToolFactory = () =>
                 };
             }
             const remarks = input.remarks.trim();
+
+            // 24 Nov: no visit without the lead's type of business, nor a battery
+            // sale without a segment — the visit form's rule (visitType.ts).
+            const typeStep = await resolveVisitType(lead.id, input);
+            if ("question" in typeStep) return ask(typeStep.question);
 
             let visitDate: string | null = null;
             let status: StatusChoice = NO_CHANGE;
@@ -301,6 +311,8 @@ export const logVisit: ToolFactory = () =>
                 auto,
                 photos,
                 gps,
+                business_type: typeStep.business_type,
+                segments: typeStep.segments,
             };
 
             const lines: Preview["lines"] = [
@@ -318,6 +330,7 @@ export const logVisit: ToolFactory = () =>
                           : "no change",
                 },
             ];
+            lines.push(...typeStep.lines);
             if (interest) {
                 lines.push({ label: "Temperature", value: `${lead.interest_level ?? "none"} → ${interest}${auto.interest ? " (auto)" : ""}` });
             }
@@ -374,6 +387,8 @@ export const logVisitApplier = defineApplier<LogVisitPlan>({
         if (p.visit_status === "visited" && (await hasVerifiedVisits())) {
             throw new Error(`A done visit is logged with a shop photo and live location: ${visitCaptureUrl(p.lead_id)}`);
         }
+        // 24 Nov: the type of business first — refuses a lead that still has none.
+        await applyVisitBusinessType(tx, p.lead_id, { business_type: p.business_type, segments: p.segments });
         await consumeMedia(tx, [...p.photos.map((f) => f.media_id), ...(p.gps ? [p.gps.media_id] : [])], actionId);
         const visitRemarks = p.gps ? `${p.remarks}\n${p.gps.note}` : p.remarks;
         const visit = await recordVisit(

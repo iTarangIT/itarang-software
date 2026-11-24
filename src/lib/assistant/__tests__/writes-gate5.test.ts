@@ -8,6 +8,12 @@ const execute = vi.fn<(q: SQL) => Promise<Record<string, unknown>[]>>(async () =
 vi.mock("@/lib/db", () => ({ db: { execute } }));
 const findLeadInScope = vi.fn();
 const findClaimState = vi.fn();
+// 24 Nov: the visit business-type rule reads the lead; by default it is already typed.
+vi.mock("@/lib/leads/visitBusinessType", async (orig) => ({
+    ...(await orig<typeof import("@/lib/leads/visitBusinessType")>()),
+    currentLeadType: vi.fn(async () => ({ business_type: "battery_sale", segments: ["3W batteries"] })),
+    applyVisitBusinessType: vi.fn(async () => undefined),
+}));
 vi.mock("../scope", async (orig) => ({ ...(await orig<typeof import("../scope")>()), findLeadInScope, findClaimState }));
 const createPending = vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => ({ id: "act-1", expiresAt: new Date() }));
 vi.mock("../actions", async (orig) => ({ ...(await orig<typeof import("../actions")>()), createPending }));
@@ -91,6 +97,7 @@ describe("log_visit proposals (UC-01)", () => {
             remarks: "owner Ramesh, needs 10 batteries at X", next_action: "next_visit", next_visit_date: "2026-09-25",
             // Already Under_Discussion, and the ASM stated the interest: nothing auto.
             interest: "hot", status_to: null, lost: null, auto: { status: false, interest: false }, photos: [], gps: null,
+            business_type: null, segments: [], // the lead is already typed (mock): nothing to write
         });
         expect(a.preview).toMatchObject({ title: "Log visit — ABC Traders", resets_idle_clock: true, warning: null, needs_second_confirm: false });
         expect(a.preview.lines).toEqual([
@@ -409,5 +416,71 @@ describe("gate 5 appliers (run inside the executor's transaction)", () => {
         expect(claimLead).toHaveBeenCalledWith("DL-7", "asm-1", { tx: TX, actorRole: "asm" });
         claimLead.mockResolvedValueOnce({ ok: false, reason: "already_owned" });
         await expect(apply("claim_lead", ISR, { lead_id: "DL-7" })).rejects.toBeInstanceOf(ActionRejected);
+    });
+});
+
+// ── 24 Nov tree: Type of business (one) + Segment (one or more for a battery sale) ──
+
+describe("log_visit — type of business and segment are required", () => {
+    const vbt = () => import("@/lib/leads/visitBusinessType");
+    const untyped = { business_type: null, segments: [] };
+
+    it("asks for the type when the lead has none and the ASM gave none; nothing is proposed", async () => {
+        const { currentLeadType } = await vbt();
+        vi.mocked(currentLeadType).mockResolvedValueOnce(untyped);
+        const r = await run(ASM, "log_visit", UC01);
+        expect(r).toMatchObject({ kind: "question" });
+        expect((r as { question: string }).question).toMatch(/type of business\? \(Battery Sale, Buyback, Scrap, Other\)/);
+        expect(createPending).not.toHaveBeenCalled();
+    });
+
+    it("a battery sale with no segment anywhere asks for the segment", async () => {
+        const { currentLeadType } = await vbt();
+        vi.mocked(currentLeadType).mockResolvedValueOnce(untyped);
+        const r = await run(ASM, "log_visit", { ...UC01, business_type: "battery_sale" });
+        expect((r as { question: string }).question).toMatch(/3W batteries, 2W batteries, Solar, Inverter, BESS, ESS/);
+        expect(createPending).not.toHaveBeenCalled();
+    });
+
+    it("buyback needs no segment", async () => {
+        const { currentLeadType } = await vbt();
+        vi.mocked(currentLeadType).mockResolvedValueOnce(untyped);
+        const r = await run(ASM, "log_visit", { ...UC01, business_type: "buyback" });
+        expect(r.kind).toBe("preview");
+        expect(stored().plan).toMatchObject({ business_type: "buyback", segments: [] });
+    });
+
+    it("type + segments said in chat go on the plan and the card (spellings normalised)", async () => {
+        const { currentLeadType } = await vbt();
+        vi.mocked(currentLeadType).mockResolvedValueOnce(untyped);
+        const r = await run(ASM, "log_visit", { ...UC01, business_type: "battery_sale", segments: ["3W", "solar", "nonsense"] });
+        expect(r.kind).toBe("preview");
+        expect(stored().plan).toMatchObject({ business_type: "battery_sale", segments: ["3W batteries", "Solar"] });
+        expect(stored().preview.lines).toContainEqual({ label: "Business", value: "Battery Sale" });
+        expect(stored().preview.lines).toContainEqual({ label: "Segment", value: "3W batteries, Solar" });
+    });
+
+    it("a lead already typed and segmented writes nothing", async () => {
+        await run(ASM, "log_visit", UC01);
+        expect(stored().plan).toMatchObject({ business_type: null, segments: [] });
+        expect(stored().preview.lines.some((l) => l.label === "Business" || l.label === "Segment")).toBe(false);
+    });
+
+    it("the applier checks + writes type and segments in the visit's transaction, BEFORE the visit", async () => {
+        const { applyVisitBusinessType } = await vbt();
+        const TX = { tag: "tx" };
+        const plan = APPLIERS.log_visit.schema.parse({
+            lead_id: "DL-1042", visit_status: "visited", visit_outcome: "productive", visit_date: "2026-09-24",
+            remarks: "owner Ramesh", next_action: "next_visit", next_visit_date: "2026-09-25",
+            interest: null, status_to: null, lost: null, business_type: "battery_sale", segments: ["ESS"],
+        });
+        await APPLIERS.log_visit.apply({ tx: TX as never, user: ASM, step: 1 }, plan);
+        expect(applyVisitBusinessType).toHaveBeenCalledWith(TX, "DL-1042", { business_type: "battery_sale", segments: ["ESS"] });
+        expect(vi.mocked(applyVisitBusinessType).mock.invocationCallOrder[0]).toBeLessThan(recordVisit.mock.invocationCallOrder[0]!);
+        // A plan stored before 24 Nov has neither field: null / [].
+        const old = APPLIERS.log_visit.schema.parse({
+            ...(plan as Record<string, unknown>), business_type: undefined, segments: undefined,
+        }) as { business_type: string | null; segments: string[] };
+        expect(old).toMatchObject({ business_type: null, segments: [] });
     });
 });

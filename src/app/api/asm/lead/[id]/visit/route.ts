@@ -30,6 +30,9 @@ import { applyVisitStatus } from "@/lib/asm/visitStatus";
 import { assertOwner } from "@/lib/leads/ownership";
 import { withLeadActor } from "@/lib/leads/actorContext";
 import { checkCaptureUse } from "@/lib/visits/verifiedCapture";
+import { BusinessTypeSchema } from "@/lib/leads/businessType";
+import { SegmentsSchema } from "@/lib/leads/segments";
+import { applyVisitBusinessType } from "@/lib/leads/visitBusinessType";
 import { hasVerifiedVisits, loadVisitCapture } from "@/lib/visits/verifiedStore";
 import {
     VISIT_NEXT_ACTION,
@@ -80,6 +83,10 @@ const BodySchema = z
         interest_auto: z.boolean().optional(),
         /** ID 196: the verified photo + location (POST /api/visits/capture). */
         capture_id: z.string().uuid().nullable().optional(),
+        /** 24 Nov: the lead's Type of Business — required unless the lead already has one. */
+        business_type: BusinessTypeSchema.nullable().optional(),
+        /** 24 Nov tree: what the dealer sells — required (here or on the lead) for a Battery Sale. */
+        segments: SegmentsSchema.nullable().optional(),
     })
     .refine((b) => b.visit_status !== "visited" || !!b.visit_outcome, {
         message: "visit_outcome required when visit_status='visited'",
@@ -105,7 +112,7 @@ export const POST = withErrorHandler(
         await assertOwner(id, user.id);
 
         // status_to is dropped here on purpose — see the header.
-        const { status_to: _ignoredStatusTo, interest_level, interest_auto, capture_id, ...visit } = body;
+        const { status_to: _ignoredStatusTo, interest_level, interest_auto, capture_id, business_type, segments, ...visit } = body;
         void _ignoredStatusTo;
         const visited = visit.visit_status === "visited";
         // ID 196: no photo + live location, no done visit.
@@ -114,6 +121,9 @@ export const POST = withErrorHandler(
             return errorResponse("Take the shop photo with location on before saving a done visit.", 422);
         }
         const { visitId } = await withLeadActor(user.id, async (tx) => {
+            // 24 Nov: no visit without the lead's type of business, nor a Battery Sale
+            // without a segment (422); what the form picked is saved in this transaction.
+            await applyVisitBusinessType(tx, id, { business_type, segments });
             const capture = verifiedOn && capture_id ? await loadVisitCapture(capture_id, tx) : null;
             if (verifiedOn) {
                 if (!capture) throw new VisitCaptureError("That shop photo was not found. Take it again.");
