@@ -27,19 +27,16 @@ const ACTION_SORT: SortSpec<ActionRow>[] = [
 const inr = (n: number) =>
     n >= 1e7 ? `₹${(n / 1e7).toFixed(2)} Cr` : n >= 1e5 ? `₹${(n / 1e5).toFixed(2)} L` : `₹${Math.round(n).toLocaleString("en-IN")}`;
 
-// A bare tel: link does nothing on a desktop browser with no phone app, so the
-// button looked dead there. On a touch device it still dials; on a desktop it
-// shows the number in place and copies it, so it can be dialled from a phone.
+// 24 Nov: no phone-app (tel:) dialling from the CRM — calls go through NeoDove
+// so they are recorded and tracked. The button only shows the number and
+// copies it; the call itself is placed from the lead's page (Call now).
 function CallLink({ phone }: { phone: string }) {
     const [shown, setShown] = useState<"" | "copied" | "shown">("");
-    const dial = phone.replace(/[^\d+]/g, "");
     return (
-        <a
-            href={`tel:${dial}`}
-            title={`Call ${phone}`}
-            onClick={(e) => {
-                if (window.matchMedia?.("(pointer: coarse)").matches) return;
-                e.preventDefault();
+        <button
+            type="button"
+            title={`Show ${phone}`}
+            onClick={() => {
                 setShown("shown");
                 navigator.clipboard?.writeText(phone).then(
                     () => setShown("copied"),
@@ -55,9 +52,9 @@ function CallLink({ phone }: { phone: string }) {
                     {shown === "copied" && <span className="text-ink-muted">· copied</span>}
                 </>
             ) : (
-                "Call"
+                "Number"
             )}
-        </a>
+        </button>
     );
 }
 

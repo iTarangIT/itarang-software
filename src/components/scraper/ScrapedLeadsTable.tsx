@@ -233,13 +233,10 @@ export function ScrapedLeadsTable({ runId }: Props) {
                                         </td>
                                         <td className="px-4 py-3.5">
                                             {lead.phone ? (
-                                                <a
-                                                    href={`tel:${lead.phone}`}
-                                                    className="inline-flex items-center gap-1.5 text-teal-600 hover:text-teal-700"
-                                                >
+                                                <span className="inline-flex items-center gap-1.5 text-teal-600">
                                                     <Phone className="w-3.5 h-3.5" />
                                                     <span className="text-xs">{lead.phone}</span>
-                                                </a>
+                                                </span>
                                             ) : (
                                                 <span className="text-gray-400 text-xs">—</span>
                                             )}

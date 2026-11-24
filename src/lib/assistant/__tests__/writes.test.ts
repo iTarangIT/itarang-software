@@ -7,6 +7,12 @@ vi.mock("@/lib/db", () => {
     return { db: { select: () => chain } };
 });
 const findLeadInScope = vi.fn();
+// 24 Nov: the visit business-type rule reads the lead; by default it is already typed.
+vi.mock("@/lib/leads/visitBusinessType", async (orig) => ({
+    ...(await orig<typeof import("@/lib/leads/visitBusinessType")>()),
+    currentBusinessType: vi.fn(async () => "battery_sale"),
+    applyVisitBusinessType: vi.fn(async () => undefined),
+}));
 vi.mock("../scope", async (orig) => ({ ...(await orig<typeof import("../scope")>()), findLeadInScope }));
 const createPending = vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => ({ id: "act-1", expiresAt: new Date() }));
 vi.mock("../actions", async (orig) => ({ ...(await orig<typeof import("../actions")>()), createPending }));
@@ -171,7 +177,7 @@ describe("set_follow_up proposals (UC-07)", () => {
         findLeadInScope.mockResolvedValue(lead({ current_owner_id: "asm-1", asm_id: "asm-1", shop_name: "Gupta Motors" }));
         const r = await run(ASM, "set_follow_up", { lead_id: "DL-1", kind: "visit", visit_date: "2026-09-28", note: "discuss quote" });
         expect(r.kind).toBe("preview");
-        expect(stored().plan).toEqual({ kind: "asm_visit", lead_id: "DL-1", visit_date: "2026-09-28", note: "discuss quote" });
+        expect(stored().plan).toEqual({ kind: "asm_visit", lead_id: "DL-1", visit_date: "2026-09-28", note: "discuss quote", business_type: null });
         expect(stored().preview).toMatchObject({ title: "Schedule visit — Gupta Motors", warning: null });
         expect(stored().preview.lines[0]).toEqual({ label: "Visit", value: "Mon 28 Sep (goes to your Today's visits tab)" });
         // Decided 15 Oct: a booked visit writes the screen's `visit` touchpoint — work, the idle clock resets.

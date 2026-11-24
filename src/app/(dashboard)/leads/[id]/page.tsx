@@ -257,13 +257,11 @@ export default async function LeadDetailPage({ params }: any) {
               <User className="w-4 h-4 text-gray-400" />
               {lead.dealer_name || "—"}
             </span>
-            <a
-              href={lead.phone ? `tel:${lead.phone}` : undefined}
-              className="inline-flex items-center gap-1.5 hover:text-gray-900"
-            >
+            {/* 24 Nov: no phone-app call link — calls go through NeoDove. */}
+            <span className="inline-flex items-center gap-1.5">
               <Phone className="w-4 h-4 text-gray-400" />
               {lead.phone || "—"}
-            </a>
+            </span>
             <span className="inline-flex items-center gap-1.5">
               <MapPin className="w-4 h-4 text-gray-400" />
               {lead.location || lead.city || "—"}

@@ -14,6 +14,7 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { InfoTip } from "@/components/ui/info-tip";
 import { LEAD_STATUS_LABEL } from "@/lib/leads/queueFilters";
+import { BUSINESS_TYPE_OPTIONS, isBusinessType, type BusinessType } from "@/lib/leads/businessType";
 import { PhotoUploader } from "./PhotoUploader";
 import { VerifiedVisitCapture, type CapturedVisit } from "@/components/visits/VerifiedVisitCapture";
 import { istDay } from "@/lib/visits/verifiedCapture";
@@ -61,7 +62,15 @@ const VISIT_STATUS_TARGETS = [
 type VisitStatusTarget = (typeof VISIT_STATUS_TARGETS)[number];
 
 /** The lead as the form needs it to pre-fill status / temperature. */
-export type VisitLeadState = { lead_status: string | null; interest_level: string | null };
+export type VisitLeadState = {
+    lead_status: string | null;
+    interest_level: string | null;
+    /** 24 Nov: pre-fills the required Type of business. */
+    business_type?: string | null;
+};
+
+const leadBusinessType = (lead?: VisitLeadState): BusinessType | "" =>
+    isBusinessType(lead?.business_type) ? lead.business_type : "";
 
 export function useVisitForm(open: boolean, lead?: VisitLeadState) {
     const today = istDay(new Date());
@@ -85,6 +94,8 @@ export function useVisitForm(open: boolean, lead?: VisitLeadState) {
     const [nextAction, setNextAction] = useState<VisitNextAction>("next_visit");
     const [nextVisitDate, setNextVisitDate] = useState("");
     const [submitting, setSubmitting] = useState(false);
+    // 24 Nov (CRM item 4): Type of business is required on every visit.
+    const [businessType, setBusinessType] = useState<BusinessType | "">(leadBusinessType(lead));
     // Status / temperature to save with the visit ("" = leave as is), filled
     // from the shared auto rule (lib/leads/autoProgress.ts) until the ASM
     // changes them — the same values the WhatsApp Assistant proposes.
@@ -134,8 +145,17 @@ export function useVisitForm(open: boolean, lead?: VisitLeadState) {
             setNextVisitDate("");
             setSubmitting(false);
             setCapture(null);
+            setBusinessType(leadBusinessType(lead));
         }
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- reset on close only
     }, [open, today]);
+
+    // The lead loads after the form mounts on some screens: take its type
+    // when the form has none yet.
+    useEffect(() => {
+        if (!businessType && isBusinessType(lead?.business_type)) setBusinessType(lead.business_type);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [lead?.business_type]);
 
     const captureGps = () => {
         if (!("geolocation" in navigator)) {
@@ -171,6 +191,10 @@ export function useVisitForm(open: boolean, lead?: VisitLeadState) {
      * Returns null on validation failure or request error.
      */
     const submit = async (leadId: string): Promise<VisitSaveResult | null> => {
+        if (!businessType) {
+            toast.error("Pick the type of business.");
+            return null;
+        }
         if (!remarks.trim()) {
             toast.error("Visit remarks are required.");
             return null;
@@ -194,6 +218,7 @@ export function useVisitForm(open: boolean, lead?: VisitLeadState) {
                 visit_status: visitStatus,
                 visit_remarks: remarks.trim(),
                 next_action: nextAction,
+                business_type: businessType,
             };
             if (visitStatus === "visited") {
                 // ID 196: the server dates, places and photographs a done
@@ -284,6 +309,8 @@ export function useVisitForm(open: boolean, lead?: VisitLeadState) {
         interestTo,
         setInterestTo,
         auto,
+        businessType,
+        setBusinessType,
     };
 }
 
@@ -318,6 +345,8 @@ export function VisitFields({ form, leadId }: { form: UseVisitForm; leadId: stri
         interestTo,
         setInterestTo,
         auto,
+        businessType,
+        setBusinessType,
     } = form;
 
     return (
@@ -354,6 +383,28 @@ export function VisitFields({ form, leadId }: { form: UseVisitForm; leadId: stri
                             className="mt-1"
                         />
                     )}
+                </div>
+            </div>
+
+            <div>
+                <Label>
+                    Type of business <span className="text-rose-600">*</span>
+                </Label>
+                <div className="mt-1 flex flex-wrap gap-1.5">
+                    {BUSINESS_TYPE_OPTIONS.map((o) => (
+                        <button
+                            key={o.value}
+                            type="button"
+                            onClick={() => setBusinessType(o.value)}
+                            className={`rounded-full border px-2.5 py-1 text-xs font-medium ${
+                                businessType === o.value
+                                    ? "border-emerald-600 bg-emerald-600 text-white"
+                                    : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+                            }`}
+                        >
+                            {o.label}
+                        </button>
+                    ))}
                 </div>
             </div>
 

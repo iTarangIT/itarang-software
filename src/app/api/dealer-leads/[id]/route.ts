@@ -52,7 +52,12 @@ const PatchSchema = z.object({
   state: z.string().trim().optional(),
   city: z.string().trim().optional(),
   area: z.string().trim().optional(),
-  pincode: z.string().trim().optional(),
+  // 24 Nov: a pincode is 6 digits; "" still clears it.
+  pincode: z
+    .string()
+    .trim()
+    .regex(/^(\d{6})?$/, "Pincode is 6 digits")
+    .optional(),
   language: z.string().trim().optional(),
   source: z.string().trim().max(40).optional(),
   // ID 118 option B: the Overall Summary is written by the server from the

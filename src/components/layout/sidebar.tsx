@@ -874,6 +874,8 @@ const roleNavigation: Record<string, any[]> = {
           href: "/inventory",
         },
         { id: "leads", label: "Leads", icon: Users, href: "/leads" },
+        // 24 Nov (CRM items 5 + 7) — team leads with latest action/comment; Team visits tab.
+        { id: "leads-team", label: "Team leads", icon: Users, href: "/leads/team" },
         { id: "deals", label: "Deals", icon: FileCheck, href: "/deals" },
         {
           id: "sales-invoices",
@@ -1019,6 +1021,8 @@ const roleNavigation: Record<string, any[]> = {
           icon: Users,
           href: "/leads",
         },
+        // 24 Nov (CRM items 5 + 7) — team leads with latest action/comment; Team visits tab.
+        { id: "sh-leads-team", label: "Team leads", icon: Users, href: "/leads/team" },
         {
           id: "sh-ai-intent",
           label: "AI intent learning",
@@ -1546,6 +1550,8 @@ const roleNavigation: Record<string, any[]> = {
       section: "SALES",
       items: [
         { id: "leads", label: "My leads", icon: Users, href: "/leads" },
+        // 24 Nov (CRM items 5 + 7) — team leads with latest action/comment; Team visits tab.
+        { id: "leads-team", label: "Team leads", icon: Users, href: "/leads/team" },
         // ID 5 — the dealers this user owns, with "Order placed".
         { id: "sm-my-dealers", label: "My dealers", icon: Store, href: "/my-dealers" },
         {
@@ -1683,6 +1689,8 @@ const roleNavigation: Record<string, any[]> = {
           icon: Users,
           href: "/leads",
         },
+        // 24 Nov (CRM items 5 + 7) — team leads with latest action/comment; Team visits tab.
+        { id: "admin-leads-team", label: "Team leads", icon: Users, href: "/leads/team" },
         {
           id: "admin-escalations",
           label: "Escalations",
@@ -2275,6 +2283,8 @@ const roleNavigation: Record<string, any[]> = {
       section: "SALES",
       items: [
         { id: "leads", label: "My leads", icon: Users, href: "/leads" },
+        // 24 Nov (CRM items 5 + 7) — team leads with latest action/comment; Team visits tab.
+        { id: "leads-team", label: "Team leads", icon: Users, href: "/leads/team" },
         { id: "deals", label: "My deals", icon: FileCheck, href: "/deals" },
         // ID 5 — the dealers this user owns, with "Order placed".
         { id: "se-my-dealers", label: "My dealers", icon: Store, href: "/my-dealers" },
@@ -2310,6 +2320,8 @@ const roleNavigation: Record<string, any[]> = {
         ecofyWorkerSubnav("is", "/inside-sales"),
         // ID 5 — the dealers this user owns, with "Order placed".
         { id: "is-my-dealers", label: "My dealers", icon: Store, href: "/my-dealers" },
+        // 24 Nov (CRM items 5 + 7) — team leads with latest action/comment; Team visits tab.
+        { id: "is-team-leads", label: "Team leads", icon: Users, href: "/leads/team" },
         {
           id: "is-performance",
           label: "My performance",
@@ -2347,6 +2359,8 @@ const roleNavigation: Record<string, any[]> = {
         ecofyWorkerSubnav("asm", "/asm"),
         // ID 5 — the dealers this user owns, with "Order placed".
         { id: "asm-my-dealers", label: "My dealers", icon: Store, href: "/my-dealers" },
+        // 24 Nov (CRM items 5 + 7) — team leads with latest action/comment; Team visits tab.
+        { id: "asm-team-leads", label: "Team leads", icon: Users, href: "/leads/team" },
         {
           id: "asm-performance",
           label: "My performance",
