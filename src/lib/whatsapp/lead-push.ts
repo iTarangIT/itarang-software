@@ -44,8 +44,11 @@ import {
   dealerOnboardingApplications,
   dealers,
   dealerSalespersons,
+  leadDealerReviews,
   leads,
+  users,
   whatsappOnboardingSessions,
+  whatsappOperators,
 } from "@/lib/db/schema";
 
 import { resolveHouseDealer } from "./customer-lead";
@@ -728,6 +731,120 @@ export async function pushToLeadBoth(
     console.error(`[WhatsApp/lead-push] fan-out for ${leadId} failed:`, err);
     return { dealer: "none", customer: "none" };
   }
+}
+
+/**
+ * 23 Nov 2026 (Battery Pool) — the iTarang SALESPERSON who sent this file in
+ * (lead_dealer_reviews.initiator_wa_phone, else the initiating login's
+ * WhatsApp-operator number / users.phone). Their own chat: the operator hub
+ * first, else any non-operator_file chat on that number, else cold.
+ */
+export async function resolveInitiatorTarget(
+  leadId: string,
+): Promise<LeadPushTarget | null> {
+  const [lead] = await db
+    .select({
+      reference_id: leads.reference_id,
+      full_name: leads.full_name,
+      owner_name: leads.owner_name,
+    })
+    .from(leads)
+    .where(eq(leads.id, leadId))
+    .limit(1);
+  if (!lead) return null;
+  const [review] = await db
+    .select({
+      phone: leadDealerReviews.initiator_wa_phone,
+      userId: leadDealerReviews.initiated_by_user_id,
+    })
+    .from(leadDealerReviews)
+    .where(eq(leadDealerReviews.lead_id, leadId))
+    .orderBy(desc(leadDealerReviews.created_at))
+    .limit(1);
+  if (!review) return null;
+
+  // The number that actually sent the file wins; the login's operator / user
+  // phone is only a fallback (one login can own several operator numbers).
+  const sentFrom = toWaPhone(review.phone);
+  let name: string | null = null;
+  const raw: (string | null)[] = [review.phone];
+  if (review.userId) {
+    const ops = await db
+      .select({ phone: whatsappOperators.wa_phone, name: whatsappOperators.display_name })
+      .from(whatsappOperators)
+      .where(and(eq(whatsappOperators.user_id, review.userId), eq(whatsappOperators.is_active, true)));
+    const [u] = await db
+      .select({ phone: users.phone, name: users.name })
+      .from(users)
+      .where(eq(users.id, review.userId))
+      .limit(1);
+    const op = sentFrom
+      ? (ops.find((o) => toWaPhone(o.phone) === sentFrom) ?? null)
+      : (ops[0] ?? null);
+    if (!sentFrom) raw.push(op?.phone ?? null, u?.phone ?? null);
+    name = op?.name ?? u?.name ?? null;
+  }
+  const waPhones = [...new Set(raw.map((p) => toWaPhone(p)).filter((p): p is string => !!p))];
+  if (waPhones.length === 0) return null;
+
+  const [hub] = await db
+    .select()
+    .from(whatsappOnboardingSessions)
+    .where(
+      and(
+        inArray(whatsappOnboardingSessions.wa_phone, waPhones),
+        eq(whatsappOnboardingSessions.session_kind, "operator_hub"),
+      ),
+    )
+    .orderBy(desc(whatsappOnboardingSessions.last_inbound_at))
+    .limit(1);
+  const session = hub ?? (await newestSessionForPhones(waPhones));
+  return {
+    leadId,
+    audience: "dealer",
+    greetName: name || "there",
+    customerName: lead.full_name || lead.owner_name || "the customer",
+    referenceId: lead.reference_id || leadId,
+    session,
+    waPhone: session?.wa_phone || waPhones[0],
+  };
+}
+
+/**
+ * Send to the file's iTarang salesperson as well as the usual audience. The
+ * usual push is skipped when it would land in the SAME chat (an operator hub
+ * still pointing at the lead) — the salesperson copy replaces it there.
+ * Same best-effort contract as `pushToLead`.
+ */
+export async function pushToLeadAndInitiator(
+  leadId: string,
+  msg: LeadMessageSpec,
+  initiatorMsg: LeadMessageSpec,
+): Promise<{ lead: PushResult; initiator: PushResult }> {
+  let initiator: LeadPushTarget | null = null;
+  try {
+    initiator = await resolveInitiatorTarget(leadId);
+  } catch (err) {
+    console.error(`[WhatsApp/lead-push] initiator lookup for ${leadId} failed:`, err);
+  }
+  let leadRes: PushResult = "none";
+  try {
+    const primary = await resolveLeadTarget(leadId);
+    if (primary && !(initiator && sameChannel(primary, initiator))) {
+      leadRes = await deliverTo(primary, msg);
+    }
+  } catch (err) {
+    console.error(`[WhatsApp/lead-push] push for ${leadId} failed:`, err);
+  }
+  let initRes: PushResult = "none";
+  if (initiator) {
+    try {
+      initRes = await deliverTo(initiator, initiatorMsg);
+    } catch (err) {
+      console.error(`[WhatsApp/lead-push] initiator push for ${leadId} failed:`, err);
+    }
+  }
+  return { lead: leadRes, initiator: initRes };
 }
 
 /** Same conversation, or the same Meta address with no conversation yet. */

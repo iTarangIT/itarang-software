@@ -20,7 +20,8 @@ export const INITIATOR_WHATSAPP_TYPES: ReadonlySet<string> = new Set([
   "nbfc.credit_approved",
   "nbfc.application_rejected",
   "loan.rejected_by_nbfc",
-  "loan.offer_submitted",
+  // loan.offer_submitted is NOT here: pushOfferToWhatsApp (offer-flow.ts)
+  // sends the salesperson the offer itself, with an "Accept offer" button.
   "loan.winner_selected",
   "loan.sanctioned",
   "loan.disbursed",

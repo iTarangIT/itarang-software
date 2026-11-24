@@ -2,9 +2,9 @@
  * 23 Nov 2026 (Battery Pool, task 6) — loan amount + NBFC scheme at the FIRST
  * customer-file upload on WhatsApp.
  *
- * When the salesperson (or dealer) taps "Submit to iTarang" on a finance lead
- * that has no loan amount yet, the chat now asks for it first — it is
- * mandatory. It is written to leads.requested_loan_amount, so the later
+ * Before the "Submit to iTarang" button is shown on a finance lead that has
+ * no loan amount yet, the chat asks for it — it is mandatory (askLoanBeforeSubmit,
+ * called from promptSubmitToITarang). The Submit tap keeps a safety-net check. It is written to leads.requested_loan_amount, so the later
  * "How much loan do you want?" step in the Step-4 cart is skipped (see
  * dispatch-flow askLoanAmount).
  *
@@ -14,7 +14,8 @@
  * lead_scheme_picks and beats the routing rules when Step 4 opens. "Automatic"
  * leaves it to the rules.
  *
- * The orchestrator registers its finalizeLead as the continuation.
+ * The orchestrator registers promptSubmitToITarang as the continuation, so
+ * after the amount (and scheme) the Submit button appears.
  */
 import { and, eq } from "drizzle-orm";
 
@@ -30,7 +31,7 @@ import {
 import { listSchemeOptions, mayPickScheme, setLeadSchemePick } from "@/lib/leads/scheme-pick";
 
 import { registerLeadState } from "./lead-states";
-import { loadSession, reply, replyList, setSession, type SessionRow } from "./session-store";
+import { loadSession, mergeContext, reply, replyList, setSession, type SessionRow } from "./session-store";
 import type { InboundEvent, ListRow } from "./types";
 
 export const DC_LEAD_LOAN_AMT = "DC_LEAD_LOAN_AMT";
@@ -38,7 +39,7 @@ export const DC_LEAD_SCHEME_PICK = "DC_LEAD_SCHEME_PICK";
 
 type Continue = (session: SessionRow) => Promise<void>;
 let finalize: Continue | null = null;
-/** The orchestrator hands in finalizeLead (the real "Submit to iTarang"). */
+/** The orchestrator hands in promptSubmitToITarang (shows the Submit button). */
 export function registerIntakeContinuation(fn: Continue): void {
   finalize = fn;
 }
@@ -69,23 +70,45 @@ async function leadFacts(leadId: string) {
   return l ?? null;
 }
 
-/**
- * Called on the "Submit to iTarang" tap. Returns true when it took over the
- * chat (asked for the amount / scheme); false → the caller submits as before.
- */
-export async function interceptSubmitForLoanAmount(session: SessionRow): Promise<boolean> {
+/** Finance lead, uploaded by a salesperson / dealer (not a self-serve customer). */
+async function needsIntake(session: SessionRow): Promise<{ leadId: string; hasAmount: boolean } | null> {
   const leadId = leadIdOf(session);
-  if (!leadId) return false;
+  if (!leadId) return null;
   const ctx = (session.context ?? {}) as { flow?: string; op?: unknown };
   // A self-serve customer chat is not the salesperson's upload.
-  if (ctx.flow === "customer" && !ctx.op) return false;
+  if (ctx.flow === "customer" && !ctx.op) return null;
   const lead = await leadFacts(leadId);
-  if (!lead || String(lead.payment_method ?? "").toLowerCase() !== "finance") return false;
-  if (lead.requested_loan_amount == null) {
+  if (!lead || String(lead.payment_method ?? "").toLowerCase() !== "finance") return null;
+  return { leadId, hasAmount: lead.requested_loan_amount != null };
+}
+
+/**
+ * Called just BEFORE the "Submit to iTarang" button is shown. Asks the loan
+ * amount when it is missing, then (admin / sales head only, once per lead) the
+ * NBFC scheme. Returns true when it took over the chat; the continuation shows
+ * the Submit button afterwards.
+ */
+export async function askLoanBeforeSubmit(session: SessionRow): Promise<boolean> {
+  const need = await needsIntake(session);
+  if (!need) return false;
+  if (!need.hasAmount) {
     await askAmount(session);
     return true;
   }
-  return await maybeAskScheme(session, leadId);
+  const ctx = (session.context ?? {}) as { lead?: { schemeAskedFor?: string } };
+  if (ctx.lead?.schemeAskedFor === need.leadId) return false;
+  return await maybeAskScheme(session, need.leadId);
+}
+
+/**
+ * Safety net on the "Submit to iTarang" tap: a finance file never goes in
+ * without the loan amount. True when it asked (the caller must stop).
+ */
+export async function interceptSubmitForLoanAmount(session: SessionRow): Promise<boolean> {
+  const need = await needsIntake(session);
+  if (!need || need.hasAmount) return false;
+  await askAmount(session);
+  return true;
 }
 
 async function askAmount(session: SessionRow, prefix = ""): Promise<void> {
@@ -121,6 +144,11 @@ async function maybeAskScheme(session: SessionRow, leadId: string): Promise<bool
   if (!who || !mayPickScheme(who.role)) return false;
   const options = await listSchemeOptions(leadId).catch(() => []);
   if (!options.length) return false;
+  // Asked once per lead — the continuation re-enters askLoanBeforeSubmit.
+  await mergeContext(session, (c) => {
+    const ctx = c as { lead?: Record<string, unknown> };
+    ctx.lead = { ...(ctx.lead ?? {}), schemeAskedFor: leadId };
+  });
   const rows: ListRow[] = [
     { id: "sch:auto", title: "Automatic", description: "Let the NBFC routing rules decide" },
     ...options.slice(0, 9).map((o) => ({
