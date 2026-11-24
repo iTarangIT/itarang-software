@@ -21,6 +21,8 @@ export type TeamFilters = {
     member: string | null;
     city: string | null;
     businessType: string | null;
+    /** 24 Nov tree: one Segment (src/lib/leads/segments.ts). */
+    segment: string | null;
     status: string | null;
     q: string | null;
     /** YYYY-MM-DD (IST), inclusive. */
@@ -58,6 +60,7 @@ export function teamFiltersFromParams(sp: URLSearchParams): Partial<TeamFilters>
         member: clean(sp.get("member")),
         city: clean(sp.get("city")),
         businessType: clean(sp.get("business_type")),
+        segment: clean(sp.get("segment")),
         status: clean(sp.get("status")),
         q: clean(sp.get("q")),
         from: day(sp.get("from")),
@@ -79,7 +82,7 @@ export function resolveTeamFilters(
     const member = raw.member && scope.ownerIds.includes(raw.member) ? raw.member : null;
     let from = day(raw.from);
     let to = day(raw.to);
-    const base = { member, city: clean(raw.city), businessType: clean(raw.businessType), status: clean(raw.status), q: clean(raw.q) };
+    const base = { member, city: clean(raw.city), businessType: clean(raw.businessType), segment: clean(raw.segment), status: clean(raw.status), q: clean(raw.q) };
     if (!opts.defaultRange) {
         if (from && to && from > to) [from, to] = [to, from];
         return { ...base, from, to };

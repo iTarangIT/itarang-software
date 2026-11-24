@@ -10,6 +10,7 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Download, Loader2 } from "lucide-react";
 import { BUSINESS_TYPE_OPTIONS, BUSINESS_TYPE_UNSET, businessTypeLabel, businessTypeTone } from "@/lib/leads/businessType";
+import { LEAD_SEGMENTS, storedSegments } from "@/lib/leads/segments";
 import { LEAD_STATUS_LABEL, LEAD_STATUS_OPTIONS } from "@/lib/leads/queueFilters";
 import { VISIT_KIND_LABELS, VISIT_KINDS, addDays, istToday, type VisitKind } from "@/lib/team/teamFilters";
 import type { TeamLeadRow, TeamVisitRow } from "@/lib/team/teamLeads";
@@ -109,6 +110,17 @@ function CommonFilters({ q, people }: { q: QueryState; people: Person[] }) {
                 </select>
             </label>
             <label className="text-xs text-gray-600">
+                <span className="block">Segment</span>
+                <select className={selectCls} value={q.get("segment")} onChange={(e) => q.set({ segment: e.target.value })}>
+                    <option value="">All</option>
+                    {LEAD_SEGMENTS.map((s) => (
+                        <option key={s} value={s}>
+                            {s}
+                        </option>
+                    ))}
+                </select>
+            </label>
+            <label className="text-xs text-gray-600">
                 <span className="block">City</span>
                 <input
                     className={`${selectCls} w-32`}
@@ -179,11 +191,15 @@ function Shell({
 const th = "px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-gray-500 whitespace-nowrap";
 const td = "px-3 py-2 align-top text-sm text-gray-800";
 
-function BizChip({ v }: { v: string | null }) {
+function BizChip({ v, segments }: { v: string | null; segments?: unknown }) {
+    const segs = storedSegments(segments);
     return (
-        <span className={`inline-flex whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-medium ${businessTypeTone(v)}`}>
-            {businessTypeLabel(v)}
-        </span>
+        <>
+            <span className={`inline-flex whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-medium ${businessTypeTone(v)}`}>
+                {businessTypeLabel(v)}
+            </span>
+            {segs.length > 0 && <span className="text-[11px] text-gray-600">{segs.join(" · ")}</span>}
+        </>
     );
 }
 
@@ -251,7 +267,7 @@ export function TeamLeadsView({ leadBase }: { leadBase: string }) {
                                     </Link>
                                     <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-gray-500">
                                         {r.city && <span>{r.city}</span>}
-                                        <BizChip v={r.business_type} />
+                                        <BizChip v={r.business_type} segments={r.segments} />
                                     </div>
                                 </td>
                                 <td className={td}>{r.owner_name ?? "—"}</td>
@@ -365,7 +381,7 @@ export function TeamVisitsView({ leadBase }: { leadBase: string }) {
                                     </Link>
                                     <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-gray-500">
                                         {r.city && <span>{r.city}</span>}
-                                        <BizChip v={r.business_type} />
+                                        <BizChip v={r.business_type} segments={r.segments} />
                                     </div>
                                 </td>
                                 <td className={td}>{r.rep_name ?? "—"}</td>

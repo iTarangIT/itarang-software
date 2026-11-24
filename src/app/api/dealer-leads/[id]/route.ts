@@ -37,6 +37,7 @@ import { withErrorHandler } from "@/lib/api-utils";
 import { LEADS_PAGE_ROLES, canEditLead } from "@/lib/leads/access";
 import { loadExistingByPhone, normalizePhone } from "@/lib/leads/dedupe";
 import { BusinessTypeSchema } from "@/lib/leads/businessType";
+import { storedSegments } from "@/lib/leads/segments";
 import { canonicalRegionUpdates } from "@/lib/leads/regionFields";
 
 export const dynamic = "force-dynamic";
@@ -71,6 +72,9 @@ const PatchSchema = z.object({
   business_type: z
     .union([BusinessTypeSchema, z.literal(""), z.null()])
     .optional(),
+  // 24 Nov tree — what the dealer sells (src/lib/leads/segments.ts). Older
+  // stored values (Auto-Parts, Battery) are kept; unknown strings dropped.
+  segments: z.array(z.string().max(40)).max(20).optional(),
 });
 
 export const PATCH = withErrorHandler(
@@ -97,6 +101,7 @@ export const PATCH = withErrorHandler(
       .select({
         id: dealerLeads.id,
         location: dealerLeads.location,
+        segments: dealerLeads.segments,
         current_owner_id: dealerLeads.current_owner_id,
         asm_id: dealerLeads.asm_id,
       })
@@ -173,6 +178,28 @@ export const PATCH = withErrorHandler(
     if (body.source !== undefined) updates.source = body.source || null;
     if (body.area !== undefined) updates.area = body.area || null;
     if (body.pincode !== undefined) updates.pincode = body.pincode || null;
+    if (body.segments !== undefined) updates.segments = storedSegments(body.segments);
+
+    // 24 Nov tree: a Battery Sale needs at least one segment. Checked only when
+    // this edit touches the type or the segments, so fixing a typo on an older
+    // lead is never blocked by it.
+    if (body.business_type !== undefined || body.segments !== undefined) {
+      const finalSegments =
+        body.segments !== undefined ? storedSegments(body.segments) : storedSegments(existing.segments);
+      let finalType: string | null | undefined = body.business_type;
+      if (finalType === undefined) {
+        const [row] = (await db.execute(
+          sql`SELECT to_jsonb(dl) ->> 'business_type' AS t FROM dealer_leads dl WHERE dl.id = ${id}`,
+        )) as unknown as Array<{ t: string | null }>;
+        finalType = row?.t ?? null;
+      }
+      if (finalType === "battery_sale" && finalSegments.length === 0) {
+        return NextResponse.json(
+          { success: false, error: { message: "Pick at least one segment for a battery sale." } },
+          { status: 400 },
+        );
+      }
+    }
 
     // Region: canonicalise city/state the way the create route does, and fall
     // back to `location` as a city string so a lead edited here still shows up

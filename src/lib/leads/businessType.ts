@@ -16,30 +16,24 @@
 
 import { z } from "zod";
 
-// 24 Nov meeting: Two-Wheeler, Three-Wheeler, Lithium Battery and Solar added
-// (varchar(30), no CHECK — no migration needed). Battery Sale stays: every
-// lead typed before today carries it, and it is still a valid choice.
+// 24 Nov tree: Type of business is WHAT DEAL we do with the dealer — one of
+// these four. The products he deals in (3W / 2W batteries, Solar, Inverter,
+// BESS, ESS) are the lead's Segment (src/lib/leads/segments.ts), not a type.
+// Two-Wheeler / Three-Wheeler / Lithium Battery / Solar were briefly types
+// (23–24 Nov); E-395 moved those rows to Battery Sale + their segment.
 export const BUSINESS_TYPES = [
-    "two_wheeler",
-    "three_wheeler",
-    "lithium_battery",
-    "solar",
+    "battery_sale",
     "buyback",
     "scrap",
-    "battery_sale",
     "other",
 ] as const;
 
 export type BusinessType = (typeof BUSINESS_TYPES)[number];
 
 export const BUSINESS_TYPE_LABELS: Record<BusinessType, string> = {
-    two_wheeler: "Two-Wheeler",
-    three_wheeler: "Three-Wheeler",
-    lithium_battery: "Lithium Battery",
-    solar: "Solar",
+    battery_sale: "Battery Sale",
     buyback: "Buyback",
     scrap: "Scrap",
-    battery_sale: "Battery Sale",
     other: "Other",
 };
 
@@ -57,10 +51,6 @@ export const BUSINESS_TYPE_OPTIONS: { value: BusinessType; label: string }[] =
 
 /** Chip colours (Tailwind border/bg/text), shared by the table, drawer and detail pane. */
 export const BUSINESS_TYPE_TONE: Record<BusinessType, string> = {
-    two_wheeler: "border-sky-200 bg-sky-50 text-sky-700",
-    three_wheeler: "border-indigo-200 bg-indigo-50 text-indigo-700",
-    lithium_battery: "border-teal-200 bg-teal-50 text-teal-700",
-    solar: "border-yellow-200 bg-yellow-50 text-yellow-800",
     battery_sale: "border-emerald-200 bg-emerald-50 text-emerald-700",
     buyback: "border-violet-200 bg-violet-50 text-violet-700",
     scrap: "border-amber-200 bg-amber-50 text-amber-700",
@@ -122,21 +112,16 @@ export function normalizeBusinessType(input: unknown): BusinessType | null {
         finance: "battery_sale",
         financing: "battery_sale",
         loan: "battery_sale",
-        "2w": "two_wheeler",
-        "2_wheeler": "two_wheeler",
-        two_wheelers: "two_wheeler",
-        twowheeler: "two_wheeler",
-        "3w": "three_wheeler",
-        "3_wheeler": "three_wheeler",
-        three_wheelers: "three_wheeler",
-        threewheeler: "three_wheeler",
-        e_rickshaw: "three_wheeler",
-        erickshaw: "three_wheeler",
-        lithium: "lithium_battery",
-        lithium_batteries: "lithium_battery",
-        li_ion: "lithium_battery",
-        solar_panel: "solar",
-        solar_panels: "solar",
+        // A product named where a type is asked (old sheets, the 23–24 Nov
+        // types, chat) is a battery sale; the product itself is a Segment.
+        two_wheeler: "battery_sale",
+        three_wheeler: "battery_sale",
+        lithium_battery: "battery_sale",
+        solar: "battery_sale",
+        "2w": "battery_sale",
+        "3w": "battery_sale",
+        e_rickshaw: "battery_sale",
+        lithium: "battery_sale",
         scrap_sale: "scrap",
         scrapping: "scrap",
         others: "other",

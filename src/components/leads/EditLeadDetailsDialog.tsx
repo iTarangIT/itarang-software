@@ -1,14 +1,17 @@
 "use client";
 
 // 24 Nov (CRM item 2): edit a lead's dealer details from the lead page —
-// name, shop, city, state, area, pincode, type of business, language. Saves
+// name, shop, city, state, area, pincode, type of business + segments
+// (the 24 Nov tree, BusinessTypeSegmentPicker), language. Saves
 // through PATCH /api/dealer-leads/[id] (owner / assigned ASM / managers;
 // the server checks the same rule as canEditLead).
 
 import { useState } from "react";
 import { Pencil, X } from "lucide-react";
 import { toast } from "sonner";
-import { BUSINESS_TYPE_OPTIONS, isBusinessType } from "@/lib/leads/businessType";
+import { isBusinessType, type BusinessType } from "@/lib/leads/businessType";
+import { storedSegments } from "@/lib/leads/segments";
+import { BusinessTypeSegmentPicker, typeSegmentProblem } from "@/components/leads/BusinessTypeSegmentPicker";
 
 export type EditableLeadDetails = {
     id: string;
@@ -20,6 +23,7 @@ export type EditableLeadDetails = {
     pincode: string | null;
     language: string | null;
     business_type?: string | null;
+    segments?: string[] | null;
 };
 
 type Form = {
@@ -30,7 +34,8 @@ type Form = {
     area: string;
     pincode: string;
     language: string;
-    business_type: string;
+    business_type: BusinessType | "";
+    segments: string[];
 };
 
 const PINCODE_RE = /^\d{6}$/;
@@ -40,7 +45,9 @@ export function validateLeadDetails(f: Form): Partial<Record<keyof Form, string>
     const e: Partial<Record<keyof Form, string>> = {};
     if (!f.dealer_name.trim()) e.dealer_name = "Dealer name is required";
     if (f.pincode.trim() && !PINCODE_RE.test(f.pincode.trim())) e.pincode = "Pincode is 6 digits";
-    if (!isBusinessType(f.business_type)) e.business_type = "Pick the type of business";
+    const problem = typeSegmentProblem(f.business_type, f.segments);
+    if (problem && !f.business_type) e.business_type = problem;
+    else if (problem) e.segments = problem;
     return e;
 }
 
@@ -96,11 +103,12 @@ function EditLeadDetailsDialog({
         pincode: lead.pincode ?? "",
         language: lead.language ?? "",
         business_type: isBusinessType(lead.business_type) ? lead.business_type : "",
+        segments: storedSegments(lead.segments),
     });
     const [errors, setErrors] = useState<Partial<Record<keyof Form, string>>>({});
     const [saving, setSaving] = useState(false);
 
-    const set = (k: keyof Form) => (v: string) => setForm((f) => ({ ...f, [k]: v }));
+    const set = (k: Exclude<keyof Form, "business_type" | "segments">) => (v: string) => setForm((f) => ({ ...f, [k]: v }));
 
     async function save() {
         const e = validateLeadDetails(form);
@@ -120,6 +128,7 @@ function EditLeadDetailsDialog({
                     pincode: form.pincode.trim(),
                     language: form.language.trim(),
                     business_type: form.business_type,
+                    segments: form.segments,
                 }),
             });
             const json = await res.json().catch(() => null);
@@ -152,27 +161,14 @@ function EditLeadDetailsDialog({
                     <Input label="Dealer name *" value={form.dealer_name} onChange={set("dealer_name")} error={errors.dealer_name} />
                     <Input label="Shop name" value={form.shop_name} onChange={set("shop_name")} />
                     <div className="col-span-2">
-                        <label className="block text-xs font-medium text-gray-700">Type of business *</label>
-                        <div className="mt-1 flex flex-wrap gap-1.5">
-                            {BUSINESS_TYPE_OPTIONS.map((o) => {
-                                const active = form.business_type === o.value;
-                                return (
-                                    <button
-                                        key={o.value}
-                                        type="button"
-                                        onClick={() => set("business_type")(o.value)}
-                                        className={`rounded-full border px-2.5 py-1 text-xs font-medium ${
-                                            active
-                                                ? "border-emerald-600 bg-emerald-600 text-white"
-                                                : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
-                                        }`}
-                                    >
-                                        {o.label}
-                                    </button>
-                                );
-                            })}
-                        </div>
-                        {errors.business_type && <p className="mt-1 text-[11px] text-rose-600">{errors.business_type}</p>}
+                        <BusinessTypeSegmentPicker
+                            type={form.business_type}
+                            segments={form.segments}
+                            onType={(t) => setForm((f) => ({ ...f, business_type: t }))}
+                            onSegments={(segs) => setForm((f) => ({ ...f, segments: segs }))}
+                            typeError={errors.business_type}
+                            segmentError={errors.segments}
+                        />
                     </div>
                     <Input label="City" value={form.city} onChange={set("city")} />
                     <Input label="State" value={form.state} onChange={set("state")} />

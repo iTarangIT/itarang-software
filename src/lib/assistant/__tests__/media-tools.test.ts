@@ -14,7 +14,7 @@ const findLeadInScope = vi.fn();
 // 24 Nov: the visit business-type rule reads the lead; by default it is already typed.
 vi.mock("@/lib/leads/visitBusinessType", async (orig) => ({
     ...(await orig<typeof import("@/lib/leads/visitBusinessType")>()),
-    currentBusinessType: vi.fn(async () => "battery_sale"),
+    currentLeadType: vi.fn(async () => ({ business_type: "battery_sale", segments: ["3W batteries"] })),
     applyVisitBusinessType: vi.fn(async () => undefined),
 }));
 vi.mock("../scope", async (orig) => ({ ...(await orig<typeof import("../scope")>()), findLeadInScope }));

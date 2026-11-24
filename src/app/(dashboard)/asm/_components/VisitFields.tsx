@@ -14,7 +14,9 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { InfoTip } from "@/components/ui/info-tip";
 import { LEAD_STATUS_LABEL } from "@/lib/leads/queueFilters";
-import { BUSINESS_TYPE_OPTIONS, isBusinessType, type BusinessType } from "@/lib/leads/businessType";
+import { isBusinessType, type BusinessType } from "@/lib/leads/businessType";
+import { storedSegments } from "@/lib/leads/segments";
+import { BusinessTypeSegmentPicker, typeSegmentProblem } from "@/components/leads/BusinessTypeSegmentPicker";
 import { PhotoUploader } from "./PhotoUploader";
 import { VerifiedVisitCapture, type CapturedVisit } from "@/components/visits/VerifiedVisitCapture";
 import { istDay } from "@/lib/visits/verifiedCapture";
@@ -67,6 +69,8 @@ export type VisitLeadState = {
     interest_level: string | null;
     /** 24 Nov: pre-fills the required Type of business. */
     business_type?: string | null;
+    /** 24 Nov tree: pre-fills the Segment (required for a Battery Sale). */
+    segments?: string[] | null;
 };
 
 const leadBusinessType = (lead?: VisitLeadState): BusinessType | "" =>
@@ -96,6 +100,7 @@ export function useVisitForm(open: boolean, lead?: VisitLeadState) {
     const [submitting, setSubmitting] = useState(false);
     // 24 Nov (CRM item 4): Type of business is required on every visit.
     const [businessType, setBusinessType] = useState<BusinessType | "">(leadBusinessType(lead));
+    const [segments, setSegments] = useState<string[]>(storedSegments(lead?.segments));
     // Status / temperature to save with the visit ("" = leave as is), filled
     // from the shared auto rule (lib/leads/autoProgress.ts) until the ASM
     // changes them — the same values the WhatsApp Assistant proposes.
@@ -146,6 +151,7 @@ export function useVisitForm(open: boolean, lead?: VisitLeadState) {
             setSubmitting(false);
             setCapture(null);
             setBusinessType(leadBusinessType(lead));
+            setSegments(storedSegments(lead?.segments));
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps -- reset on close only
     }, [open, today]);
@@ -154,8 +160,9 @@ export function useVisitForm(open: boolean, lead?: VisitLeadState) {
     // when the form has none yet.
     useEffect(() => {
         if (!businessType && isBusinessType(lead?.business_type)) setBusinessType(lead.business_type);
+        if (segments.length === 0 && lead?.segments?.length) setSegments(storedSegments(lead.segments));
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [lead?.business_type]);
+    }, [lead?.business_type, lead?.segments]);
 
     const captureGps = () => {
         if (!("geolocation" in navigator)) {
@@ -191,8 +198,9 @@ export function useVisitForm(open: boolean, lead?: VisitLeadState) {
      * Returns null on validation failure or request error.
      */
     const submit = async (leadId: string): Promise<VisitSaveResult | null> => {
-        if (!businessType) {
-            toast.error("Pick the type of business.");
+        const typeProblem = typeSegmentProblem(businessType, segments);
+        if (typeProblem) {
+            toast.error(typeProblem);
             return null;
         }
         if (!remarks.trim()) {
@@ -219,6 +227,7 @@ export function useVisitForm(open: boolean, lead?: VisitLeadState) {
                 visit_remarks: remarks.trim(),
                 next_action: nextAction,
                 business_type: businessType,
+                segments: storedSegments(segments).filter((x) => x !== "Auto-Parts" && x !== "Battery"),
             };
             if (visitStatus === "visited") {
                 // ID 196: the server dates, places and photographs a done
@@ -311,6 +320,8 @@ export function useVisitForm(open: boolean, lead?: VisitLeadState) {
         auto,
         businessType,
         setBusinessType,
+        segments,
+        setSegments,
     };
 }
 
@@ -347,6 +358,8 @@ export function VisitFields({ form, leadId }: { form: UseVisitForm; leadId: stri
         auto,
         businessType,
         setBusinessType,
+        segments,
+        setSegments,
     } = form;
 
     return (
@@ -386,27 +399,12 @@ export function VisitFields({ form, leadId }: { form: UseVisitForm; leadId: stri
                 </div>
             </div>
 
-            <div>
-                <Label>
-                    Type of business <span className="text-rose-600">*</span>
-                </Label>
-                <div className="mt-1 flex flex-wrap gap-1.5">
-                    {BUSINESS_TYPE_OPTIONS.map((o) => (
-                        <button
-                            key={o.value}
-                            type="button"
-                            onClick={() => setBusinessType(o.value)}
-                            className={`rounded-full border px-2.5 py-1 text-xs font-medium ${
-                                businessType === o.value
-                                    ? "border-emerald-600 bg-emerald-600 text-white"
-                                    : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
-                            }`}
-                        >
-                            {o.label}
-                        </button>
-                    ))}
-                </div>
-            </div>
+            <BusinessTypeSegmentPicker
+                type={businessType}
+                segments={segments}
+                onType={setBusinessType}
+                onSegments={setSegments}
+            />
 
             {visitStatus === "visited" && (
                 <div>

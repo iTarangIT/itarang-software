@@ -35,8 +35,8 @@ import { defineApplier } from "../../applierSpec";
 import { futureDay, futureInstant } from "./when";
 import { IsoDate, IsoDateTime, Remarks } from "./vocabSchemas";
 import { notifyVisitUpdate } from "./logVisit";
-import { BUSINESS_TYPES, BUSINESS_TYPE_LABELS, businessTypeLabel } from "@/lib/leads/businessType";
-import { applyVisitBusinessType, currentBusinessType, planVisitBusinessType } from "@/lib/leads/visitBusinessType";
+import { applyVisitBusinessType } from "@/lib/leads/visitBusinessType";
+import { resolveVisitType, visitTypeInputShape, visitTypePlanShape } from "./visitType";
 
 // No status_to: a plan stored before ID 80 may still carry one — zod drops
 // the unknown key, so an old card confirmed after the deploy moves nothing.
@@ -50,7 +50,7 @@ export const SetFollowUpPlan = z.discriminatedUnion("kind", [
         visit_date: z.string(),
         note: z.string(),
         // 24 Nov: a Type of Business stated with the booking (null = the lead's own stays).
-        business_type: z.enum(BUSINESS_TYPES).nullable().default(null),
+        ...visitTypePlanShape,
     }),
 ]);
 export type SetFollowUpPlan = z.infer<typeof SetFollowUpPlan>;
@@ -126,12 +126,7 @@ export const setFollowUp: ToolFactory = (role) =>
                   follow_up_at: IsoDateTime.optional().describe("kind call: the date and time, with offset (IST)"),
                   visit_date: IsoDate.optional().describe("kind visit: the day, YYYY-MM-DD (IST)"),
                   note: Remarks.min(1),
-                  business_type: z
-                      .enum(BUSINESS_TYPES)
-                      .optional()
-                      .describe(
-                          "kind visit: the lead's type of business. Required when the lead has none yet — ask the ASM, never guess.",
-                      ),
+                  ...visitTypeInputShape,
               }),
               run: async (ctx, input): Promise<ToolResult> => {
                   // Pilot flag, scope and ownership BEFORE reading anything about the lead.
@@ -161,13 +156,8 @@ export const setFollowUp: ToolFactory = (role) =>
                       return { kind: "declined", reason: `That visit is already on your schedule for ${fmtDate(day.value)}.` };
                   }
                   // 24 Nov (CRM item 4): no visit without the lead's type of business.
-                  const currentType = await currentBusinessType(input.lead_id);
-                  const typePlan = planVisitBusinessType(input.business_type, currentType);
-                  if (!typePlan.ok) {
-                      return ask(
-                          `What is this dealer's type of business? (${Object.values(BUSINESS_TYPE_LABELS).join(", ")})`,
-                      );
-                  }
+                  const typeStep = await resolveVisitType(input.lead_id, input);
+                  if ("question" in typeStep) return ask(typeStep.question);
                   const warning =
                       scoped.lead.asm_id !== ctx.user.id
                           ? `This lead's field ASM isn't set to you, so the visit won't show in your ${ASM_TODAY_TAB}.`
@@ -180,11 +170,12 @@ export const setFollowUp: ToolFactory = (role) =>
                           lead_id: input.lead_id,
                           visit_date: day.value,
                           note: input.note.trim(),
-                          business_type: typePlan.write,
+                          business_type: typeStep.business_type,
+                          segments: typeStep.segments,
                       },
                       [
                           { label: "Visit", value: `${fmtDate(day.value)} (goes to your ${ASM_TODAY_TAB})` },
-                          ...(typePlan.write ? [{ label: "Business", value: businessTypeLabel(typePlan.write) }] : []),
+                          ...typeStep.lines,
                           { label: "Note", value: input.note.trim() },
                       ],
                       warning,
@@ -221,7 +212,7 @@ export const setFollowUpApplier = defineApplier<SetFollowUpPlan>({
             // A booked visit is an ASM's; the plan is bound to the role that proposed it.
             if (user.role !== "asm") throw new Error("visit plan does not match the user's role");
             // 24 Nov: the type of business first — refuses a lead that still has none.
-            await applyVisitBusinessType(tx, p.lead_id, p.business_type);
+            await applyVisitBusinessType(tx, p.lead_id, { business_type: p.business_type, segments: p.segments });
             // The visit route's own writer: the scheduled row + its `visit` touchpoint.
             const visit = await recordVisit(bookedVisitInput(p, user.id), { tx });
             return {

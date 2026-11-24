@@ -40,8 +40,8 @@ import type { Preview, ToolResult } from "../../types";
 import { defineTool, LeadId, ownedLeadOr, type ToolFactory } from "../spec";
 import { leadUrl, visitCaptureUrl } from "../leads";
 import { hasVerifiedVisits } from "@/lib/visits/verifiedStore";
-import { BUSINESS_TYPES, BUSINESS_TYPE_LABELS, businessTypeLabel } from "@/lib/leads/businessType";
-import { applyVisitBusinessType, currentBusinessType, planVisitBusinessType } from "@/lib/leads/visitBusinessType";
+import { applyVisitBusinessType } from "@/lib/leads/visitBusinessType";
+import { resolveVisitType, visitTypeInputShape, visitTypePlanShape } from "./visitType";
 import { defineApplier } from "../../applierSpec";
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
@@ -91,8 +91,8 @@ export const LogVisitPlan = z.object({
         })
         .nullable()
         .default(null),
-    /** 24 Nov: a Type of Business stated with the visit, written with it (null = the lead's own stays). */
-    business_type: z.enum(BUSINESS_TYPES).nullable().default(null),
+    /** 24 Nov tree: a Type of Business / Segments stated with the visit, written with it (null / [] = the lead's own stay). */
+    ...visitTypePlanShape,
 });
 export type LogVisitPlan = z.infer<typeof LogVisitPlan>;
 
@@ -132,13 +132,7 @@ export const logVisit: ToolFactory = () =>
                 lost_reason: LostReason.optional(),
                 photo_ids: z.array(AttachmentId).max(10).optional(),
                 location_id: AttachmentId.optional(),
-                business_type: z
-                    .enum(BUSINESS_TYPES)
-                    .optional()
-                    .describe(
-                        "The lead's type of business (two-wheeler, three-wheeler, lithium battery, solar, buyback, scrap, " +
-                            "battery sale, other). Required when the lead has none yet — ask the ASM, never guess.",
-                    ),
+                ...visitTypeInputShape,
             })
             .refine((v) => v.visit_status !== "visited" || !!v.outcome, {
                 message: "outcome is required when visit_status is visited",
@@ -177,15 +171,10 @@ export const logVisit: ToolFactory = () =>
             }
             const remarks = input.remarks.trim();
 
-            // 24 Nov (CRM item 4): no visit without the lead's type of business —
-            // the same rule as the visit form (lib/leads/visitBusinessType.ts).
-            const currentType = await currentBusinessType(lead.id);
-            const typePlan = planVisitBusinessType(input.business_type, currentType);
-            if (!typePlan.ok) {
-                return ask(
-                    `What is this dealer's type of business? (${Object.values(BUSINESS_TYPE_LABELS).join(", ")})`,
-                );
-            }
+            // 24 Nov: no visit without the lead's type of business, nor a battery
+            // sale without a segment — the visit form's rule (visitType.ts).
+            const typeStep = await resolveVisitType(lead.id, input);
+            if ("question" in typeStep) return ask(typeStep.question);
 
             let visitDate: string | null = null;
             let status: StatusChoice = NO_CHANGE;
@@ -322,7 +311,8 @@ export const logVisit: ToolFactory = () =>
                 auto,
                 photos,
                 gps,
-                business_type: typePlan.write,
+                business_type: typeStep.business_type,
+                segments: typeStep.segments,
             };
 
             const lines: Preview["lines"] = [
@@ -340,14 +330,7 @@ export const logVisit: ToolFactory = () =>
                           : "no change",
                 },
             ];
-            if (typePlan.write) {
-                lines.push({
-                    label: "Business",
-                    value: currentType
-                        ? `${businessTypeLabel(currentType)} → ${businessTypeLabel(typePlan.write)}`
-                        : businessTypeLabel(typePlan.write),
-                });
-            }
+            lines.push(...typeStep.lines);
             if (interest) {
                 lines.push({ label: "Temperature", value: `${lead.interest_level ?? "none"} → ${interest}${auto.interest ? " (auto)" : ""}` });
             }
@@ -405,7 +388,7 @@ export const logVisitApplier = defineApplier<LogVisitPlan>({
             throw new Error(`A done visit is logged with a shop photo and live location: ${visitCaptureUrl(p.lead_id)}`);
         }
         // 24 Nov: the type of business first — refuses a lead that still has none.
-        await applyVisitBusinessType(tx, p.lead_id, p.business_type);
+        await applyVisitBusinessType(tx, p.lead_id, { business_type: p.business_type, segments: p.segments });
         await consumeMedia(tx, [...p.photos.map((f) => f.media_id), ...(p.gps ? [p.gps.media_id] : [])], actionId);
         const visitRemarks = p.gps ? `${p.remarks}\n${p.gps.note}` : p.remarks;
         const visit = await recordVisit(

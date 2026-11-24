@@ -8,7 +8,7 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { listTeamLeads, listTeamVisits, teamScopeFor } from "@/lib/team/teamLeads";
-import { currentBusinessType, planVisitBusinessType } from "@/lib/leads/visitBusinessType";
+import { currentLeadType, planVisitBusinessType } from "@/lib/leads/visitBusinessType";
 import { teamLeadsCsv, teamVisitsCsv } from "@/lib/team/teamCsv";
 
 type Row = Record<string, unknown>;
@@ -56,10 +56,24 @@ async function main() {
         return `${r.rows.length} rows for ${scope.people[0]?.name ?? "—"}`;
     });
 
-    await step("team leads, business type = solar", async () => {
-        const r = await listTeamLeads(scope, { businessType: "solar" });
-        if (r.rows.some((x) => x.business_type !== "solar")) throw new Error("non-solar row returned");
+    await step("team leads, business type = buyback", async () => {
+        const r = await listTeamLeads(scope, { businessType: "buyback" });
+        if (r.rows.some((x) => x.business_type !== "buyback")) throw new Error("non-buyback row returned");
         return `${r.rows.length} rows`;
+    });
+
+    await step("team leads, segment = 3W batteries", async () => {
+        const r = await listTeamLeads(scope, { segment: "3W" });
+        if (r.rows.some((x) => !(x.segments ?? []).includes("3W batteries"))) throw new Error("row without the segment returned");
+        return `${r.rows.length} rows`;
+    });
+
+    await step("E-395 left no product-type rows", async () => {
+        const [r] = (await db.execute(sql`
+            SELECT count(*)::int AS n FROM dealer_leads
+             WHERE business_type IN ('two_wheeler', 'three_wheeler', 'solar', 'lithium_battery')
+        `)) as unknown as Array<{ n: number }>;
+        return r!.n === 0 ? "0 rows — applied" : `${r!.n} rows still typed as a product — apply drizzle/E-395 on this DB`;
     });
 
     await step("a manager's scope = self + reports", async () => {
@@ -101,9 +115,9 @@ async function main() {
         `)) as unknown as Array<{ id: string }>;
         const out: string[] = [];
         for (const { id } of rows) {
-            const cur = await currentBusinessType(id);
-            const p = planVisitBusinessType(undefined, cur);
-            out.push(`${id}: type=${cur ?? "none"} → visit without a type ${p.ok ? "allowed" : "refused"}`);
+            const cur = await currentLeadType(id);
+            const p = planVisitBusinessType({}, cur);
+            out.push(`${id}: type=${cur.business_type ?? "none"} segments=[${cur.segments.join(",")}] → visit as is ${p.ok ? "allowed" : `refused (${p.missing})`}`);
         }
         return out.join("; ");
     });

@@ -19,6 +19,7 @@ import { LEADS_OVERSIGHT_ROLES } from "@/lib/leads/access";
 import { getTeamMemberIds } from "@/lib/users/team";
 import { ownerScopeIds } from "@/lib/users/teamRules";
 import { businessTypeFilterParam, BUSINESS_TYPE_UNSET } from "@/lib/leads/businessType";
+import { normalizeSegment } from "@/lib/leads/segments";
 import { resolveTeamFilters, type TeamFilters, type TeamScope, type VisitKind } from "./teamFilters";
 
 export type { TeamFilters, VisitKind } from "./teamFilters";
@@ -61,6 +62,8 @@ function leadConds(f: TeamFilters): SQL[] {
     const bt = businessTypeFilterParam(f.businessType);
     if (bt === BUSINESS_TYPE_UNSET) c.push(sql`(to_jsonb(dl) ->> 'business_type') IS NULL`);
     else if (bt) c.push(sql`(to_jsonb(dl) ->> 'business_type') = ${bt}`);
+    const seg = normalizeSegment(f.segment);
+    if (seg) c.push(sql`COALESCE(dl.segments, '[]'::jsonb) @> ${JSON.stringify([seg])}::jsonb`);
     return c;
 }
 
@@ -69,6 +72,7 @@ export type TeamLeadRow = {
     name: string;
     city: string | null;
     business_type: string | null;
+    segments: string[];
     lead_status: string | null;
     interest_level: string | null;
     owner_id: string | null;
@@ -104,6 +108,7 @@ export async function listTeamLeads(
                COALESCE(NULLIF(dl.shop_name, ''), NULLIF(dl.dealer_name, ''), dl.id) AS name,
                dl.city,
                to_jsonb(dl) ->> 'business_type' AS business_type,
+               COALESCE(dl.segments, '[]'::jsonb) AS segments,
                dl.lead_status,
                dl.interest_level,
                dl.current_owner_id AS owner_id,
@@ -145,6 +150,7 @@ export type TeamVisitRow = {
     lead_name: string;
     city: string | null;
     business_type: string | null;
+    segments: string[];
     rep_id: string;
     rep_name: string | null;
     scheduled_date: string | null;
@@ -175,6 +181,7 @@ export async function listTeamVisits(
                COALESCE(NULLIF(dl.shop_name, ''), NULLIF(dl.dealer_name, ''), dl.id) AS lead_name,
                dl.city,
                to_jsonb(dl) ->> 'business_type' AS business_type,
+               COALESCE(dl.segments, '[]'::jsonb) AS segments,
                lv.asm_id AS rep_id,
                COALESCE(NULLIF(u.name, ''), u.email) AS rep_name,
                lv.scheduled_date::text AS scheduled_date,
