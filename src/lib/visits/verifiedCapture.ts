@@ -57,6 +57,47 @@ export function checkVisitPhoto(photo: { type: string; size: number } | null | u
     return { ok: true };
 }
 
+/**
+ * E-396 — WhatsApp visit proof. A WhatsApp location pin has no accuracy and
+ * the ASM can move it, so instead of accuracy it must land within this many
+ * metres of the shop's known position (the first verified visit there, or a
+ * street-level geocode of the address).
+ */
+export const MAX_SHOP_DISTANCE_M = 100;
+
+/** The camera photo must follow the pin within this window. */
+export const WA_PROOF_WINDOW_MS = 20 * 60_000;
+
+/**
+ * The pin half of a WhatsApp proof. `meters` null = the shop has no known
+ * position yet (this visit becomes it), which is accepted.
+ */
+export function checkShopDistance(meters: number | null): CaptureCheck {
+    if (meters == null) return { ok: true };
+    if (!Number.isFinite(meters) || meters > MAX_SHOP_DISTANCE_M) {
+        const far = meters >= 1000 ? `${(meters / 1000).toFixed(1)} km` : `${Math.round(meters)} m`;
+        return {
+            ok: false,
+            message:
+                `📍 This location is ${far} from the shop. A visit is saved only within ${MAX_SHOP_DISTANCE_M} m of the shop. ` +
+                `Stand at the shop and send your *current* location again (tap 📎 → Location → Send your current location).`,
+        };
+    }
+    return { ok: true };
+}
+
+/** Is the photo within the window after the pin? */
+export function checkProofWindow(pinAt: Date | string, photoAt: Date): CaptureCheck {
+    const gap = photoAt.getTime() - new Date(pinAt).getTime();
+    if (!Number.isFinite(gap) || gap < 0 || gap > WA_PROOF_WINDOW_MS) {
+        return {
+            ok: false,
+            message: `The photo came more than ${WA_PROOF_WINDOW_MS / 60_000} minutes after your location. Send your current location again, then take the photo.`,
+        };
+    }
+    return { ok: true };
+}
+
 /** The IST calendar day (YYYY-MM-DD) of an instant. */
 export function istDay(at: Date): string {
     return new Date(at.getTime() + 5.5 * 3600_000).toISOString().slice(0, 10);

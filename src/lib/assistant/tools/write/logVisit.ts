@@ -39,7 +39,14 @@ import { fmtDate, reasonLabel, statusLabel } from "../../format";
 import type { Preview, ToolResult } from "../../types";
 import { defineTool, LeadId, ownedLeadOr, type ToolFactory } from "../spec";
 import { leadUrl, visitCaptureUrl } from "../leads";
-import { hasVerifiedVisits } from "@/lib/visits/verifiedStore";
+import { hasVerifiedVisits, hasWhatsAppVisitProof, loadVisitCapture } from "@/lib/visits/verifiedStore";
+import { checkCaptureUse } from "@/lib/visits/verifiedCapture";
+import { assistantConfig } from "../../config";
+
+/** E-396: is the in-chat proof (pin + camera Flow) available? Flow published AND migration applied. */
+async function whatsAppProofOn(): Promise<boolean> {
+    return !!assistantConfig().visitFlowId && (await hasWhatsAppVisitProof());
+}
 import { applyVisitBusinessType } from "@/lib/leads/visitBusinessType";
 import { resolveVisitType, visitTypeInputShape, visitTypePlanShape } from "./visitType";
 import { defineApplier } from "../../applierSpec";
@@ -91,12 +98,42 @@ export const LogVisitPlan = z.object({
         })
         .nullable()
         .default(null),
+    /**
+     * E-396 — a done visit's proof taken inside WhatsApp: the location pin
+     * (stage "location"), then the camera-only Flow photo (stage "photo"),
+     * then the card with Confirm (stage "ready", capture_id set). Filled by
+     * wa-assistant/visitProof.ts, never by the model. null = no proof needed
+     * (not a done visit) or the pre-E-363 photos/gps above.
+     */
+    proof: z
+        .object({
+            stage: z.enum(["location", "photo", "ready"]),
+            pin: z
+                .object({
+                    lat: z.number(),
+                    lng: z.number(),
+                    at: z.string(),
+                    /** From the shop's known position; null = not known yet (this visit sets it). */
+                    distance_m: z.number().nullable(),
+                })
+                .nullable(),
+            capture_id: z.string().uuid().nullable(),
+        })
+        .nullable()
+        .default(null),
     /** 24 Nov tree: a Type of Business / Segments stated with the visit, written with it (null / [] = the lead's own stay). */
     ...visitTypePlanShape,
 });
 export type LogVisitPlan = z.infer<typeof LogVisitPlan>;
 
 const ask = (question: string): ToolResult => ({ kind: "question", question });
+
+/** E-396: the pin's distance as the card and the visit remarks say it. */
+export function proofLocationText(distanceM: number | null): string {
+    return distanceM == null
+        ? "WhatsApp location (first verified visit — saved as the shop's location)"
+        : `WhatsApp location, ${fmtDistance(distanceM)} from the shop`;
+}
 
 /** A completed visit's day: not in the future, not older than the window. */
 function pastDay(date: string, today: string): { ok: true } | { ok: false; question: string } {
@@ -117,7 +154,9 @@ export const logVisit: ToolFactory = () =>
             "Propose logging a field visit on a lead the ASM owns: visit status, outcome, remarks, next action and next-visit date, " +
             "with optional interest or status change. 'Convert' is not done here — send the CRM link. " +
             "To only schedule a visit, use set_follow_up. Photos (photo_ids) and a location pin (location_id) the ASM sent " +
-            "are filed on a completed visit as proof. Nothing is saved until Confirm.",
+            "are filed on a completed visit as proof. For a completed visit the ASM may be asked, after this call, " +
+            "to send their location and take a shop photo — the chat does that itself; never ask for them yourself. " +
+            "Nothing is saved until Confirm.",
         schema: z
             .object({
                 lead_id: LeadId,
@@ -160,7 +199,10 @@ export const logVisit: ToolFactory = () =>
 
             const today = istNow(ctx.now).isoDate;
             const visited = input.visit_status === "visited";
-            if (visited && (await hasVerifiedVisits())) {
+            // E-396: with the WhatsApp Flow set up, the proof is taken right here in
+            // the chat (location pin → camera photo) instead of on the CRM page.
+            const proofInChat = visited && (await hasVerifiedVisits()) && (await whatsAppProofOn());
+            if (visited && !proofInChat && (await hasVerifiedVisits())) {
                 return {
                     kind: "declined",
                     reason:
@@ -183,6 +225,13 @@ export const logVisit: ToolFactory = () =>
                 visitDate = input.visit_date ?? today;
                 const day = pastDay(visitDate, today);
                 if (!day.ok) return ask(day.question);
+                // The proof is taken now, at the shop: no back-dated done visit (ID 196).
+                if (proofInChat && visitDate !== today) {
+                    return ask(
+                        "A done visit is saved on the day it happens, with your location and a shop photo taken then. " +
+                            "Are you at the shop now? Otherwise it can't be logged as done for an earlier day.",
+                    );
+                }
                 const check = checkVisitProposal({
                     outcome: input.outcome!,
                     status: input.status as StatusChoice | undefined,
@@ -262,9 +311,12 @@ export const logVisit: ToolFactory = () =>
                 }
             }
 
-            // Photos and the pin are proof of a visit that happened.
-            const photoRefs = input.photo_ids ?? [];
-            if ((photoRefs.length || input.location_id) && !visited) {
+            // Photos and the pin are proof of a visit that happened. With the
+            // proof taken in the chat, photos / pins sent earlier prove nothing
+            // (gallery, moved pin) and are left out.
+            const photoRefs = proofInChat ? [] : (input.photo_ids ?? []);
+            const locationId = proofInChat ? undefined : input.location_id;
+            if ((photoRefs.length || locationId) && !visited) {
                 return ask("Photos and location are saved on a visit that happened. Did you meet the dealer?");
             }
             let photos: LogVisitPlan["photos"] = [];
@@ -276,8 +328,8 @@ export const logVisit: ToolFactory = () =>
             let gps: LogVisitPlan["gps"] = null;
             let gpsLine: string | null = null;
             let gpsWarning: string | null = null;
-            if (input.location_id) {
-                const found = await resolveAttachments(ctx, [input.location_id], { kinds: ["location"], forWrite: true });
+            if (locationId) {
+                const found = await resolveAttachments(ctx, [locationId], { kinds: ["location"], forWrite: true });
                 if (found.result) return found.result;
                 const pin = found.rows[0];
                 const [addr] = await db.execute<{ area: string | null; pincode: string | null }>(
@@ -311,6 +363,7 @@ export const logVisit: ToolFactory = () =>
                 auto,
                 photos,
                 gps,
+                proof: proofInChat ? { stage: "location", pin: null, capture_id: null } : null,
                 business_type: typeStep.business_type,
                 segments: typeStep.segments,
             };
@@ -339,6 +392,7 @@ export const logVisit: ToolFactory = () =>
             lines.push({ label: "Remarks", value: remarks });
             if (photos.length) lines.push({ label: "📷 Photos", value: String(photos.length) });
             if (gpsLine) lines.push({ label: "📍 Location", value: gpsLine });
+            if (proofInChat) lines.push({ label: "📍📷 Proof", value: "your location at the shop, then a camera photo" });
 
             const warnings: string[] = [];
             const secondConfirm = !!lost && isHighImpactLostReason(lost.reason);
@@ -371,7 +425,9 @@ export const logVisit: ToolFactory = () =>
                 before: { lead_status: lead.lead_status, interest_level: lead.interest_level, asm_id: lead.asm_id },
                 sourceMessageId: ctx.messageId,
             });
-            return { kind: "preview", action_id: id, preview };
+            return proofInChat
+                ? { kind: "preview", action_id: id, preview, proof: "location" }
+                : { kind: "preview", action_id: id, preview };
         },
     });
 
@@ -382,15 +438,31 @@ export const logVisitApplier = defineApplier<LogVisitPlan>({
     apply: async ({ tx, user, step, actionId }, p) => {
         // A visit is an ASM's; the plan is bound to the role that proposed it.
         if (user.role !== "asm") throw new Error("visit plan does not match the user's role");
-        // ID 196: a done visit needs the CRM's camera + live-location page
-        // (a plan proposed before E-363 was applied is refused at Confirm).
+        // ID 196: a done visit needs a verified capture — the CRM's camera +
+        // live-location page, or (E-396) the pin + camera Flow taken in this chat.
+        // A plan proposed before E-363 was applied is refused at Confirm.
+        let capture: Awaited<ReturnType<typeof loadVisitCapture>> = null;
         if (p.visit_status === "visited" && (await hasVerifiedVisits())) {
-            throw new Error(`A done visit is logged with a shop photo and live location: ${visitCaptureUrl(p.lead_id)}`);
+            if (!p.proof) {
+                throw new Error(`A done visit is logged with a shop photo and live location: ${visitCaptureUrl(p.lead_id)}`);
+            }
+            if (p.proof.stage !== "ready" || !p.proof.capture_id) {
+                throw new Error(
+                    p.proof.stage === "location"
+                        ? "Send your current location from the shop first, then take the shop photo."
+                        : "Take the shop photo first (tap the photo button I sent).",
+                );
+            }
+            capture = await loadVisitCapture(p.proof.capture_id, tx);
+            if (!capture) throw new Error("That shop photo was not found. Log the visit again.");
+            const use = checkCaptureUse(capture, { userId: user.id, leadId: p.lead_id, now: new Date() });
+            if (!use.ok) throw new Error(use.message);
         }
         // 24 Nov: the type of business first — refuses a lead that still has none.
         await applyVisitBusinessType(tx, p.lead_id, { business_type: p.business_type, segments: p.segments });
         await consumeMedia(tx, [...p.photos.map((f) => f.media_id), ...(p.gps ? [p.gps.media_id] : [])], actionId);
-        const visitRemarks = p.gps ? `${p.remarks}\n${p.gps.note}` : p.remarks;
+        const proofNote = capture && p.proof?.pin ? `📍 ${proofLocationText(p.proof.pin.distance_m)} · 📷 camera photo (WhatsApp)` : null;
+        const visitRemarks = p.gps ? `${p.remarks}\n${p.gps.note}` : proofNote ? `${p.remarks}\n${proofNote}` : p.remarks;
         const visit = await recordVisit(
             {
                 leadId: p.lead_id,
@@ -404,6 +476,8 @@ export const logVisitApplier = defineApplier<LogVisitPlan>({
                 next_visit_date: p.next_visit_date,
                 ...(p.photos.length ? { photos: p.photos.map((f) => mediaUrl(f.storage_bucket, f.storage_key)) } : {}),
                 ...(p.gps ? { gps_check_in_lat: p.gps.lat, gps_check_in_lng: p.gps.lng } : {}),
+                // The capture decides photo, location and date (recordVisit), and marks the visit verified.
+                ...(capture ? { capture } : {}),
             },
             { tx },
         );

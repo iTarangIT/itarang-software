@@ -213,7 +213,17 @@ export type ToolResult =
           /** Fields that were printed but failed their format check. */
           unreadable: string[];
       }
-    | { kind: "preview"; action_id: string; preview: Preview }
+    | {
+          kind: "preview";
+          action_id: string;
+          preview: Preview;
+          /**
+           * E-396: a done visit whose proof is still to come. The channel asks
+           * for the location pin instead of showing Confirm; the card with
+           * Confirm follows the camera photo (wa-assistant/visitProof.ts).
+           */
+          proof?: "location";
+      }
     | { kind: "not_found" }
     | { kind: "question"; question: string }
     | { kind: "declined"; reason: string; crm_url?: string | null }

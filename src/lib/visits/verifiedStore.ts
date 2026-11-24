@@ -33,6 +33,61 @@ export async function hasVerifiedVisits(): Promise<boolean> {
     return ok;
 }
 
+let waProbe: { at: number; ok: boolean } | null = null;
+
+/** Is E-396 (visit_captures.source) on this database? Cached for a minute. */
+export async function hasWhatsAppVisitProof(): Promise<boolean> {
+    if (waProbe && Date.now() - waProbe.at < 60_000) return waProbe.ok;
+    let ok = false;
+    try {
+        const r = rowsOf<{ ok: boolean }>(
+            await db.execute(sql`
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                     WHERE table_schema = 'public' AND table_name = 'visit_captures' AND column_name = 'source'
+                ) AS ok
+            `),
+        );
+        ok = Boolean(r[0]?.ok);
+    } catch {
+        ok = false;
+    }
+    waProbe = { at: Date.now(), ok };
+    return ok;
+}
+
+export type ShopPosition = { lat: number; lng: number; from: "visit" | "address" };
+
+/**
+ * E-396 — where the shop is, for the WhatsApp pin check: the first verified
+ * visit's location on this lead, else a street-level geocode of its address
+ * (an area / city geocode is too coarse for 100 m). Null = not known yet.
+ */
+export async function shopPosition(
+    leadId: string,
+    geocode: () => Promise<{ lat: number; lng: number; precision: string } | null>,
+): Promise<ShopPosition | null> {
+    const r = rowsOf<{ lat: number; lng: number }>(
+        await db.execute(sql`
+            SELECT gps_check_in_lat::float8 AS lat, gps_check_in_lng::float8 AS lng
+              FROM lead_visits
+             WHERE dealer_lead_id = ${leadId}
+               AND (to_jsonb(lead_visits) ->> 'verified') = 'true'
+               AND gps_check_in_lat IS NOT NULL AND gps_check_in_lng IS NOT NULL
+             ORDER BY COALESCE((to_jsonb(lead_visits) ->> 'captured_at')::timestamptz, created_at) ASC
+             LIMIT 1
+        `),
+    );
+    if (r[0] && Number.isFinite(r[0].lat) && Number.isFinite(r[0].lng)) return { lat: r[0].lat, lng: r[0].lng, from: "visit" };
+    try {
+        const g = await geocode();
+        if (g && g.precision === "street") return { lat: g.lat, lng: g.lng, from: "address" };
+    } catch {
+        // Not mapped.
+    }
+    return null;
+}
+
 export class DuplicateVisitPhotoError extends Error {
     constructor() {
         super("This photo is already used on another visit. Take a new photo at the shop.");
@@ -48,7 +103,8 @@ export type VisitCapture = {
     photo_sha256: string;
     gps_lat: number;
     gps_lng: number;
-    gps_accuracy_m: number;
+    /** null for a WhatsApp pin (E-396). */
+    gps_accuracy_m: number | null;
     captured_at: string;
     visit_id: string | null;
 };
@@ -84,7 +140,10 @@ export async function saveVisitCapture(input: {
     photo: Buffer;
     lat: number;
     lng: number;
-    accuracyM: number;
+    /** null only for a WhatsApp pin (needs E-396). */
+    accuracyM: number | null;
+    /** E-396: 'whatsapp' with the pin's distance from the shop (null = shop position not known yet). */
+    whatsapp?: { shopDistanceM: number | null } | null;
 }): Promise<{ id: string; photoUrl: string; capturedAt: string }> {
     const sha = createHash("sha256").update(input.photo).digest("hex");
     const seen = rowsOf<{ x: number }>(
@@ -104,18 +163,30 @@ export async function saveVisitCapture(input: {
         lng: input.lng,
         accuracyM: input.accuracyM,
         timestamp: now,
-        label: "iTarang visit",
+        label: input.whatsapp ? "iTarang visit · WhatsApp" : "iTarang visit",
     });
     const photoUrl = await storePhoto(buffer);
     try {
         const r = rowsOf<{ id: string; captured_at: string }>(
-            await db.execute(sql`
+            await db.execute(
+                input.whatsapp
+                    ? sql`
+                INSERT INTO visit_captures
+                    (user_id, dealer_lead_id, account_id, photo_url, photo_sha256, gps_lat, gps_lng, gps_accuracy_m, captured_at,
+                     source, shop_distance_m)
+                VALUES (${input.userId}, ${input.leadId}, ${input.accountId}, ${photoUrl}, ${sha},
+                        ${input.lat}, ${input.lng}, ${input.accuracyM}, ${now.toISOString()},
+                        'whatsapp', ${input.whatsapp.shopDistanceM})
+                RETURNING id::text AS id, captured_at::text AS captured_at
+            `
+                    : sql`
                 INSERT INTO visit_captures
                     (user_id, dealer_lead_id, account_id, photo_url, photo_sha256, gps_lat, gps_lng, gps_accuracy_m, captured_at)
                 VALUES (${input.userId}, ${input.leadId}, ${input.accountId}, ${photoUrl}, ${sha},
                         ${input.lat}, ${input.lng}, ${input.accuracyM}, ${now.toISOString()})
                 RETURNING id::text AS id, captured_at::text AS captured_at
-            `),
+            `,
+            ),
         );
         return { id: r[0]!.id, photoUrl, capturedAt: r[0]!.captured_at };
     } catch (err) {
