@@ -2,6 +2,7 @@
 //
 //   node --env-file=<env> scripts/wa-assist/create-visit-flow.mjs            # DRAFT: created, not published
 //   node --env-file=<env> scripts/wa-assist/create-visit-flow.mjs --publish  # created AND published
+//   node --env-file=<env> scripts/wa-assist/create-visit-flow.mjs --flow <id> # publish an existing draft
 //
 // Needs WA_ASSIST_WABA_ID (the WhatsApp Business Account that owns the
 // Assistant's number) and WA_ASSIST_ACCESS_TOKEN (whatsapp_business_management).
@@ -20,6 +21,25 @@ const token = process.env.WA_ASSIST_ACCESS_TOKEN?.trim();
 const version = process.env.WA_ASSIST_GRAPH_VERSION?.trim() || "v21.0";
 if (!waba || !/^\d{5,30}$/.test(waba)) throw new Error("Set WA_ASSIST_WABA_ID (numeric WhatsApp Business Account id).");
 if (!token) throw new Error("Set WA_ASSIST_ACCESS_TOKEN.");
+
+// --flow <id>: publish a draft created earlier (e.g. when publishing was refused
+// because of a WABA payment-method problem) instead of creating another one.
+const existing = process.argv[process.argv.indexOf("--flow") + 1];
+if (process.argv.includes("--flow")) {
+    if (!/^\d{5,30}$/.test(existing ?? "")) throw new Error("usage: --flow <numeric flow id>");
+    const r = await fetch(`https://graph.facebook.com/${version}/${existing}/publish`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+    });
+    const j = await r.json().catch(() => null);
+    if (!r.ok || !j?.success) {
+        console.error("Meta refused to publish:", JSON.stringify(j?.error ?? j, null, 2));
+        process.exit(1);
+    }
+    console.log(`Flow ${existing} PUBLISHED.`);
+    console.log(`Next: add WA_ASSIST_VISIT_FLOW_ID=${existing} to the server env and restart with --update-env.`);
+    process.exit(0);
+}
 
 const here = dirname(fileURLToPath(import.meta.url));
 const flowJson = readFileSync(join(here, "visit-photo-flow.json"), "utf8");
