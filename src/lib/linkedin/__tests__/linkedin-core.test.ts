@@ -12,7 +12,7 @@ import { approvalHashes, checkApproval, NO_ATTACHMENT, sha256 } from "../lib/has
 import { normaliseProfileUrl, parseLinkedInTitle } from "../lib/profile-url";
 import { firstNameOf, renderTemplate } from "../lib/render-template";
 import { connectionFromProfile, healthFromError } from "../providers/messaging/unipile.provider";
-import { mapBrightDataRecord, parseBrightDataPayload } from "../providers/search/brightdata.provider";
+import { enrichWarning, mapBrightDataRecord, parseBrightDataPayload } from "../providers/search/brightdata.provider";
 import { discoveryQuery, hitsToProfiles } from "../providers/search/discovery";
 import {
   canAct,
@@ -217,6 +217,11 @@ describe("Bright Data mapping", () => {
     expect(mapBrightDataRecord({ url: "https://www.linkedin.com/in/x", error: "dead" })).toBeNull();
     expect(parseBrightDataPayload({ url: "https://www.linkedin.com/in/x", name: "X Y" })).toHaveLength(1);
     expect(parseBrightDataPayload("nope")).toEqual([]);
+  });
+  it("turns an enrichment failure into a warning, not a failed run", () => {
+    expect(enrichWarning(new Error("Bright Data trigger 400: Customer is not active"))).toMatch(/account is not active/);
+    expect(enrichWarning(new Error("Bright Data trigger 401: nope"))).toMatch(/token was refused/);
+    expect(enrichWarning(new Error("Bright Data trigger 500: boom"))).toMatch(/^Saved without full profile details/);
   });
 });
 

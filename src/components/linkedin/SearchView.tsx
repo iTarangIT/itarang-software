@@ -157,7 +157,9 @@ export function SearchView() {
                 <>
                   <span className="font-semibold text-gray-900">{run.data.run.keywords}</span> — {run.data.run.status}
                   {run.data.run.status === "running" && " (profiles are saved as they arrive)"}
-                  {run.data.run.error && <span className="ml-2 text-red-600">{run.data.run.error}</span>}
+                  {run.data.run.error && (
+                    <span className={`ml-2 ${run.data.run.status === "failed" ? "text-red-600" : "text-amber-700"}`}>{run.data.run.error}</span>
+                  )}
                 </>
               ) : (
                 "Pick or start a search"

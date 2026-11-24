@@ -61,6 +61,8 @@ export async function startSearchRun(runId: string): Promise<void> {
     await db.update(liSearchRuns).set({ provider_job_id: job.providerJobId }).where(eq(liSearchRuns.id, runId));
     if (job.immediate?.length) await ingestResults(runId, job.immediate, { finish: job.providerJobId === "immediate" });
     else if (job.providerJobId === "immediate") await finishRun(runId);
+    // A skipped step (e.g. enrichment) is noted on the run without failing it.
+    if (job.warning) await db.update(liSearchRuns).set({ error: job.warning.slice(0, 1000) }).where(eq(liSearchRuns.id, runId));
     await logAction({ action: "search", ok: true, detail: `run ${runId}: ${claimed.keywords}`, actorId: claimed.triggered_by });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
