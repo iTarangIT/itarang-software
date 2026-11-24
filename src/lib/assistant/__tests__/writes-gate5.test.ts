@@ -8,6 +8,12 @@ const execute = vi.fn<(q: SQL) => Promise<Record<string, unknown>[]>>(async () =
 vi.mock("@/lib/db", () => ({ db: { execute } }));
 const findLeadInScope = vi.fn();
 const findClaimState = vi.fn();
+// 24 Nov: the visit business-type rule reads the lead; by default it is already typed.
+vi.mock("@/lib/leads/visitBusinessType", async (orig) => ({
+    ...(await orig<typeof import("@/lib/leads/visitBusinessType")>()),
+    currentBusinessType: vi.fn(async () => "battery_sale"),
+    applyVisitBusinessType: vi.fn(async () => undefined),
+}));
 vi.mock("../scope", async (orig) => ({ ...(await orig<typeof import("../scope")>()), findLeadInScope, findClaimState }));
 const createPending = vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => ({ id: "act-1", expiresAt: new Date() }));
 vi.mock("../actions", async (orig) => ({ ...(await orig<typeof import("../actions")>()), createPending }));
@@ -91,6 +97,7 @@ describe("log_visit proposals (UC-01)", () => {
             remarks: "owner Ramesh, needs 10 batteries at X", next_action: "next_visit", next_visit_date: "2026-09-25",
             // Already Under_Discussion, and the ASM stated the interest: nothing auto.
             interest: "hot", status_to: null, lost: null, auto: { status: false, interest: false }, photos: [], gps: null,
+            business_type: null, // the lead is already typed (mock): nothing to write
         });
         expect(a.preview).toMatchObject({ title: "Log visit — ABC Traders", resets_idle_clock: true, warning: null, needs_second_confirm: false });
         expect(a.preview.lines).toEqual([
@@ -409,5 +416,59 @@ describe("gate 5 appliers (run inside the executor's transaction)", () => {
         expect(claimLead).toHaveBeenCalledWith("DL-7", "asm-1", { tx: TX, actorRole: "asm" });
         claimLead.mockResolvedValueOnce({ ok: false, reason: "already_owned" });
         await expect(apply("claim_lead", ISR, { lead_id: "DL-7" })).rejects.toBeInstanceOf(ActionRejected);
+    });
+});
+
+// ── 24 Nov (CRM item 4): no visit without the lead's type of business ─────────
+
+describe("log_visit — type of business is required", () => {
+    const vbt = () => import("@/lib/leads/visitBusinessType");
+
+    it("asks for the type when the lead has none and the ASM gave none; nothing is proposed", async () => {
+        const { currentBusinessType } = await vbt();
+        vi.mocked(currentBusinessType).mockResolvedValueOnce(null);
+        const r = await run(ASM, "log_visit", UC01);
+        expect(r).toMatchObject({ kind: "question" });
+        expect((r as { question: string }).question).toMatch(/type of business/i);
+        expect((r as { question: string }).question).toMatch(/Two-Wheeler/);
+        expect(createPending).not.toHaveBeenCalled();
+    });
+
+    it("a type stated with the visit goes on the plan and the card", async () => {
+        const { currentBusinessType } = await vbt();
+        vi.mocked(currentBusinessType).mockResolvedValueOnce(null);
+        const r = await run(ASM, "log_visit", { ...UC01, business_type: "three_wheeler" });
+        expect(r.kind).toBe("preview");
+        expect(stored().plan.business_type).toBe("three_wheeler");
+        expect(stored().preview.lines).toContainEqual({ label: "Business", value: "Three-Wheeler" });
+    });
+
+    it("a change of type shows old → new; the same type writes nothing", async () => {
+        const { currentBusinessType } = await vbt();
+        vi.mocked(currentBusinessType).mockResolvedValueOnce("scrap");
+        await run(ASM, "log_visit", { ...UC01, business_type: "solar" });
+        expect(stored().preview.lines).toContainEqual({ label: "Business", value: "Scrap → Solar" });
+        vi.mocked(currentBusinessType).mockResolvedValueOnce("solar");
+        await run(ASM, "log_visit", { ...UC01, business_type: "solar" });
+        expect(stored().plan.business_type).toBeNull();
+        expect(stored().preview.lines.some((l) => l.label === "Business")).toBe(false);
+    });
+
+    it("the applier checks + writes the type in the visit's transaction, BEFORE the visit", async () => {
+        const { applyVisitBusinessType } = await vbt();
+        const TX = { tag: "tx" };
+        const plan = APPLIERS.log_visit.schema.parse({
+            lead_id: "DL-1042", visit_status: "visited", visit_outcome: "productive", visit_date: "2026-09-24",
+            remarks: "owner Ramesh", next_action: "next_visit", next_visit_date: "2026-09-25",
+            interest: null, status_to: null, lost: null, business_type: "lithium_battery",
+        });
+        await APPLIERS.log_visit.apply({ tx: TX as never, user: ASM, step: 1 }, plan);
+        expect(applyVisitBusinessType).toHaveBeenCalledWith(TX, "DL-1042", "lithium_battery");
+        expect(vi.mocked(applyVisitBusinessType).mock.invocationCallOrder[0]).toBeLessThan(recordVisit.mock.invocationCallOrder[0]!);
+        // A plan stored before today has no business_type: it parses as null (the lead's own type must exist).
+        const old = APPLIERS.log_visit.schema.parse({ ...(plan as Record<string, unknown>), business_type: undefined }) as {
+            business_type: string | null;
+        };
+        expect(old.business_type).toBeNull();
     });
 });

@@ -232,6 +232,10 @@ const ADMIN_SALES_HEAD_GROUPS: LayoutGroup[] = [
         section: "REPORTS",
         items: [
             ...bothAs("reports", { isNew: true }),
+            // 24 Nov (CRM items 5 + 7): team leads with latest action / comment, and
+            // the Team visits tab. Here, not under SALES: that group is open by
+            // default and already at the ID 90 line target.
+            ...bothAs("leads-team", { label: "Team leads & visits", isNew: true }),
             {
                 node: "Downloads & email reports",
                 isNew: true,
@@ -355,6 +359,8 @@ export const NAV_LAYOUTS: Record<string, Layout> = {
                 items: [
                     { id: "ceo-sales-dashboard", label: "Sales dashboard" },
                     "leads",
+                    // 24 Nov (CRM items 5 + 7): team leads + Team visits tab.
+                    { id: "leads-team", label: "Team leads", isNew: true },
                     "ceo-escalations",
                     { node: "Review queues", children: ["kyc-review", "product-review", "dealer-validation"] },
                     {

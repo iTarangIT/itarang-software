@@ -75,16 +75,13 @@ function LeadDetailDrawer({
                 {lead.phone && (
                     <div>
                         <p className="text-xs text-gray-400 mb-0.5">Phone</p>
-                        <a
-                            href={`tel:${lead.phone}`}
-                            className="text-teal-600 flex items-center gap-1"
-                        >
+                        <span className="text-teal-600 flex items-center gap-1">
                             <Phone className="w-3.5 h-3.5" />
                             {lead.phone}
                             {lead.phone_valid === false && (
                                 <span className="text-xs text-orange-500 ml-1">(unverified)</span>
                             )}
-                        </a>
+                        </span>
                     </div>
                 )}
                 {(lead.location_city || lead.location_state) && (

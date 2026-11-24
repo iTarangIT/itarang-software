@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { Phone, MessageCircle, AlertCircle, RotateCcw, ShieldAlert } from "lucide-react";
+import { MessageCircle, AlertCircle, RotateCcw, ShieldAlert } from "lucide-react";
+import { CallNowButton } from "@/components/leads/call-now-button";
 import { wonWithoutQuote, type LeadDetailBundle } from "@/lib/inside-sales/types";
 import { WonWithoutQuoteChip } from "@/components/leads/won-without-quote-chip";
 import { InterestLevelEditor } from "../../../_components/InterestLevelEditor";
@@ -225,11 +226,17 @@ export function LeadDetailHeader({
                     <Fact label="Phone">
                         <div className="text-base font-semibold text-gray-900 tabular-nums">{lead.phone || "—"}</div>
                         {lead.phone && (
-                            <div className="mt-1 flex items-center gap-3 text-xs">
-                                <a href={`tel:${lead.phone}`} className="inline-flex items-center gap-1 font-medium text-emerald-700 hover:underline">
-                                    <Phone className="h-3 w-3" />
-                                    Call
-                                </a>
+                            <div className="mt-1 flex flex-wrap items-center gap-3 text-xs">
+                                {/* 24 Nov: calls go through NeoDove only (recorded + tracked) —
+                                    the phone-app tel: link is gone. Owner only, as the Next-step box. */}
+                                {isOwner && (
+                                    <CallNowButton
+                                        leadId={lead.id}
+                                        leadName={lead.shop_name || lead.dealer_name || "this lead"}
+                                        disabled={["Lost", "Won", "Converted"].includes(lead.lead_status ?? "")}
+                                        onQueued={onUpdated}
+                                    />
+                                )}
                                 {wa && (
                                     <a
                                         href={wa}
