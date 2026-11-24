@@ -1,48 +1,88 @@
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/db", () => ({ db: {} }));
-import { planVisitBusinessType, VISIT_BUSINESS_TYPE_REQUIRED } from "../visitBusinessType";
+import { planVisitBusinessType, VISIT_BUSINESS_TYPE_REQUIRED, VISIT_SEGMENT_REQUIRED } from "../visitBusinessType";
 import { BUSINESS_TYPES, normalizeBusinessType } from "../businessType";
+import { LEAD_SEGMENTS, normalizeSegment, parseSegments, storedSegments } from "../segments";
 
-// 24 Nov (CRM items 3 + 4).
-describe("planVisitBusinessType — a visit needs the lead's type of business", () => {
-    it("refuses when neither the visit nor the lead has a type", () => {
-        expect(planVisitBusinessType(undefined, null)).toEqual({ ok: false, message: VISIT_BUSINESS_TYPE_REQUIRED });
-        expect(planVisitBusinessType(null, "")).toEqual({ ok: false, message: VISIT_BUSINESS_TYPE_REQUIRED });
-        // A stored value that is not a type (old junk) does not count.
-        expect(planVisitBusinessType(undefined, "finance")).toMatchObject({ ok: false });
+// 24 Nov tree:
+//   Type of business  ONE   battery_sale | buyback | scrap | other
+//   Segment           MANY  3W batteries | 2W batteries | Solar | Inverter | BESS | ESS
+const none = { business_type: null, segments: [] };
+
+describe("the two fields", () => {
+    it("Type of business is the four deal types only", () => {
+        expect([...BUSINESS_TYPES]).toEqual(["battery_sale", "buyback", "scrap", "other"]);
     });
 
-    it("the lead's own type is enough — nothing to write", () => {
-        expect(planVisitBusinessType(undefined, "scrap")).toEqual({ ok: true, write: null });
+    it("Segment is the six product lines", () => {
+        expect([...LEAD_SEGMENTS]).toEqual(["3W batteries", "2W batteries", "Solar", "Inverter", "BESS", "ESS"]);
     });
 
-    it("a type given with the visit is written, unless it is the same", () => {
-        expect(planVisitBusinessType("two_wheeler", null)).toEqual({ ok: true, write: "two_wheeler" });
-        expect(planVisitBusinessType("solar", "scrap")).toEqual({ ok: true, write: "solar" });
-        expect(planVisitBusinessType("solar", "solar")).toEqual({ ok: true, write: null });
-    });
-
-    it("an invalid given type falls back to the lead's own", () => {
-        expect(planVisitBusinessType("bicycle", "buyback")).toEqual({ ok: true, write: null });
-        expect(planVisitBusinessType("bicycle", null)).toMatchObject({ ok: false });
-    });
-});
-
-describe("business types from the 24 Nov meeting", () => {
-    it("has two-wheeler, three-wheeler, lithium battery, solar, buyback and scrap (old values kept)", () => {
-        for (const v of ["two_wheeler", "three_wheeler", "lithium_battery", "solar", "buyback", "scrap", "battery_sale", "other"]) {
-            expect(BUSINESS_TYPES).toContain(v);
+    it("a product typed where a TYPE is asked reads as Battery Sale", () => {
+        for (const v of ["two_wheeler", "Three-Wheeler", "Lithium Battery", "solar", "2W", "E-Rickshaw"]) {
+            expect(normalizeBusinessType(v)).toBe("battery_sale");
         }
     });
 
-    it("reads the usual spellings from sheets and chat", () => {
-        expect(normalizeBusinessType("2W")).toBe("two_wheeler");
-        expect(normalizeBusinessType("2-Wheeler")).toBe("two_wheeler");
-        expect(normalizeBusinessType("Three Wheeler")).toBe("three_wheeler");
-        expect(normalizeBusinessType("E-Rickshaw")).toBe("three_wheeler");
-        expect(normalizeBusinessType("Lithium")).toBe("lithium_battery");
-        expect(normalizeBusinessType("Li-ion")).toBe("lithium_battery");
-        expect(normalizeBusinessType("Solar Panels")).toBe("solar");
+    it("segment spellings from sheets and chat", () => {
+        expect(normalizeSegment("3W")).toBe("3W batteries");
+        expect(normalizeSegment("e-rickshaw")).toBe("3W batteries");
+        expect(normalizeSegment("2W Batteries")).toBe("2W batteries");
+        expect(normalizeSegment("inverter battery")).toBe("Inverter");
+        expect(normalizeSegment("bess")).toBe("BESS");
+        expect(normalizeSegment("Auto-Parts")).toBeNull();
+        expect(parseSegments("ESS, 3W, solar, 3W batteries, junk")).toEqual(["3W batteries", "Solar", "ESS"]);
+    });
+
+    it("stored values: known ones normalised, the two old ones kept, junk dropped", () => {
+        expect(storedSegments(["3W", "Battery", "Auto-Parts", "junk", "Solar"])).toEqual(["3W batteries", "Battery", "Auto-Parts", "Solar"]);
+        expect(storedSegments(null)).toEqual([]);
+    });
+});
+
+describe("planVisitBusinessType — what a visit needs", () => {
+    it("no type anywhere → refused", () => {
+        expect(planVisitBusinessType({}, none)).toEqual({ ok: false, missing: "type", message: VISIT_BUSINESS_TYPE_REQUIRED });
+    });
+
+    it("battery sale with no segment anywhere → refused", () => {
+        expect(planVisitBusinessType({ business_type: "battery_sale" }, none)).toEqual({
+            ok: false,
+            missing: "segment",
+            message: VISIT_SEGMENT_REQUIRED,
+        });
+        expect(planVisitBusinessType({}, { business_type: "battery_sale", segments: [] })).toMatchObject({ missing: "segment" });
+    });
+
+    it("buyback / scrap / other need no segment", () => {
+        for (const t of ["buyback", "scrap", "other"]) {
+            expect(planVisitBusinessType({ business_type: t }, none)).toMatchObject({ ok: true, writeType: t, writeSegments: null });
+        }
+    });
+
+    it("the lead's own type + segments are enough — nothing to write", () => {
+        expect(planVisitBusinessType({}, { business_type: "battery_sale", segments: ["Solar"] })).toMatchObject({
+            ok: true,
+            writeType: null,
+            writeSegments: null,
+        });
+    });
+
+    it("given values are written only when they differ", () => {
+        expect(
+            planVisitBusinessType({ business_type: "battery_sale", segments: ["3W", "ESS"] }, none),
+        ).toMatchObject({ ok: true, writeType: "battery_sale", writeSegments: ["3W batteries", "ESS"] });
+        expect(
+            planVisitBusinessType({ segments: ["ESS", "3W batteries"] }, { business_type: "battery_sale", segments: ["3W batteries", "ESS"] }),
+        ).toMatchObject({ ok: true, writeType: null, writeSegments: null });
+    });
+
+    it("an old-only segment (Battery) still counts for a battery sale already on the lead", () => {
+        expect(planVisitBusinessType({}, { business_type: "battery_sale", segments: ["Battery"] })).toMatchObject({ ok: true });
+    });
+
+    it("a retired type stored on the lead (three_wheeler) is not a type — asked again", () => {
+        expect(planVisitBusinessType({}, { business_type: "three_wheeler", segments: [] })).toMatchObject({ ok: false, missing: "type" });
     });
 });

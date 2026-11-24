@@ -40,7 +40,8 @@ export default async function VisitCapturePage({
     if (sp.lead) {
         const [lead] = (await db.execute(sql`
             SELECT id, COALESCE(NULLIF(shop_name, ''), dealer_name, id) AS name, lead_status, interest_level,
-                   current_owner_id, to_jsonb(dealer_leads) ->> 'business_type' AS business_type
+                   current_owner_id, to_jsonb(dealer_leads) ->> 'business_type' AS business_type,
+                   COALESCE(segments, '[]'::jsonb) AS segments
               FROM dealer_leads WHERE id = ${sp.lead}
         `)) as unknown as Array<{
             id: string;
@@ -49,6 +50,7 @@ export default async function VisitCapturePage({
             interest_level: string | null;
             current_owner_id: string | null;
             business_type: string | null;
+            segments: string[];
         }>;
         if (!lead) return refuse("That lead was not found.", "/");
         const back = leadHrefFor(user.role, lead.id);
@@ -57,7 +59,7 @@ export default async function VisitCapturePage({
             <LeadVisitCapture
                 leadId={lead.id}
                 name={lead.name}
-                lead={{ lead_status: lead.lead_status, interest_level: lead.interest_level, business_type: lead.business_type }}
+                lead={{ lead_status: lead.lead_status, interest_level: lead.interest_level, business_type: lead.business_type, segments: lead.segments }}
                 backHref={back}
             />,
         );
