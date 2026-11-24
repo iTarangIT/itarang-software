@@ -26,6 +26,9 @@ function isActivelyWorkedError(message: string): boolean {
     return message.includes("force");
 }
 
+// Only the manager wording ("…priority-dial destination…") gets the link to
+// the campaign screen. The rep / ASM wording says "priority-dial campaign" and
+// gets no link: that screen is closed to them and showed "Forbidden".
 function isNoDestinationError(message: string): boolean {
     return message.includes("priority-dial destination");
 }

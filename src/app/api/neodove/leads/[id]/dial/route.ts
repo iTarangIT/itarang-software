@@ -96,6 +96,15 @@ export const POST = withErrorHandler(
 
         const campaign = await getPriorityDialCampaign();
         if (!campaign) {
+            // A rep / ASM cannot open the NeoDove campaign screens (their APIs
+            // admit NEODOVE_ADMIN_ROLES only), so tell them who can fix it
+            // rather than how — the "how" sent them to a Forbidden page.
+            if (ownerRequest) {
+                return errorResponse(
+                    "Calling is not set up yet: no NeoDove campaign is marked as the priority-dial campaign. Ask your Sales Head or Admin to set one, then try again.",
+                    409,
+                );
+            }
             return errorResponse(
                 "No campaign is set as the priority-dial destination. Open a NeoDove campaign's settings and tick \"Priority dial destination\" — it must be a campaign whose NeoDove-side lead distribution assigns arriving leads to an agent immediately.",
                 409,
