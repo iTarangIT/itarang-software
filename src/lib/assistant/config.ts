@@ -60,3 +60,12 @@ export function writesEnabledFor(userId: string, cfg: AssistantConfig = assistan
 export function crmBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
     return (env.NEXT_PUBLIC_APP_URL || env.APP_URL || "https://crm.itarang.com").replace(/\/+$/, "");
 }
+
+/**
+ * The CRM Leads page — where a user without WhatsApp saving is sent to make
+ * the change. Given to the model in full (24 Nov: left to "point them to the
+ * CRM", it invented https://crm.itarang.in/leads).
+ */
+export function crmLeadsUrl(env: NodeJS.ProcessEnv = process.env): string {
+    return `${crmBaseUrl(env)}/leads`;
+}

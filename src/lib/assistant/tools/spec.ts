@@ -7,6 +7,7 @@
 import { z } from "zod";
 import type { AssistantRole, ToolContext, ToolName, ToolResult } from "../types";
 import { findLeadInScope, type ScopedLead } from "../scope";
+import { crmLeadsUrl } from "../config";
 
 export type ToolKind = "read" | "write";
 
@@ -39,9 +40,11 @@ export const LeadId = z
 
 export const NOT_FOUND: ToolResult = { kind: "not_found" };
 
+// 24 Nov: carries the exact CRM link, so the reply never needs to make one up.
 export const WRITES_OFF: ToolResult = {
     kind: "declined",
     reason: "Saving changes from WhatsApp is not switched on for you yet. Please update the CRM directly.",
+    crm_url: crmLeadsUrl(),
 };
 
 /**
