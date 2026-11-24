@@ -2,6 +2,7 @@ import { createServerClient } from "@supabase/ssr";
 import { type NextRequest, NextResponse } from "next/server";
 
 import { BUYBACK_ADMIN_ROLES } from "@/lib/buyback/roles";
+import { NEODOVE_ADMIN_ROLES } from "@/lib/neodove/roles";
 import { staffPageRolesFor } from "@/lib/auth/staffPageRoles";
 import { DEALER_VALIDATION_PAGE_ROLES } from "@/lib/auth/dealerValidationRules";
 import { detectThreat, detectBodyThreat, type ThreatSignal } from "@/lib/security/detect";
@@ -677,6 +678,16 @@ export async function middleware(request: NextRequest) {
         ? ["admin", "sales_head"]
         : null;
   if (teamPageRoles && !teamPageRoles.includes(role)) {
+    return finalize(NextResponse.redirect(new URL(myDashboard, request.url)));
+  }
+
+  // NeoDove screens (campaigns, agents, activity, reconcile): every API behind
+  // them admits NEODOVE_ADMIN_ROLES only, so for anyone else the page rendered
+  // and showed "Forbidden: Insufficient permissions". Send them home instead.
+  if (
+    (path === "/leads/neodove-campaigns" || path.startsWith("/leads/neodove-campaigns/")) &&
+    !NEODOVE_ADMIN_ROLES.includes(role)
+  ) {
     return finalize(NextResponse.redirect(new URL(myDashboard, request.url)));
   }
 

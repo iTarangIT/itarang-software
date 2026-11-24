@@ -10,6 +10,7 @@ import { ASM_QUEUE_TABS, ASM_TAB_LABELS } from "@/lib/asm/types";
 import { CALL_VOCAB, HINGLISH_CALL_ALIASES, HINGLISH_VISIT_ALIASES, VISIT_VOCAB } from "./vocab";
 import { ROLE_LABEL, type AssistantUser, type ToolName } from "./types";
 import { ASM_OWN_TABS, ISR_OWN_TABS } from "./scope";
+import { crmBaseUrl, crmLeadsUrl } from "./config";
 
 /** "Thu 24 Sep 2026, 17:40 IST" plus the ISO date — for resolving "kal", "Friday". */
 export function istNow(now: Date): { label: string; isoDate: string; offset: string } {
@@ -76,7 +77,8 @@ export function buildSystemPrompt(args: {
 NOW: ${t.label} (today = ${t.isoDate}). Resolve "aaj", "kal", "Friday", "11 baje" against this, in IST (${t.offset}). Always write dates you pass to tools as ISO, with +05:30 for times.
 
 YOUR TOOLS: ${tools.join(", ")}.
-${writesEnabled ? "" : "Changes are NOT enabled for this user: if they ask to log, claim, mark, schedule, transfer, reassign, escalate, convert, create, quote or send anything, say saving from WhatsApp is not switched on for them yet and point them to the CRM.\n"}
+${writesEnabled ? "" : `Changes are NOT enabled for this user: if they ask to log, claim, mark, schedule, transfer, reassign, escalate, convert, create, quote or send anything, say saving from WhatsApp is not switched on for them yet and point them to the CRM at exactly ${crmLeadsUrl()}\n`}
+THE CRM: ${crmBaseUrl()} — the only web address you may write besides the links tools return. Never make up a URL or change its domain.
 THE USER'S QUEUE TABS: ${tabsLine(user)}
 
 RULES — follow all of them:

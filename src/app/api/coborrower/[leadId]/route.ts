@@ -8,6 +8,15 @@ import { recordKycStep } from '@/lib/kyc/kycEventLog';
 import { isMaskedAadhaar, maskAadhaar, restoreMaskedAadhaar } from '@/lib/kyc/aadhaarMask';
 import { isMaskedPan, maskPan, restoreMaskedPan } from '@/lib/kyc/panMask';
 
+/** co_borrowers.income is numeric(12,2): blank / "₹ 25,000" / junk → number or null. */
+function parseIncome(v: unknown): string | null {
+    if (v === null || v === undefined) return null;
+    const s = String(v).replace(/[₹,\s]/g, '');
+    if (!s) return null;
+    const n = Number(s);
+    return Number.isFinite(n) ? String(n) : null;
+}
+
 export async function GET(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     try {
         const { leadId } = await params;
@@ -77,7 +86,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             dob: body.dob || null,
             phone: body.phone ?? null,
             relationship: body.relationship ?? null,
-            income: body.income ?? null,
+            // numeric column: an empty income box arrives as "" and Postgres
+            // refuses it (22P02), so a blank (or non-number) income is saved as null.
+            income: parseIncome(body.income),
             permanent_address: body.permanent_address ?? null,
             current_address: body.current_address ?? null,
             is_current_same: !!body.is_current_same,
