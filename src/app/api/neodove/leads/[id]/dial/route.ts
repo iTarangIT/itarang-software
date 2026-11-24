@@ -6,16 +6,17 @@
 // the operator, and the operator would find out only when the customer said
 // nobody called.
 //
-// WHAT IT ACTUALLY DOES. It pushes this one lead into the campaign marked
-// `is_priority_dial`, whose NeoDove-side lead distribution is configured to hand
+// WHAT IT ACTUALLY DOES. It pushes this one lead into the lead owner's OWN
+// campaign (the active one whose CRM owner is that user — 24 Nov, one NeoDove
+// campaign per rep), or failing that the campaign marked `is_priority_dial`, whose NeoDove-side lead distribution is configured to hand
 // arriving leads straight to an agent. The lead therefore surfaces at the top of
 // a live queue within seconds rather than in the next bulk batch. That is the
 // whole mechanism, and it lives entirely in NeoDove's campaign settings — which
 // is why the response says "queued for" and never "calling".
 //
 // WHY A SEPARATE ROUTE FROM .../push RATHER THAN A FLAG ON IT. Three real
-// differences: the destination is not chosen by the caller (there is exactly one
-// priority campaign, by unique index), it writes a touchpoint so the request is
+// differences: the destination is not chosen by the caller (the owner's own
+// campaign, else the one priority campaign, by unique index), it writes a touchpoint so the request is
 // visible on the lead's timeline, and its failure modes are different — "no
 // priority campaign is configured" is a setup problem with a specific remedy,
 // not a push error.
@@ -38,7 +39,7 @@ import {
     withErrorHandler,
 } from "@/lib/api-utils";
 import { getNeodoveConfig } from "@/lib/neodove/config";
-import { getPriorityDialCampaign, pushOneLead } from "@/lib/neodove/pushOne";
+import { getDialCampaignFor, pushOneLead } from "@/lib/neodove/pushOne";
 import { NEODOVE_ADMIN_ROLES } from "@/lib/neodove/roles";
 import { assertOwner, ForbiddenLeadAccessError } from "@/lib/leads/ownership";
 import {
@@ -94,28 +95,47 @@ export const POST = withErrorHandler(
             );
         }
 
-        const campaign = await getPriorityDialCampaign();
-        if (!campaign) {
+        // Per-rep routing (24 Nov): the lead goes to its owner's own NeoDove
+        // campaign (the active one whose CRM owner is that user), falling back
+        // to the shared priority-dial campaign. An owner's request uses their
+        // own id; an admin's uses the lead's current owner.
+        let dialOwnerId: string | null = ownerRequest ? user.id : null;
+        if (!ownerRequest) {
+            const owners = await db.execute<{ current_owner_id: string | null }>(sql`
+                SELECT current_owner_id FROM dealer_leads WHERE id = ${id} LIMIT 1
+            `);
+            dialOwnerId = owners[0]?.current_owner_id ?? null;
+        }
+        const target = await getDialCampaignFor(dialOwnerId);
+        if (!target) {
             // A rep / ASM cannot open the NeoDove campaign screens (their APIs
             // admit NEODOVE_ADMIN_ROLES only), so tell them who can fix it
             // rather than how — the "how" sent them to a Forbidden page.
             if (ownerRequest) {
                 return errorResponse(
-                    "Calling is not set up yet: no NeoDove campaign is marked as the priority-dial campaign. Ask your Sales Head or Admin to set one, then try again.",
+                    "Calling is not set up for you yet: none of the NeoDove campaigns has you as its CRM owner, and no priority-dial campaign is set. Ask your Sales Head or Admin to set you as CRM owner on your NeoDove campaign, then try again.",
                     409,
                 );
             }
             return errorResponse(
-                "No campaign is set as the priority-dial destination. Open a NeoDove campaign's settings and tick \"Priority dial destination\" — it must be a campaign whose NeoDove-side lead distribution assigns arriving leads to an agent immediately.",
+                "No priority-dial destination for this lead. Set the lead owner as CRM owner on their NeoDove campaign, or open a campaign's settings and tick \"Priority dial destination\" — it must be a campaign whose NeoDove-side lead distribution assigns arriving leads to an agent immediately.",
                 409,
             );
         }
+        const campaign = target.campaign;
 
         const assignee = await resolveNeodoveAssignee({
             campaignId: campaign.id,
             // The owner keeps their lead: null = "do not assign", whatever the
             // campaign's default owner is and whatever the body says.
-            assignToUserId: ownerRequest ? null : parsed.data.assignToUserId,
+            // When the lead went to its owner's OWN campaign, that campaign's
+            // default owner IS the lead's owner — don't "reassign" it to them;
+            // only an explicit pick in the body moves it.
+            assignToUserId: ownerRequest
+                ? null
+                : target.via === "own" && parsed.data.assignToUserId === undefined
+                  ? null
+                  : parsed.data.assignToUserId,
         });
         if (!assignee.ok) {
             return errorResponse(assignee.message, assignee.status);

@@ -169,3 +169,39 @@ export async function getPriorityDialCampaign(): Promise<{
     `);
     return rows[0] ?? null;
 }
+
+export type DialCampaign = NonNullable<Awaited<ReturnType<typeof getPriorityDialCampaign>>>;
+
+/**
+ * Where "Call now" sends a lead (24 Nov): the rep's OWN campaign first, the
+ * shared priority-dial campaign only as a fallback.
+ *
+ * The team runs one NeoDove campaign per rep ("CRM_NEODOVE_1 (Nidhi)", …), each
+ * distributing to that rep's NeoDove agent. A single priority campaign would
+ * send every rep's Call now to one person's dialer, so the owner's campaign —
+ * the active one whose CRM owner (E-237 crm_owner_user_id) is that user — wins.
+ * Ties: the one ticked as priority dial, then the newest.
+ *
+ * Read through to_jsonb for the same reason as getPriorityDialCampaign: a DB
+ * without E-237 / E-226 finds no own campaign instead of failing to parse.
+ */
+export async function getDialCampaignFor(ownerUserId: string | null): Promise<{
+    campaign: DialCampaign;
+    via: "own" | "priority";
+} | null> {
+    if (ownerUserId) {
+        const rows = await db.execute<DialCampaign>(sql`
+            SELECT c.id, c.name, c.neodove_campaign_name, c.push_endpoint_ref
+              FROM neodove_campaigns c
+             WHERE (to_jsonb(c) ->> 'crm_owner_user_id') = ${ownerUserId}
+               AND c.status = 'active'
+               AND c.push_endpoint_ref IS NOT NULL
+             ORDER BY ((to_jsonb(c) ->> 'is_priority_dial') = 'true') DESC NULLS LAST,
+                      c.created_at DESC
+             LIMIT 1
+        `);
+        if (rows[0]) return { campaign: rows[0], via: "own" };
+    }
+    const priority = await getPriorityDialCampaign();
+    return priority ? { campaign: priority, via: "priority" } : null;
+}

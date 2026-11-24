@@ -1,15 +1,15 @@
 // "Call now" — per-lead priority dial through NeoDove (E-226).
 //
 // THE WORDING IS THE DESIGN. Every string here says *requested* / *queued*, and
-// none says *calling*. NeoDove has no dial API: this pushes the lead into the
-// campaign marked as the priority-dial destination, and it is that campaign's
+// none says *calling*. NeoDove has no dial API: this pushes the lead into the lead
+// owner's own campaign (else the priority-dial destination), and it is that campaign's
 // NeoDove-side lead distribution — not anything the CRM sends — that puts it in
 // front of an agent. An operator who reads "calling…" and hears silence will
 // conclude the integration is broken; one who reads "queued for the calling
 // team" knows exactly what happened and what to check.
 //
-// WHY IT STILL CONFIRMS. There is no campaign to choose (there is exactly one
-// priority destination, enforced by a unique index), so this is not the full
+// WHY IT STILL CONFIRMS. There is no campaign to choose (the server picks the
+// owner's own campaign, else the one priority destination), so this is not the full
 // SendToNeodoveModal. But the push is irreversible and spends NeoDove plan
 // quota, so it is not a bare one-click either — the confirm names the
 // destination and, on refusal, is where the exclusion override lives.
