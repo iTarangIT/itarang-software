@@ -17,6 +17,8 @@ const InteractiveSchema = z.object({
     type: z.string(),
     button_reply: z.object({ id: z.string().max(256), title: z.string().optional() }).optional(),
     list_reply: z.object({ id: z.string().max(256), title: z.string().optional() }).optional(),
+    /** E-396: a submitted WhatsApp Flow (the camera-only shop photo form). */
+    nfm_reply: z.object({ response_json: z.string().max(20_000), name: z.string().optional() }).optional(),
 });
 
 const MessageSchema = z.object({
@@ -90,6 +92,11 @@ export type InboundMessage = {
     audio?: { id: string; mimeType: string | null } | null;
     /** Only for `image` / `document`: Meta's media id to download, and the rep's caption. */
     media?: { kind: "image" | "document"; id: string; mimeType: string | null; fileName: string | null; caption: string | null } | null;
+    /**
+     * E-396: a submitted Flow (interactive nfm_reply) — its flow_token and the
+     * photo(s) it carried, as Meta media ids (downloaded like any image).
+     */
+    flowReply?: { token: string | null; photos: { id: string; mimeType: string | null; sha256: string | null }[] } | null;
     /** Only for `location`: the pin as sent (a static pin — WhatsApp does not deliver live location to bots). */
     location?: { lat: number; lng: number; name: string | null; address: string | null } | null;
     raw: unknown;
@@ -143,6 +150,7 @@ function parseMessage(phoneNumberId: string, raw: unknown): InboundMessage | nul
         replyId = reply?.id ?? null;
         text = reply?.title ?? null;
     }
+    const flowReply = msg.type === "interactive" && msg.interactive?.nfm_reply ? parseFlowResponse(msg.interactive.nfm_reply.response_json) : null;
     const audio = msg.type === "audio" && msg.audio ? { id: msg.audio.id, mimeType: msg.audio.mime_type ?? null } : null;
     const file = msg.type === "image" ? msg.image : msg.type === "document" ? msg.document : undefined;
     const media = file
@@ -176,8 +184,41 @@ function parseMessage(phoneNumberId: string, raw: unknown): InboundMessage | nul
         audio,
         media,
         location,
+        flowReply,
         raw,
     };
+}
+
+const FlowPhoto = z.object({
+    id: z.string().min(1).max(256),
+    mime_type: z.string().max(100).optional(),
+    sha256: z.string().max(200).optional(),
+});
+
+/**
+ * E-396: a Flow's response_json → its token and photos. Any array of
+ * { id, mime_type } in it counts as photos (the form's one PhotoPicker).
+ * Never throws: unreadable JSON is a reply with no token and no photos.
+ */
+export function parseFlowResponse(json: string): NonNullable<InboundMessage["flowReply"]> {
+    let obj: unknown;
+    try {
+        obj = JSON.parse(json);
+    } catch {
+        return { token: null, photos: [] };
+    }
+    if (!obj || typeof obj !== "object") return { token: null, photos: [] };
+    const rec = obj as Record<string, unknown>;
+    const token = typeof rec.flow_token === "string" ? rec.flow_token.slice(0, 200) : null;
+    const photos: NonNullable<InboundMessage["flowReply"]>["photos"] = [];
+    for (const v of Object.values(rec)) {
+        if (!Array.isArray(v)) continue;
+        for (const item of v) {
+            const p = FlowPhoto.safeParse(item);
+            if (p.success) photos.push({ id: p.data.id, mimeType: p.data.mime_type ?? null, sha256: p.data.sha256 ?? null });
+        }
+    }
+    return { token, photos };
 }
 
 export function parseWebhook(rawBody: string): ParseResult {

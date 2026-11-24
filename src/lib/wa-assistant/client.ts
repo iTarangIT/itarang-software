@@ -194,6 +194,54 @@ export class WaAssistClient {
     }
 
     /**
+     * E-396: a "Send location" button. The reply comes back as an ordinary
+     * `location` message (a static pin; WhatsApp gives bots no live location).
+     */
+    async sendLocationRequest(waPhone: string, body: string): Promise<SendResult> {
+        assertMax("interactive body", body, WA_LIMITS.interactiveBody);
+        return this.post("messages", {
+            to: WaAssistClient.to(waPhone),
+            type: "interactive",
+            interactive: {
+                type: "location_request_message",
+                body: { text: body },
+                action: { name: "send_location" },
+            },
+        });
+    }
+
+    /**
+     * E-396: open a published WhatsApp Flow (the camera-only shop photo form).
+     * Its submission comes back as an `interactive` nfm_reply carrying `token`.
+     */
+    async sendFlow(
+        waPhone: string,
+        flow: { body: string; flowId: string; token: string; cta: string; screen: string; data: Record<string, unknown> },
+    ): Promise<SendResult> {
+        assertMax("interactive body", flow.body, WA_LIMITS.interactiveBody);
+        assertMax("flow button", flow.cta, WA_LIMITS.buttonTitle);
+        return this.post("messages", {
+            to: WaAssistClient.to(waPhone),
+            type: "interactive",
+            interactive: {
+                type: "flow",
+                body: { text: flow.body },
+                action: {
+                    name: "flow",
+                    parameters: {
+                        flow_message_version: "3",
+                        flow_id: flow.flowId,
+                        flow_token: flow.token,
+                        flow_cta: flow.cta,
+                        flow_action: "navigate",
+                        flow_action_payload: { screen: flow.screen, data: flow.data },
+                    },
+                },
+            },
+        });
+    }
+
+    /**
      * An inbound media file (a voice note) by its Meta media id: resolve the
      * short-lived URL, then fetch the bytes, both with the Assistant's own
      * token. Anything over `maxBytes` is refused before and after the download.

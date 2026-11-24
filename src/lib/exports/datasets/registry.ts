@@ -1305,7 +1305,9 @@ const visits: Dataset = {
                    COALESCE(dl.dealer_name, dl.shop_name, acct.name) AS dealer, acct.name AS counter,
                    CASE WHEN ${visitedRowSql("v")} THEN
                         CASE WHEN (to_jsonb(v) ->> 'verified') = 'true'
-                             THEN 'Yes · ±' || round((to_jsonb(v) ->> 'gps_accuracy_m')::numeric)::text || ' m + photo'
+                             THEN COALESCE('Yes · ±' || round((to_jsonb(v) ->> 'gps_accuracy_m')::numeric)::text || ' m + photo',
+                                           -- E-396: a WhatsApp pin has no accuracy.
+                                           'Yes · WhatsApp pin + photo')
                              ELSE 'No (not verified)' END END AS verified,
                    dl.city, dl.state,
                    u.name AS visitor, v.meeting_mode, v.visit_status, v.visit_outcome,

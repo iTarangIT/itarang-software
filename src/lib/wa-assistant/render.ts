@@ -45,7 +45,20 @@ export type WaPayload =
      * (ast:inv:<leadId>), no actionId. Under a longer list: "Next 10"
      * (ast:more:<token>). For a big catalogue: the product types (ast:ptype:<type>).
      */
-    | { kind: "buttons"; body: string; buttons: { id: string; title: string }[]; actionId?: string };
+    | { kind: "buttons"; body: string; buttons: { id: string; title: string }[]; actionId?: string }
+    /** E-396: WhatsApp's "Send location" button. */
+    | { kind: "location_request"; body: string; followUp?: WaPayload }
+    /** E-396: open the camera-only shop photo Flow. */
+    | {
+          kind: "flow";
+          body: string;
+          flowId: string;
+          token: string;
+          cta: string;
+          screen: string;
+          data: Record<string, unknown>;
+          followUp?: WaPayload;
+      };
 
 // ── Paging ──────────────────────────────────────────────────────────────────
 
@@ -321,6 +334,47 @@ export function renderPreview(preview: Preview, actionId: string, opts: { edit?:
             { id: `ast:x:${actionId}`, title: preview.answers?.cancel ?? "Cancel" },
         ],
         actionId,
+    };
+}
+
+/**
+ * E-396, proof step 1 of 2: the visit as understood so far, then WhatsApp's
+ * "Send location" button. Nothing to confirm yet — Confirm comes after the photo.
+ */
+export function renderLocationAsk(preview: Preview): WaPayload {
+    const head = `*${fit(preview.title, RENDER_LIMITS.header)}*`;
+    const ask =
+        "Step 1 of 2 — at the shop, tap *Send location* below and send your *current* location " +
+        "(not a searched or moved pin). It must be within 100 m of the shop.";
+    const room = RENDER_LIMITS.previewBody - head.length - ask.length - 4;
+    const lines = fit(
+        preview.lines
+            .filter((l) => !l.label.includes("Proof"))
+            .map((l) => `${l.label}: ${fit(l.value.replace(/\s+/g, " "), PREVIEW_VALUE_MAX)}`)
+            .join("\n"),
+        Math.max(room, 0),
+    );
+    return { kind: "location_request", body: `${head}\n${lines}\n\n${ask}` };
+}
+
+/** E-396, proof step 2 of 2: the camera-only Flow, bound to the visit card by its token. */
+export function renderPhotoAsk(a: {
+    flowId: string;
+    actionId: string;
+    shop: string;
+    distanceLine: string;
+}): WaPayload {
+    return {
+        kind: "flow",
+        body: fit(
+            `📍 Location received — ${a.distanceLine}.\n\nStep 2 of 2 — tap *Take shop photo*. The camera opens; take a clear photo of the shop / counter.`,
+            RENDER_LIMITS.previewBody,
+        ),
+        flowId: a.flowId,
+        token: `visit:${a.actionId}`,
+        cta: "Take shop photo",
+        screen: "SHOP_PHOTO",
+        data: { shop: fit(a.shop, 80) },
     };
 }
 
@@ -631,6 +685,9 @@ export function renderTurn(turn: {
     next?: string | null;
 }): WaPayload {
     const last = [...turn.results].reverse().find((r) => r.result.kind === "preview");
+    if (last?.result.kind === "preview" && last.result.proof === "location") {
+        return renderLocationAsk(last.result.preview);
+    }
     if (last?.result.kind === "preview") {
         // A send has nothing to edit: it goes to the lead's own phone / email.
         const card = renderPreview(last.result.preview, last.result.action_id, { edit: last.tool !== "send_quote" });

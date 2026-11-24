@@ -50,6 +50,9 @@ export const HANDLING = [
     "media_too_large",
     "media_unsupported",
     "media_failed",
+    // E-396 — a done visit's proof: the location pin, then the camera Flow photo.
+    "visit_pin",
+    "visit_photo",
     "error",
 ] as const;
 export type Handling = (typeof HANDLING)[number];
@@ -126,7 +129,7 @@ export async function applyStatus(wamid: string, status: string): Promise<boolea
 export async function recordOutbound(o: {
     waPhone: string;
     userId: string | null;
-    type: "text" | "buttons" | "list";
+    type: "text" | "buttons" | "list" | "location_request" | "flow";
     text: string;
     wamid: string | null;
     error?: string | null;
