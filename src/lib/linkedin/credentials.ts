@@ -144,7 +144,14 @@ export async function webhookSecret(): Promise<string | null> {
   return minted;
 }
 
-/** Firecrawl is the CRM's existing key (the scraper's). */
+/** Firecrawl key for profile discovery. SCRAPPER_API_KEY is LinkedIn's own
+ *  Firecrawl key (so searches don't eat the scraper's credits); the scraper's
+ *  FIRECRAWL_API_KEY is the fallback. */
+export const FIRECRAWL_KEY_ENVS = ["SCRAPPER_API_KEY", "FIRECRAWL_API_KEY"] as const;
 export function firecrawlKey(): string | null {
-  return process.env.FIRECRAWL_API_KEY?.trim() || null;
+  for (const name of FIRECRAWL_KEY_ENVS) {
+    const v = process.env[name]?.trim();
+    if (v) return v;
+  }
+  return null;
 }

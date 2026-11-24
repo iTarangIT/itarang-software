@@ -99,7 +99,7 @@ export function AccountsView() {
             {env.sends_allowed ? "Sending is ON on this site" : "Sending is OFF on this site (sandbox) — set LI_ALLOW_SENDS=1 to test real sends"}
           </span>
           <span className={`rounded-full px-2 py-1 ${env.firecrawl_configured ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}>
-            Profile discovery (Firecrawl): {env.firecrawl_configured ? "ready" : "FIRECRAWL_API_KEY missing"}
+            Profile discovery (Firecrawl): {env.firecrawl_configured ? "ready" : "no Firecrawl key (SCRAPPER_API_KEY / FIRECRAWL_API_KEY)"}
           </span>
           <span className={`rounded-full px-2 py-1 ${env.llm_configured ? "bg-green-50 text-green-700" : "bg-amber-50 text-amber-800"}`}>
             Fit scoring + drafts (assistant model): {env.llm_configured ? "ready" : "not configured"}
