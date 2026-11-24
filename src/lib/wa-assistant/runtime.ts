@@ -29,6 +29,8 @@ import {
 } from "./voice/transcribe";
 import { loadVoiceVocab } from "./voice/vocab";
 import { voiceConfig } from "./voice/config";
+import { acceptVisitPhoto, acceptVisitPin } from "./visitProof";
+import { REPLY } from "./replies";
 
 const LEAD_NOT_FOUND = "I couldn't find that lead.";
 
@@ -92,7 +94,11 @@ export function defaultRouterDeps(env: WaAssistEnv): RouterDeps {
                       })
                     : payload.kind === "buttons"
                       ? await client.sendButtons(waPhone, payload.body, payload.buttons)
-                      : await client.sendText(waPhone, payload.body);
+                      : payload.kind === "location_request"
+                        ? await client.sendLocationRequest(waPhone, payload.body)
+                        : payload.kind === "flow"
+                          ? await client.sendFlow(waPhone, payload)
+                          : await client.sendText(waPhone, payload.body);
             const actionId = payload.kind === "buttons" ? (payload.actionId ?? null) : null;
             await recordOutbound({
                 waPhone,
@@ -107,7 +113,9 @@ export function defaultRouterDeps(env: WaAssistEnv): RouterDeps {
                         ? { rows: payload.rows.map((r) => r.id) }
                         : payload.kind === "buttons"
                           ? { buttons: payload.buttons.map((b) => b.id) }
-                          : null,
+                          : payload.kind === "flow"
+                            ? { flow_id: payload.flowId, flow_token: payload.token }
+                            : null,
             });
             if (actionId && res.ok) await setActionMessageId(actionId, res.wamid);
             if (!res.ok) logFn("error", "[wa-assist] send failed", { status: res.status, error: res.error });
@@ -144,6 +152,20 @@ export function defaultRouterDeps(env: WaAssistEnv): RouterDeps {
         confirmAction: async (user, actionId, messageRowId) =>
             renderTapOutcome(await executeAction(actionId, user, { messageId: messageRowId })),
         cancelAction: async (user, actionId) => renderTapOutcome(await cancelAction(actionId, user)),
+        // E-396 — a done visit's proof. Under the user's lease: an agent turn
+        // running at the same moment could supersede the card mid-step.
+        visitPin: async (user, msg) => {
+            if (!msg.location) return null;
+            const pin = msg.location;
+            const leased = await withUserLease(user.id, () => acceptVisitPin(user, pin));
+            return leased.ok ? leased.value : { kind: "text", body: REPLY.busy };
+        },
+        visitPhoto: async (user, reply) => {
+            const leased = await withUserLease(user.id, () =>
+                acceptVisitPhoto(user, reply, (id, max) => client.downloadMedia(id, max)),
+            );
+            return leased.ok ? leased.value : { payload: { kind: "text", body: REPLY.busy }, actionId: null };
+        },
         isDisabled: () => assistantConfig().disabled,
         isVoiceDisabled: () => voiceConfig().disabled,
         transcribeVoice: async (user, audio) => {

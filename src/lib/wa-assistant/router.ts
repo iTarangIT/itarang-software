@@ -20,7 +20,12 @@
 //                        ast:prod:<type>:<id> → that product chosen: noted in
 //                                      memory for the quote; writes nothing
 //                        anything else → logged and ignored.
-//   5. Voice note      → downloaded and transcribed (no lease, no agent yet),
+//      Flow submitted (nfm_reply, E-396) → a done visit's camera photo:
+//                        visitPhoto saves it and shows the card with Confirm.
+//   5. Location pin while a done visit waits for one (E-396) → visitPin:
+//                        refused when over 100 m from the shop, else the
+//                        camera Flow. No visit waiting → the media path below.
+//      Voice note      → downloaded and transcribed (no lease, no agent yet),
 //                        the rep is shown what was heard, and the transcript
 //                        continues into step 6 exactly as if it had been typed.
 //                        Nothing heard / too long / failed → a fixed reply.
@@ -93,6 +98,18 @@ export type RouterDeps = {
     proposeInvite: (user: AssistantUser, leadId: string, messageRowId: string) => Promise<WaPayload>;
     /** Edit tap (ast:e:<id>): remember the card; the next message revises it. Writes nothing. */
     editAction: (user: AssistantUser, actionId: string) => Promise<WaPayload>;
+    /**
+     * E-396: a location pin while a done visit waits for one → the next proof
+     * step (or why the pin was refused). null = no visit waiting: the pin goes
+     * the ordinary media way. Optional so a host without it skips the step.
+     */
+    visitPin?: (user: AssistantUser, msg: InboundMessage, messageRowId: string) => Promise<WaPayload | null>;
+    /** E-396: the camera Flow submitted → the visit card with Confirm, or why not. */
+    visitPhoto?: (
+        user: AssistantUser,
+        reply: NonNullable<InboundMessage["flowReply"]>,
+        messageRowId: string,
+    ) => Promise<{ payload: WaPayload; actionId: string | null }>;
     /** Cancel tap (ast:x:<id>). */
     cancelAction: (user: AssistantUser, actionId: string) => Promise<WaPayload>;
     /** ASSISTANT_DISABLED, read per message. */
@@ -246,6 +263,14 @@ export async function routeMessage(msg: InboundMessage, rowId: string, deps: Rou
         }
 
         // 4. Taps — never the model.
+        // E-396: the camera Flow's submission (a done visit's shop photo).
+        if (msg.type === "interactive" && msg.flowReply && deps.visitPhoto) {
+            const r = await deps.visitPhoto(user, msg.flowReply, rowId);
+            await deps.markHandled(rowId, "visit_photo", { userId, actionId: r.actionId });
+            await deps.sendPayload(msg.waPhone, r.payload, userId);
+            deps.log("info", "[wa-assist] visit photo", { ...meta, userId, actionId: r.actionId, reply: r.payload.kind, latencyMs: Date.now() - started });
+            return;
+        }
         if (msg.type === "interactive") {
             const tap = TAP_RE.exec(msg.replyId ?? "");
             // After the reply is out: the tap goes into memory (best effort).
@@ -325,6 +350,16 @@ export async function routeMessage(msg: InboundMessage, rowId: string, deps: Rou
         let viaMedia = false;
         /** Is the waiting change card the last thing we sent? (a spoken "haan" decides early) */
         let cardIsLatest: boolean | undefined;
+        // E-396: a pin answering a done visit's "Send location".
+        if (msg.type === "location" && msg.location && deps.visitPin) {
+            const payload = await deps.visitPin(user, msg, rowId);
+            if (payload) {
+                await deps.markHandled(rowId, "visit_pin", { userId });
+                await deps.sendPayload(msg.waPhone, payload, userId);
+                deps.log("info", "[wa-assist] visit pin", { ...meta, userId, reply: payload.kind, latencyMs: Date.now() - started });
+                return;
+            }
+        }
         if (ATTACHMENT_TYPES.has(msg.type) && !deps.isMediaDisabled()) {
             const stored = await deps.storeMedia(user, msg, rowId);
             if (stored.kind !== "stored") {

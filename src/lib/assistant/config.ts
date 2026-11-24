@@ -17,6 +17,11 @@ export type AssistantConfig = {
     visionModel: string;
     /** Pilot allow-list for write tools (users.id). Empty = nobody. */
     writeUserIds: ReadonlySet<string>;
+    /**
+     * E-396: the published WhatsApp Flow (camera-only shop photo) for a done
+     * visit's proof. WA_ASSIST_VISIT_FLOW_ID; null = the CRM capture link, as before.
+     */
+    visitFlowId: string | null;
 };
 
 /**
@@ -49,6 +54,7 @@ export function assistantConfig(env: NodeJS.ProcessEnv = process.env): Assistant
                 .map((s) => s.trim())
                 .filter(Boolean),
         ),
+        visitFlowId: /^\d{5,30}$/.test(env.WA_ASSIST_VISIT_FLOW_ID?.trim() ?? "") ? env.WA_ASSIST_VISIT_FLOW_ID!.trim() : null,
     };
 }
 
