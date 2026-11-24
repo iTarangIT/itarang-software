@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { MessageCircle, AlertCircle, RotateCcw, ShieldAlert } from "lucide-react";
 import { CallNowButton } from "@/components/leads/call-now-button";
+import { NEODOVE_ADMIN_ROLES } from "@/lib/neodove/roles";
 import { wonWithoutQuote, type LeadDetailBundle } from "@/lib/inside-sales/types";
 import { WonWithoutQuoteChip } from "@/components/leads/won-without-quote-chip";
 import { InterestLevelEditor } from "../../../_components/InterestLevelEditor";
@@ -299,12 +300,16 @@ export function LeadDetailHeader({
                         <span className="font-medium">{bundle.caller_not_linked.agent_name ?? "(no name)"}</span> called first on{" "}
                         {formatDateTime(bundle.caller_not_linked.first_call_at)} but has no CRM login.{" "}
                         <InfoTip>Link the agent to a CRM user and the lead becomes theirs from that call&apos;s date.</InfoTip>{" "}
-                        <Link
-                            href="/leads/neodove-campaigns/agents"
-                            className="font-semibold underline underline-offset-2 hover:text-amber-900"
-                        >
-                            NeoDove agents →
-                        </Link>
+                        {NEODOVE_ADMIN_ROLES.includes(viewerRole ?? "") ? (
+                            <Link
+                                href="/leads/neodove-campaigns/agents"
+                                className="font-semibold underline underline-offset-2 hover:text-amber-900"
+                            >
+                                NeoDove agents →
+                            </Link>
+                        ) : (
+                            <span>Ask your Sales Head or Admin to link it.</span>
+                        )}
                     </Banner>
                 )}
                 {wasReactivated && (
