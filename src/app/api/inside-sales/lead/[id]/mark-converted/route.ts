@@ -11,6 +11,7 @@ import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-util
 import { assertOwner } from "@/lib/leads/ownership";
 import { isOwnGstin, isValidGstin, normalizeGstin } from "@/lib/leads/gstin";
 import { ConvertLeadNotFoundError, markLeadConverted } from "@/lib/leads/markConverted";
+import { normalizePaymentReference, paymentReferenceProblem } from "@/lib/leads/wonPayment";
 
 // ID 252 (decided 12 Nov): the Sales Head works the leads HE OWNS like an ASM;
 // the owner check below still applies, so anyone else's lead stays view-only.
@@ -28,6 +29,16 @@ const BodySchema = z.object({
         .transform(normalizeGstin)
         .refine(isValidGstin, "Enter the dealer's 15-character GSTIN (e.g. 07AAACB1234C1ZH) — check the last character.")
         .refine((g) => !isOwnGstin(g), "This is iTarang's own GSTIN, not the dealer's."),
+    // 25 Nov items 6 + 7: Won means the dealer paid — the payment reference
+    // (UTR / transaction number) is required, same check as the modal.
+    payment_reference: z
+        .string()
+        .max(200)
+        .superRefine((v, ctx) => {
+            const problem = paymentReferenceProblem(v);
+            if (problem) ctx.addIssue({ code: z.ZodIssueCode.custom, message: problem });
+        })
+        .transform((v) => normalizePaymentReference(v)!),
 });
 
 export const POST = withErrorHandler(
@@ -45,6 +56,7 @@ export const POST = withErrorHandler(
                 actor: { id: user.id, name: user.name, role: user.role },
                 gstin: body.gstin,
                 notes: body.notes,
+                paymentReference: body.payment_reference,
             });
             await notify();
             return successResponse({ ok: true, onboardingApplicationId: applicationId });

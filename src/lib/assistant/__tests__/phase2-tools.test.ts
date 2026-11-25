@@ -303,9 +303,16 @@ describe("escalate_lead", () => {
 
 describe("mark_converted", () => {
     it("a valid GSTIN (normalised) → preview; creates the onboarding application", async () => {
-        const r = await run(ISR, "mark_converted", { lead_id: "DL-7", gstin: " 27aaacb1234c1zf " });
+        const r = await run(ISR, "mark_converted", { lead_id: "DL-7", gstin: " 27aaacb1234c1zf ", payment_reference: " UTR  412345678901 " });
         expect(r.kind).toBe("preview");
-        expect(stored().plan).toEqual({ lead_id: "DL-7", gstin: "27AAACB1234C1ZF", notes: null });
+        expect(stored().plan).toEqual({
+            lead_id: "DL-7",
+            gstin: "27AAACB1234C1ZF",
+            notes: null,
+            payment_reference: "UTR 412345678901",
+        });
+        // 25 Nov items 6 + 7: Won means the dealer paid — the card shows the reference.
+        expect(stored().preview.lines).toContainEqual({ label: "Payment ref", value: "UTR 412345678901" });
         // ID 74: the rep's action sets Won; Converted comes with onboarding approval.
         expect(stored().preview.lines).toContainEqual({ label: "Status", value: "Under discussion → Won" });
         expect(stored().preview.warning).toMatch(/CRM screen/);
@@ -315,6 +322,14 @@ describe("mark_converted", () => {
         expect((await run(ISR, "mark_converted", { lead_id: "DL-7", gstin: "27AAACB" })).kind).toBe("question");
         findLeadInScope.mockResolvedValue(lead({ lead_status: "Converted" }));
         expect((await run(ISR, "mark_converted", { lead_id: "DL-7", gstin: "27AAACB1234C1ZF" })).kind).toBe("declined");
+        expect(createPending).not.toHaveBeenCalled();
+    });
+
+    it("25 Nov item 7: no payment reference (or a bad one) → asks for it, records nothing", async () => {
+        const r = await run(ISR, "mark_converted", { lead_id: "DL-7", gstin: "27AAACB1234C1ZF" });
+        expect(r).toMatchObject({ kind: "question" });
+        expect((r as { question: string }).question).toMatch(/payment reference/i);
+        expect((await run(ISR, "mark_converted", { lead_id: "DL-7", gstin: "27AAACB1234C1ZF", payment_reference: "12" })).kind).toBe("question");
         expect(createPending).not.toHaveBeenCalled();
     });
 
@@ -328,10 +343,10 @@ describe("mark_converted", () => {
 
     it("ID 74: without a dealer-approved quote the card warns it will be flagged; with one it does not", async () => {
         execute.mockResolvedValueOnce([{ ok: false }] as never);
-        await run(ISR, "mark_converted", { lead_id: "DL-7", gstin: "27AAACB1234C1ZF" });
+        await run(ISR, "mark_converted", { lead_id: "DL-7", gstin: "27AAACB1234C1ZF", payment_reference: "UTR412345678901" });
         expect(stored().preview.warning).toMatch(/^No dealer-approved quote on this lead\. .*Won without an approved quote/);
         execute.mockResolvedValueOnce([{ ok: true }] as never);
-        await run(ISR, "mark_converted", { lead_id: "DL-7", gstin: "27AAACB1234C1ZF" });
+        await run(ISR, "mark_converted", { lead_id: "DL-7", gstin: "27AAACB1234C1ZF", payment_reference: "UTR412345678901" });
         expect(stored().preview.warning).toBe("Undoing a conversion can only be done on the CRM screen.");
         const { PgDialect } = await import("drizzle-orm/pg-core");
         const q = new PgDialect().sqlToQuery(execute.mock.calls.at(-1)![0] as never).sql;
@@ -343,6 +358,8 @@ describe("mark_converted", () => {
         const plan = APPLIERS.mark_converted.schema.parse({ lead_id: "DL-7", gstin: "27AAACB1234C1ZF", notes: null });
         const out = await APPLIERS.mark_converted.apply({ tx: TX, user: ASM, step: 1 }, plan);
         expect(markLeadConverted).toHaveBeenCalledWith(expect.objectContaining({ actor: { id: "asm-1", name: "Rahul", role: "asm" } }), { tx: TX });
+        // A plan stored before 25 Nov has no payment_reference: it still applies.
+        expect(markLeadConverted).toHaveBeenCalledWith(expect.objectContaining({ paymentReference: null }), { tx: TX });
         expect(out).toMatchObject({ onboarding_application_id: "app-1", afterCommit: notify });
     });
 });

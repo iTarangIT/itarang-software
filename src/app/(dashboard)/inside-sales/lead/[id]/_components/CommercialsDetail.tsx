@@ -22,6 +22,7 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 import { diffCommercials, summariseChanges } from "@/lib/inside-sales/commercialsDiff";
 import type { LeadDetailCommercials } from "@/lib/inside-sales/types";
 import { failedLines, sentLine } from "@/lib/leads/quoteSends";
+import { isPriceChangeRejection } from "@/lib/quotes/quoteRules";
 
 export function fmtDate(iso: string | null | undefined): string {
     if (!iso) return "—";
@@ -93,7 +94,10 @@ export function QuoteApprovalBlock({
                 ? "Approved automatically (at or above OEM price)"
                 : "Approved"
             : status === "rejected"
-              ? "Rejected"
+              ? // 25 Nov item 1: the system rejects a pending quote whose product price moved.
+                isPriceChangeRejection(cc.rejection_reason)
+                  ? "Rejected — product price changed (revise and resubmit)"
+                  : "Rejected"
               : "Awaiting CEO approval";
 
     return (

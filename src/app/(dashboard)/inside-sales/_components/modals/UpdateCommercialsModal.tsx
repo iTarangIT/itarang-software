@@ -481,6 +481,14 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
                                         title="List price — for reference"
                                     >
                                         {optionFor(ln)?.list_price != null ? `List ${inr(optionFor(ln)!.list_price!)}` : "No list price"}
+                                        {/* 25 Nov item 3: a reopened quote shows today's list price; say when it moved. */}
+                                        {ln.list_price != null &&
+                                            optionFor(ln)?.list_price != null &&
+                                            Number(ln.list_price) !== Number(optionFor(ln)!.list_price) && (
+                                                <span className="block text-[10px] font-medium text-amber-700">
+                                                    was {inr(Number(ln.list_price))}
+                                                </span>
+                                            )}
                                     </span>
                                     <div className="flex shrink-0 items-center gap-1">
                                         <span className="text-xs text-gray-400">₹</span>

@@ -24,6 +24,7 @@ import {
     ListPriceOverlapError,
     ListPriceUnavailableError,
 } from "@/lib/leads/listPrices";
+import { recheckAfterPriceSave } from "@/lib/quotes/priceChangeRecheck";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -107,6 +108,8 @@ export async function POST(req: NextRequest) {
             note: body.note ?? null,
             actor: { id: user.id },
         });
+        // 25 Nov item 1: pending quotes carrying this product are rechecked.
+        await recheckAfterPriceSave({ asset_type: body.asset_type, product_id: body.product_id }, effectiveFrom);
 
         return NextResponse.json({
             success: true,

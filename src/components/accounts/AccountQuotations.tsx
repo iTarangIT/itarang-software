@@ -18,6 +18,23 @@ import { FileText, Loader2, Plus, Send, Trash2, Undo2 } from "lucide-react";
 import type { AssetType, CommercialsProductLine, ProductMasterResponse } from "@/lib/inside-sales/types";
 import { buildQuotePreview } from "@/lib/inside-sales/quotePreview";
 import { InfoTip } from "@/components/ui/info-tip";
+import {
+    isPriceChangeRejection,
+    quoteEditBlock,
+    versionsToSupersede,
+    type QuoteVersionState,
+} from "@/lib/quotes/quoteRules";
+
+/** 25 Nov items 4 + 5: the rule inputs, from the panel's rows. */
+const versionStates = (qs: Quotation[]): QuoteVersionState[] =>
+    qs.map((q) => ({
+        id: q.quotation_id,
+        version_no: q.version_no,
+        approval_status: q.approval_status,
+        withdrawn_at: q.withdrawn_at,
+        dealer_decision: q.dealer_decision,
+        sent: q.sent_count > 0,
+    }));
 
 type Quotation = {
     quotation_id: string;
@@ -80,7 +97,10 @@ function StatusChip({ q }: { q: Quotation }) {
         : q.approval_status === "pending"
           ? ["Awaiting CEO approval", "bg-amber-50 text-amber-800 border-amber-200"]
           : q.approval_status === "rejected"
-            ? ["Rejected by CEO", "bg-rose-50 text-rose-700 border-rose-200"]
+            ? [
+                  isPriceChangeRejection(q.rejection_reason) ? "Rejected — price changed" : "Rejected by CEO",
+                  "bg-rose-50 text-rose-700 border-rose-200",
+              ]
             : q.dealer_decision === "approved"
               ? ["Dealer approved", "bg-emerald-600 text-white border-emerald-600"]
               : q.dealer_decision === "declined"
@@ -109,6 +129,9 @@ export function AccountQuotationsPanel({ accountId, readOnly = false }: { accoun
     });
     const refresh = () => queryClient.invalidateQueries({ queryKey: qKey(accountId) });
     const canWork = !readOnly && !!data?.can_create;
+    // 25 Nov item 5: a quote approved and sent to the dealer cannot be edited
+    // (no new version) until it is withdrawn or the dealer answers.
+    const editBlock = data ? quoteEditBlock(versionStates(data.quotations), "account") : null;
 
     const regenerate = useMutation({
         mutationFn: (id: string) =>
@@ -141,12 +164,17 @@ export function AccountQuotationsPanel({ accountId, readOnly = false }: { accoun
                     <button
                         type="button"
                         onClick={() => setCreating(true)}
-                        className="inline-flex items-center gap-1.5 rounded-lg bg-brand-navy px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90"
+                        disabled={!!editBlock}
+                        title={editBlock?.message}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-brand-navy px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
                     >
                         <Plus className="h-3.5 w-3.5" /> Create quote
                     </button>
                 )}
             </header>
+            {canWork && editBlock && (
+                <p className="mx-4 mt-3 rounded-lg bg-sky-50 px-3 py-2 text-xs text-sky-800">{editBlock.message}</p>
+            )}
 
             {isLoading && (
                 <div className="flex items-center gap-2 px-4 py-6 text-sm text-ink-muted">
@@ -189,7 +217,12 @@ export function AccountQuotationsPanel({ accountId, readOnly = false }: { accoun
                                     {q.credit_terms ?? "Cash"} · by {q.created_by_name ?? "—"} on {dmy(q.created_at)}
                                     {q.approved_by_name && q.approval_status !== "pending" ? ` · decided by ${q.approved_by_name}` : ""}
                                 </div>
-                                {q.rejection_reason && <p className="mt-1 text-[12px] text-rose-700">CEO: {q.rejection_reason}</p>}
+                                {q.rejection_reason && (
+                                    <p className="mt-1 text-[12px] text-rose-700">
+                                        {isPriceChangeRejection(q.rejection_reason) ? "" : "CEO: "}
+                                        {q.rejection_reason}
+                                    </p>
+                                )}
                                 {q.withdraw_reason && <p className="mt-1 text-[12px] text-ink-muted">Withdrawn: {q.withdraw_reason}</p>}
                                 {q.dealer_decision && (
                                     <p className="mt-1 text-[12px] text-ink-muted">
@@ -217,7 +250,7 @@ export function AccountQuotationsPanel({ accountId, readOnly = false }: { accoun
                                             <Send className="h-3.5 w-3.5" /> {q.sent_count > 0 ? "Send again" : "Send to dealer"}
                                         </button>
                                     )}
-                                    {canWork && q.approval_status === "rejected" && !q.withdrawn_at && (
+                                    {canWork && q.approval_status === "rejected" && !q.withdrawn_at && !editBlock && (
                                         <button
                                             type="button"
                                             onClick={() => {
@@ -254,6 +287,7 @@ export function AccountQuotationsPanel({ accountId, readOnly = false }: { accoun
                     accountId={accountId}
                     accountName={data.account.name}
                     initial={reviseFrom}
+                    replaces={versionsToSupersede(versionStates(data.quotations)).map((v) => v.version_no).sort((a, b) => a - b)}
                     onClose={() => {
                         setCreating(false);
                         setReviseFrom(null);
@@ -307,6 +341,7 @@ function CreateAccountQuoteDialog({
     accountId,
     accountName,
     initial,
+    replaces = [],
     onClose,
     onSaved,
 }: {
@@ -314,6 +349,8 @@ function CreateAccountQuoteDialog({
     accountName: string;
     /** ID 216: a rejected quotation to revise — its lines, terms and notes. */
     initial?: Quotation | null;
+    /** 25 Nov item 4: open versions this one will withdraw (one active quote per dealer). */
+    replaces?: number[];
     onClose: () => void;
     onSaved: () => void;
 }) {
@@ -340,7 +377,7 @@ function CreateAccountQuoteDialog({
 
     const save = useMutation({
         mutationFn: () =>
-            api<{ approval_status: string; auto_approved: boolean; quote_number: string | null }>(
+            api<{ approval_status: string; auto_approved: boolean; quote_number: string | null; replaced_versions?: number[] }>(
                 `/api/dealer-accounts/${encodeURIComponent(accountId)}/quotations`,
                 {
                     method: "POST",
@@ -355,10 +392,11 @@ function CreateAccountQuoteDialog({
                 },
             ),
         onSuccess: (r) => {
+            const replaced = r.replaced_versions?.length ? ` It replaces ${r.replaced_versions.map((v) => `v${v}`).join(", ")} (withdrawn).` : "";
             window.alert(
-                r.auto_approved
+                (r.auto_approved
                     ? `Approved automatically${r.quote_number ? ` — ${r.quote_number}` : ""}. You can send it to the dealer now.`
-                    : "Sent to the CEO for approval. The dealer sees it only after approval.",
+                    : "Sent to the CEO for approval. The dealer sees it only after approval.") + replaced,
             );
             onSaved();
         },
@@ -430,11 +468,19 @@ function CreateAccountQuoteDialog({
                             <tbody className="divide-y divide-border">
                                 {preview.lines.map(({ line: l, amount, gstRatePct, gst }) => {
                                     const listPrice = optionFor(l)?.list_price ?? null;
+                                    // 25 Nov item 3: a reopened quote shows today's list price; say when it moved.
+                                    const oldList = initial ? (initial.product_lines ?? []).find((x) => x.asset_type === l.asset_type && x.product_id === l.product_id)?.list_price : undefined;
+                                    const listMoved = oldList != null && listPrice != null && Number(oldList) !== Number(listPrice);
                                     return (
                                         <tr key={`${l.asset_type}:${l.product_id}`}>
                                             <td className="py-1.5">{l.product_name}</td>
                                             <td className="py-1.5 text-right tabular-nums">{l.quantity}</td>
-                                            <td className="py-1.5 text-right tabular-nums text-ink-muted">{listPrice != null ? inr(listPrice) : "—"}</td>
+                                            <td className="py-1.5 text-right tabular-nums text-ink-muted">
+                                                {listPrice != null ? inr(listPrice) : "—"}
+                                                {listMoved && (
+                                                    <span className="block text-[10px] font-medium text-amber-700">was {inr(Number(oldList))} on v{initial!.version_no}</span>
+                                                )}
+                                            </td>
                                             <td className="py-1.5 text-right">
                                                 <input
                                                     value={l.unit_price ?? ""}
@@ -463,6 +509,11 @@ function CreateAccountQuoteDialog({
                             </tbody>
                         </table>
                     </div>
+                )}
+                {replaces.length > 0 && (
+                    <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                        One active quote per dealer: saving withdraws {replaces.map((v) => `v${v}`).join(", ")} (not sent yet).
+                    </p>
                 )}
                 <QuoteTotals subTotal={preview.subTotal} gstTotal={preview.gstTotal} total={preview.total} hasUnsetGst={preview.hasUnsetGst} hasUnpriced={preview.hasUnpriced} />
 

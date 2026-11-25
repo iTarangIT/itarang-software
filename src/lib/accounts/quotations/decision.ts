@@ -22,6 +22,7 @@ import {
     notifyAccountQuotationRejected,
 } from "./notify";
 import { LIVE_ACCOUNT_QUOTE, latestLiveAccountQuote, loadAccountQuotationById } from "./store";
+import { stalePendingAccountQuote } from "@/lib/quotes/priceChangeRecheck";
 import type { CommercialsProductLine } from "@/lib/inside-sales/types";
 import { sendQuoteApprovedEmail, termsLabel } from "@/lib/leads/quoteApprovalEmail";
 
@@ -29,8 +30,21 @@ export async function decideAccountQuotation(input: {
     quotationId: string;
     decision: "approve" | "reject";
     reason?: string | null;
-    actor: { id: string; name: string | null };
+    /** id null = the system (25 Nov item 1, price-change rejection). */
+    actor: { id: string | null; name: string | null };
 }): Promise<{ decision: "approved" | "rejected"; restoredVersion: number | null; quoteNumber: string | null }> {
+    // 25 Nov item 1: never release a price that moved while the quote waited.
+    // Reject it as the system instead, and tell the CEO why the Approve did not happen.
+    if (input.decision === "approve") {
+        const stale = await stalePendingAccountQuote(input.quotationId);
+        if (stale) {
+            await decideAccountQuotation({ quotationId: input.quotationId, decision: "reject", reason: stale, actor: { id: null, name: null } });
+            throw new AccountQuoteError(
+                "A product price changed after this quote was raised, so it was rejected automatically and the sales team was asked to recheck and resubmit it.",
+            );
+        }
+    }
+    const system = input.actor.id == null;
     const nowIso = new Date().toISOString();
     const outcome = await db.transaction(async (tx) => {
         const locked = (await tx.execute(sql`
@@ -71,7 +85,7 @@ export async function decideAccountQuotation(input: {
 
         await tx.execute(sql`
             UPDATE account_quotations
-               SET approval_status = 'rejected', approval_mode = 'manual', approved_by = ${input.actor.id}::uuid,
+               SET approval_status = 'rejected', approval_mode = ${system ? "system" : "manual"}, approved_by = ${input.actor.id}::uuid,
                    approved_at = ${nowIso}, rejection_reason = ${input.reason ?? null},
                    is_current = false, updated_at = NOW()
              WHERE quotation_id = ${row.quotation_id}::uuid
@@ -135,7 +149,7 @@ export async function decideAccountQuotation(input: {
         versionNo: row.version_no,
         value,
         reason: input.reason ?? "",
-        rejectorName: input.actor.name,
+        rejectorName: system ? "The price check" : input.actor.name,
     });
     return { decision: "rejected", restoredVersion: outcome.restored, quoteNumber: null };
 }

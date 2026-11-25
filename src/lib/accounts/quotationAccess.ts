@@ -47,6 +47,17 @@ export function mayViewAccountQuotes(a: AccountQuoteActor): boolean {
     return a.role === "admin" || accountInQuoteScope(a);
 }
 
+/**
+ * 25 Nov item 9: may the actor open this dealer's PAGE on the web (header,
+ * history, orders, Log visit)? Everyone who may read its quotations, and any
+ * ASM — an ASM may log a visit on any onboarded dealer and needs the page to
+ * do it. Its quotations stay mayViewAccountQuotes, and the WhatsApp assistant
+ * keeps the quotation scope (ID 211).
+ */
+export function mayOpenAccountPage(a: AccountQuoteActor): boolean {
+    return mayViewAccountQuotes(a) || a.role === "asm";
+}
+
 /** Which slice of accounts My Dealers lists for this role. */
 export function myDealersScope(role: string | null | undefined): "all" | "team" | "own" {
     if (has(ACCOUNT_QUOTE_ANY_ROLES, role)) return "all";

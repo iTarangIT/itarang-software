@@ -132,16 +132,25 @@ export function checkCaptureUse(
 }
 
 /**
+ * 25 Nov item 9: roles that may log a visit on ANY onboarded dealer account —
+ * owned by someone else, or by nobody (most accounts carry no owner yet). The
+ * ASM is the field role; the visit is still proved by a same-day photo + GPS.
+ */
+export const ACCOUNT_VISIT_ANY_ROLES = ["asm"] as const;
+
+/**
  * ID 196: may this person log a visit on an existing counter (My Dealers
  * account)? Its owner, or the owner's manager (the owner is one of their
- * direct reports). Nobody else — not even an oversight role: a visit is a
- * record of being there.
+ * direct reports) — and, since 25 Nov (item 9), any ASM. Nobody else — not
+ * even an oversight role: a visit is a record of being there.
  */
 export function mayLogAccountVisit(a: {
     userId: string;
     ownerId: string | null | undefined;
     teamIds: readonly string[];
+    role?: string | null;
 }): boolean {
+    if (a.role && (ACCOUNT_VISIT_ANY_ROLES as readonly string[]).includes(a.role)) return true;
     if (!a.ownerId) return false;
     return a.ownerId === a.userId || a.teamIds.includes(a.ownerId);
 }

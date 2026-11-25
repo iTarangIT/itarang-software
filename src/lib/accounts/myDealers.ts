@@ -52,7 +52,15 @@ async function lastVisitByAccount(): Promise<Map<string, string>> {
     }
 }
 
-export async function myDealerRows(user: { id: string; role: string }): Promise<{
+export async function myDealerRows(
+    user: { id: string; role: string },
+    /**
+     * 25 Nov item 9: the My dealers SCREEN also lists, for an ASM, every other
+     * onboarded dealer (scope "other") so they can log a visit there. The
+     * WhatsApp assistant keeps the owner / team list.
+     */
+    opts?: { includeVisitable?: boolean },
+): Promise<{
     rows: MyDealerRow[];
     scope: ReturnType<typeof myDealersScope>;
 }> {
@@ -72,11 +80,17 @@ export async function myDealerRows(user: { id: string; role: string }): Promise<
             return {
                 ...r,
                 scope: whose(r.owner_id),
-                can_log_visit: mayLogAccountVisit({ userId: user.id, ownerId: r.owner_id, teamIds }),
+                can_log_visit: mayLogAccountVisit({ userId: user.id, ownerId: r.owner_id, teamIds, role: user.role }),
                 last_visit_date: last,
                 not_visited_30: notVisitedIn30(last, today, r.bucket),
             };
         })
-        .filter((r) => r.scope === "own" || (scope === "team" && r.scope === "team") || scope === "all");
+        .filter(
+            (r) =>
+                r.scope === "own" ||
+                (scope === "team" && r.scope === "team") ||
+                scope === "all" ||
+                (!!opts?.includeVisitable && r.can_log_visit),
+        );
     return { rows, scope };
 }

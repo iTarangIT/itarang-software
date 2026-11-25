@@ -3,8 +3,9 @@
  * exactly one lead. Database side; the rules are ./leadMatchRules.ts.
  *
  *   attachOnboardingToLead(appId)  on submit (portal and WhatsApp): find the
- *       lead by the ladder or create a 'Direct onboarding' one, link it, move
- *       it to Won (timeline line, bell to the owner) and record the owner and
+ *       lead by the ladder or create a 'Direct onboarding' one, link it (timeline
+ *       line, bell to the owner; since 25 Nov NOT moved to Won — Won means
+ *       the dealer paid) and record the owner and
  *       who gets the credit. A "possible" match (similar name, or more than one
  *       lead on a number) is left for Admin; nothing is created then.
  *   loadLeadMatchPanel(appId)      what Dealer Validation shows.
@@ -239,7 +240,7 @@ async function leadRow(exec: Exec, leadId: string) {
 }
 
 /**
- * Link `leadId` to the application, move it to Won with a timeline line and
+ * Link `leadId` to the application with a timeline line (no longer Won, 25 Nov) and
  * set owner / credit. Inside `tx`.
  */
 async function linkAndWin(
@@ -282,34 +283,15 @@ async function linkAndWin(
     `);
 
     const why = `${ONBOARDING_WON_NOTE} (${MATCH_METHOD_LABEL[method]}).`;
-    const from = lead.lead_status as LeadStatus | null;
-    if (from !== "Won" && from !== "Converted") {
-        await writeTouchpoint(
-            {
-                dealerLeadId: leadId,
-                touchpointType: "onboarding_linked",
-                // Always the system: this Won is not a rep's "Marked Won"
-                // (metricDefinitions notOnboardingWon reads changed_by + note).
-                performedBy: null,
-                remarks: why,
-                syncMethod: "system",
-                statusChange: {
-                    from,
-                    to: "Won",
-                    event: "onboarding_submitted",
-                    closingRole: "system",
-                    reasonNotes: why,
-                    ...(from === "Lost" ? { toLostReason: null } : {}),
-                },
-            },
-            { tx },
-        );
-    } else {
-        await writeTouchpoint(
-            { dealerLeadId: leadId, touchpointType: "onboarding_linked", performedBy: opts.actorId ?? null, remarks: why, syncMethod: "system" },
-            { tx },
-        );
-    }
+    // 25 Nov (items 6 + 7, decided by the user): a submitted onboarding no
+    // longer moves the lead to Won. Won means the deal closed and the dealer
+    // PAID (Mark Won with the payment reference); the lead keeps its stage and
+    // the timeline says the onboarding is in. Approval still sets Converted
+    // (statusRules allows that from any open stage, and from Lost).
+    await writeTouchpoint(
+        { dealerLeadId: leadId, touchpointType: "onboarding_linked", performedBy: opts.actorId ?? null, remarks: why, syncMethod: "system" },
+        { tx },
+    );
     // Credit as decided — explicitly, so a self-onboarded dealer credits nobody
     // (writeTouchpoint would otherwise credit the current owner).
     await tx.execute(sql`UPDATE dealer_leads SET closing_owner_id = ${creditUserId} WHERE id = ${leadId}`);
@@ -336,7 +318,7 @@ export async function attachOnboardingToLead(appId: string, opts: { actorId?: st
             if (!app) return { done: false as const, reason: "not_found" as const };
             const linked = app.originating_dealer_lead_id ?? app.back_ref_lead_id;
             if (linked) {
-                // Re-submit (e.g. after a rejection): the same lead, back to Won.
+                // Re-submit (e.g. after a rejection): the same lead.
                 const r = await linkAndWin(tx, app, linked, (app.lead_match_method as MatchMethod) ?? "phone", {
                     creditOverride: app.lead_match_method ? app.lead_credit_user_id : undefined,
                     actorId: opts.actorId,
@@ -382,8 +364,8 @@ export async function attachOnboardingToLead(appId: string, opts: { actorId?: st
                 title: "Dealer onboarding submitted on your lead",
                 message:
                     result.outcome === "created"
-                        ? "A dealer onboarded directly; a lead was created for you (Direct onboarding) and set to Won. Admin confirms it at Dealer Validation."
-                        : "The dealer submitted their onboarding; the lead is now Won. Admin confirms it at Dealer Validation.",
+                        ? "A dealer onboarded directly; a lead was created for you (Direct onboarding). Admin confirms it at Dealer Validation. Mark it Won once the dealer has paid."
+                        : "The dealer submitted their onboarding on your lead. Admin confirms it at Dealer Validation. Mark the lead Won once the dealer has paid.",
                 leadId: result.leadId,
                 data: { href: `/leads/${result.leadId}` },
             }).catch(() => undefined);

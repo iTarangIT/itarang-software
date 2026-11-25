@@ -108,6 +108,8 @@ export async function fetchLeadDetailBundle(leadId: string): Promise<LeadDetailB
             to_jsonb(dl) ->> 'acquisition_campaign_id' AS acquisition_campaign_id,
             -- ID 74 (E-314) Mark Won stamp and its flag, same to_jsonb guard.
             to_jsonb(dl) ->> 'won_at' AS won_at,
+            -- 25 Nov item 7 (E-397) payment reference, same to_jsonb guard.
+            to_jsonb(dl) ->> 'won_payment_reference' AS won_payment_reference,
             (to_jsonb(dl) ->> 'won_without_approved_quote')::boolean AS won_without_approved_quote,
             -- ID 124: shown by Correct GSTIN on a Won lead.
             dl.gstin,

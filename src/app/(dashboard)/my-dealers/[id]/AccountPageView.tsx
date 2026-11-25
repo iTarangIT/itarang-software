@@ -13,11 +13,24 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Camera, CheckCircle2, FileText, IndianRupee, Loader2, MapPin, Plus, ShoppingCart } from "lucide-react";
+import {
+    ArrowLeft,
+    Camera,
+    CheckCircle2,
+    ChevronDown,
+    ChevronRight,
+    FileText,
+    IndianRupee,
+    Loader2,
+    MapPin,
+    Plus,
+    ShoppingCart,
+} from "lucide-react";
 
 import { AccountQuotationsPanel } from "@/components/accounts/AccountQuotations";
 import { OrderPlacedButton } from "@/components/accounts/OrderClaims";
 import type { AccountSummary } from "@/lib/accounts/quotations/access";
+import type { AccountOrders } from "@/lib/accounts/accountOrders";
 import type { AccountBucket } from "@/lib/dealers/accountHealthRules";
 import {
     HISTORY_FILTERS,
@@ -79,7 +92,13 @@ const STEP_TONE: Record<NextStepTone, { box: string; label: string }> = {
     grey: { box: "border-slate-200 bg-slate-50", label: "text-slate-600" },
 };
 
-const FILTER_LABEL: Record<HistoryFilter, string> = { all: "All", visits: "Visits", quotes: "Quotes", invoices: "Invoices" };
+const FILTER_LABEL: Record<HistoryFilter, string> = {
+    all: "All",
+    visits: "Visits",
+    quotes: "Quotes",
+    orders: "Orders",
+    invoices: "Invoices",
+};
 
 const inr = (n: number) => `₹${Math.round(n).toLocaleString("en-IN")}`;
 
@@ -96,7 +115,7 @@ function daysBetween(fromIso: string, todayIst: string): number {
 }
 
 export function AccountPageView({ accountId }: { accountId: string }) {
-    const { data, isLoading, error } = useQuery<{ account: AccountSummary; can_create: boolean }>({
+    const { data, isLoading, error } = useQuery<{ account: AccountSummary; can_create: boolean; can_view_quotes?: boolean }>({
         queryKey: ["dealer-account", accountId],
         queryFn: async () => {
             const res = await fetch(`/api/dealer-accounts/${encodeURIComponent(accountId)}`, { cache: "no-store" });
@@ -201,9 +220,17 @@ export function AccountPageView({ accountId }: { accountId: string }) {
                     <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
                         <HistoryCard h={h} loading={hist.isLoading} failed={hist.isError} />
                         <div className="space-y-5">
-                            <div id="quotes">
-                                <AccountQuotationsPanel accountId={accountId} />
-                            </div>
+                            {data.can_view_quotes !== false ? (
+                                <div id="quotes">
+                                    <AccountQuotationsPanel accountId={accountId} />
+                                </div>
+                            ) : (
+                                // 25 Nov item 9: an ASM on a dealer outside their team — visits only.
+                                <p className="rounded-xl border border-border bg-surface px-4 py-3 text-sm text-ink-muted shadow-card">
+                                    This dealer is not assigned to you or your team. You can log visits here; quotes are for its owner.
+                                </p>
+                            )}
+                            <OrdersCard accountId={accountId} h={h} />
                             <DetailsCard account={data.account} />
                         </div>
                     </div>
@@ -405,6 +432,157 @@ function HistoryCard({ h, loading, failed }: { h: HistoryData | undefined; loadi
                     </li>
                 ))}
             </ol>
+        </section>
+    );
+}
+
+/**
+ * 25 Nov item 8 — orders and revenue for this dealer: the revenue numbers (the
+ * header's, from My dealers), recorded orders still waiting for their invoice,
+ * and every invoice with what was on it (tap to open its lines).
+ */
+function OrdersCard({ accountId, h }: { accountId: string; h: HistoryData | undefined }) {
+    const q = useQuery<AccountOrders>({
+        queryKey: ["dealer-account-orders", accountId],
+        queryFn: async () => {
+            const res = await fetch(`/api/dealer-accounts/${encodeURIComponent(accountId)}/orders`, { cache: "no-store" });
+            const json = await res.json();
+            if (!json.success) throw new Error(json.error?.message ?? "Could not load the orders");
+            return json.data;
+        },
+        retry: false,
+    });
+    const [open, setOpen] = useState<string | null>(null);
+    const [showAll, setShowAll] = useState(false);
+    const s = h?.health;
+    const invoices = q.data?.invoices ?? [];
+    const shown = showAll ? invoices : invoices.slice(0, 5);
+    return (
+        <section className="rounded-xl border border-border bg-surface px-4 py-4 shadow-card">
+            <h2 className="text-base font-semibold text-ink">Orders &amp; revenue</h2>
+            {s && (
+                <dl className="mt-2 grid grid-cols-3 gap-3 text-sm">
+                    <div>
+                        <dt className="text-xs text-ink-muted">Last 90 days</dt>
+                        <dd className="font-semibold tabular-nums text-ink">{inr(s.revenue_90d)}</dd>
+                    </div>
+                    <div>
+                        <dt className="text-xs text-ink-muted">Lifetime</dt>
+                        <dd className="font-semibold tabular-nums text-ink">{inr(s.revenue_lifetime)}</dd>
+                    </div>
+                    <div>
+                        <dt className="text-xs text-ink-muted">Invoices</dt>
+                        <dd className="font-semibold tabular-nums text-ink">{s.orders}</dd>
+                    </div>
+                </dl>
+            )}
+            {q.isLoading && (
+                <div className="mt-3 flex items-center gap-2 text-sm text-ink-muted">
+                    <Loader2 className="h-4 w-4 animate-spin" /> Loading orders…
+                </div>
+            )}
+            {q.isError && <p className="mt-3 text-sm text-rose-600">{(q.error as Error).message}</p>}
+            {q.data && (
+                <>
+                    <h3 className="mt-4 text-xs font-semibold uppercase tracking-wide text-ink-muted">Orders recorded, no invoice yet</h3>
+                    {q.data.open_orders.length === 0 ? (
+                        <p className="mt-1 text-sm text-ink-muted">None.</p>
+                    ) : (
+                        <ul className="mt-1 space-y-1.5">
+                            {q.data.open_orders.map((o) => (
+                                <li key={o.id} className="rounded-lg border border-border px-3 py-2 text-sm">
+                                    <div className="flex flex-wrap items-baseline justify-between gap-2">
+                                        <span className="font-medium text-ink">
+                                            {dayLabel(o.order_date)}
+                                            {o.po_number ? ` · PO ${o.po_number}` : ""}
+                                        </span>
+                                        <span className={`text-xs ${o.status === "unconfirmed" ? "text-rose-600" : "text-ink-muted"}`}>
+                                            {o.status === "unconfirmed" ? "No invoice in 15 days" : `Waiting for invoice · day ${o.days_since_order}`}
+                                        </span>
+                                    </div>
+                                    {(o.note || o.claimed_by_name) && (
+                                        <p className="text-xs text-ink-muted">
+                                            {[o.note, o.claimed_by_name ? `by ${o.claimed_by_name}` : null].filter(Boolean).join(" · ")}
+                                        </p>
+                                    )}
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+
+                    <h3 className="mt-4 text-xs font-semibold uppercase tracking-wide text-ink-muted">Invoices</h3>
+                    {invoices.length === 0 ? (
+                        <p className="mt-1 text-sm text-ink-muted">No invoice yet.</p>
+                    ) : (
+                        <ul className="mt-1 divide-y divide-border rounded-lg border border-border">
+                            {shown.map((inv) => {
+                                const key = `${inv.source}:${inv.invoice_id}`;
+                                const expanded = open === key;
+                                return (
+                                    <li key={key} className="text-sm">
+                                        <button
+                                            type="button"
+                                            onClick={() => setOpen(expanded ? null : key)}
+                                            aria-expanded={expanded}
+                                            className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-gray-50"
+                                        >
+                                            {expanded ? (
+                                                <ChevronDown className="h-3.5 w-3.5 shrink-0 text-ink-muted" />
+                                            ) : (
+                                                <ChevronRight className="h-3.5 w-3.5 shrink-0 text-ink-muted" />
+                                            )}
+                                            <span className="min-w-0 flex-1 truncate">
+                                                <span className="font-medium text-ink">{dayLabel(inv.invoice_date)}</span>
+                                                <span className="ml-2 font-mono text-xs text-ink-muted">{inv.invoice_number ?? "—"}</span>
+                                                {inv.is_credit && <span className="ml-2 text-xs text-orange-700">Credit note</span>}
+                                            </span>
+                                            <span className={`shrink-0 font-semibold tabular-nums ${inv.is_credit ? "text-orange-700" : "text-ink"}`}>
+                                                {inv.is_credit ? "−" : ""}
+                                                {inr(Math.abs(inv.total))}
+                                            </span>
+                                        </button>
+                                        {expanded && (
+                                            <div className="px-3 pb-3 pl-8">
+                                                {inv.lines.length === 0 ? (
+                                                    <p className="text-xs text-ink-muted">
+                                                        {q.data!.lines_available ? "No line items on this invoice." : "Line items are not available on this server."}
+                                                    </p>
+                                                ) : (
+                                                    <table className="w-full text-xs">
+                                                        <thead className="text-ink-muted">
+                                                            <tr>
+                                                                <th className="py-1 text-left font-medium">Item</th>
+                                                                <th className="py-1 text-right font-medium">Qty</th>
+                                                                <th className="py-1 text-right font-medium">Amount (ex-GST)</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            {inv.lines.map((l, i) => (
+                                                                <tr key={i} className="border-t border-border">
+                                                                    <td className="py-1 pr-2 text-ink">{l.item_name ?? "—"}</td>
+                                                                    <td className="py-1 text-right tabular-nums">{l.quantity ?? "—"}</td>
+                                                                    <td className="py-1 text-right tabular-nums">
+                                                                        {l.amount_excl_gst != null ? inr(l.amount_excl_gst) : "—"}
+                                                                    </td>
+                                                                </tr>
+                                                            ))}
+                                                        </tbody>
+                                                    </table>
+                                                )}
+                                            </div>
+                                        )}
+                                    </li>
+                                );
+                            })}
+                        </ul>
+                    )}
+                    {invoices.length > 5 && (
+                        <button type="button" onClick={() => setShowAll((v) => !v)} className="mt-2 text-xs font-semibold text-brand-sky hover:underline">
+                            {showAll ? "Show fewer" : `Show all ${invoices.length} invoices`}
+                        </button>
+                    )}
+                </>
+            )}
         </section>
     );
 }

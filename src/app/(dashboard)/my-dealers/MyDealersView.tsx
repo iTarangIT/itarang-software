@@ -43,7 +43,7 @@ type MyDealerRow = DealerHealthRow & {
     last_visit_date?: string | null;
     not_visited_30?: boolean;
 };
-type Whose = "" | "own" | "team" | "other";
+type Whose = "" | "own" | "team" | "other" | "mine_team";
 
 const DAY_MONTH = new Intl.DateTimeFormat("en-IN", { timeZone: "UTC", day: "numeric", month: "short" });
 /** "12 Aug" (a calendar date, shown as stored). */
@@ -51,11 +51,20 @@ function lastVisitLabel(d: string): string {
     const t = new Date(`${d.slice(0, 10)}T00:00:00Z`);
     return Number.isNaN(t.getTime()) ? d : DAY_MONTH.format(t);
 }
-const WHOSE_LABEL: Record<Exclude<Whose, "">, string> = { own: "Mine", team: "My team", other: "Others" };
+const WHOSE_LABEL: Record<Exclude<Whose, "">, string> = {
+    own: "Mine",
+    team: "My team",
+    other: "Others",
+    mine_team: "Mine & team",
+};
+const matchesWhose = (scope: MyDealerRow["scope"], w: Whose) =>
+    w === "" || (w === "mine_team" ? scope === "own" || scope === "team" : scope === w);
 
 export function MyDealersView() {
     const [bucket, setBucket] = useState<AccountBucket | "">("");
-    const [whose, setWhose] = useState<Whose>("");
+    // null = the scope's default: an ASM opens on their own + team dealers (25 Nov item 9
+    // added every other onboarded dealer to their list, under "Other dealers").
+    const [whoseSel, setWhose] = useState<Whose | null>(null);
     // ID 241-3: the "Not visited in 30 days" chip as a filter.
     const [notVisitedOnly, setNotVisitedOnly] = useState(false);
     const { data, isLoading, error } = useQuery<{
@@ -82,7 +91,15 @@ export function MyDealersView() {
     if (error) return <p className="text-sm text-rose-600">{(error as Error).message}</p>;
 
     const allRows = data?.rows ?? [];
-    const rows = [...(whose ? allRows.filter((r) => r.scope === whose) : allRows)].sort(
+    const hasOthers = allRows.some((r) => r.scope === "other");
+    const whose: Whose = whoseSel ?? (data?.scope === "team" && hasOthers ? "mine_team" : "");
+    const whoseOptions: Whose[] =
+        data?.scope === "team"
+            ? hasOthers
+                ? ["mine_team", "own", "team", "other", ""]
+                : ["", "own", "team"]
+            : ["", "own", "other"];
+    const rows = [...allRows.filter((r) => matchesWhose(r.scope, whose))].sort(
         (a, b) =>
             URGENCY.indexOf(a.bucket) - URGENCY.indexOf(b.bucket) ||
             (b.days_since_last_order ?? 0) - (a.days_since_last_order ?? 0),
@@ -107,14 +124,15 @@ export function MyDealersView() {
         <div className="space-y-5">
             {data?.scope && data.scope !== "own" && (
                 <div className="flex flex-wrap gap-2">
-                    {(["", "own", data.scope === "team" ? "team" : "other"] as Whose[]).map((w) => (
+                    {whoseOptions.map((w) => (
                         <button
                             key={w || "all"}
                             type="button"
                             onClick={() => setWhose(w)}
                             className={`rounded-lg border px-3 py-1 text-xs font-semibold ${whose === w ? "bg-brand-navy text-white border-brand-navy" : "border-border text-ink"}`}
                         >
-                            {w ? WHOSE_LABEL[w] : "All"} · {w ? allRows.filter((r) => r.scope === w).length : allRows.length}
+                            {w === "other" && data.scope === "team" ? "Other dealers (visits)" : w ? WHOSE_LABEL[w] : "All"} ·{" "}
+                            {allRows.filter((r) => matchesWhose(r.scope, w)).length}
                         </button>
                     ))}
                 </div>
