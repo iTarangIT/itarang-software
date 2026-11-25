@@ -71,7 +71,7 @@ export function istIso(v: unknown): string | null {
 
 /**
  * The CRM screens' own status label (LEAD_STATUS_LABEL — "Assigned",
- * "Awaiting field visit", "Won — onboarding"); an unknown code reads with its
+ * "Awaiting field visit", "Won — paid"); an unknown code reads with its
  * underscores as spaces; null → "none".
  */
 export function statusLabel(s: string | null | undefined): string {

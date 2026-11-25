@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { InfoTip } from "@/components/ui/info-tip";
 import { whatsappOnboardingChatUrl } from "@/lib/whatsapp/chat-link";
 import { checkCustomerGstin, GSTIN_CHECK_MESSAGE, normalizeGstin } from "@/lib/leads/gstin";
+import { normalizePaymentReference, paymentReferenceProblem, WON_MEANING } from "@/lib/leads/wonPayment";
 
 type Props = {
     open: boolean;
@@ -31,6 +32,9 @@ export function MarkConvertedModal({ open, onClose, leadId, onSuccess, hasApprov
     // and so their revenue — back to the lead and to whoever closed it.
     const [gstin, setGstin] = useState("");
     const [gstinTouched, setGstinTouched] = useState(false);
+    // 25 Nov items 6 + 7: Won = the dealer paid, so the payment reference is required.
+    const [paymentRef, setPaymentRef] = useState("");
+    const [paymentTouched, setPaymentTouched] = useState(false);
     const [submitting, setSubmitting] = useState(false);
     // After a successful conversion we keep the modal open on a "choose channel"
     // step so the rep can pick web wizard vs WhatsApp onboarding.
@@ -45,11 +49,14 @@ export function MarkConvertedModal({ open, onClose, leadId, onSuccess, hasApprov
     // route applies, so the rep sees why before submitting.
     const gstinCheck = checkCustomerGstin(gstin);
     const gstinOk = gstinCheck === "ok";
+    const paymentProblem = paymentReferenceProblem(paymentRef);
 
     const reset = () => {
         setNotes("");
         setGstin("");
         setGstinTouched(false);
+        setPaymentRef("");
+        setPaymentTouched(false);
         setAppId(null);
         setChannel(null);
     };
@@ -65,8 +72,9 @@ export function MarkConvertedModal({ open, onClose, leadId, onSuccess, hasApprov
     };
 
     const submit = async () => {
-        if (!gstinOk) {
+        if (!gstinOk || paymentProblem) {
             setGstinTouched(true);
+            setPaymentTouched(true);
             return;
         }
         setSubmitting(true);
@@ -74,7 +82,11 @@ export function MarkConvertedModal({ open, onClose, leadId, onSuccess, hasApprov
             const res = await fetch(`/api/inside-sales/lead/${encodeURIComponent(leadId)}/mark-converted`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ notes: notes.trim() || null, gstin: normalizeGstin(gstin) }),
+                body: JSON.stringify({
+                    notes: notes.trim() || null,
+                    gstin: normalizeGstin(gstin),
+                    payment_reference: normalizePaymentReference(paymentRef),
+                }),
             });
             const json = await res.json();
             if (!res.ok) throw new Error(json?.error?.message ?? "Failed to mark converted");
@@ -172,7 +184,7 @@ export function MarkConvertedModal({ open, onClose, leadId, onSuccess, hasApprov
                         <Button
                             type="button"
                             onClick={submit}
-                            disabled={submitting || !gstinOk}
+                            disabled={submitting || !gstinOk || !!paymentProblem}
                             className="bg-emerald-600 hover:bg-emerald-700 text-white"
                         >
                             {submitting ? "Saving…" : "Mark Won"}
@@ -239,6 +251,10 @@ export function MarkConvertedModal({ open, onClose, leadId, onSuccess, hasApprov
                             <p>Marks the lead <span className="font-semibold">Won</span> and starts dealer onboarding.{" "}
                                 <InfoTip>You become the closing owner. The lead becomes Converted when onboarding is approved.</InfoTip>
                             </p>
+                            <p className="text-xs font-medium text-emerald-800">
+                                Only when the deal is closed and the dealer has paid.{" "}
+                                <InfoTip>{WON_MEANING} A Hot lead stays open until the payment comes in.</InfoTip>
+                            </p>
                             <p className="text-xs text-gray-500">
                                 We create a draft onboarding form for this lead.{" "}
                                 <InfoTip>If we can&apos;t create it, the lead is not marked Won.</InfoTip>
@@ -279,6 +295,26 @@ export function MarkConvertedModal({ open, onClose, leadId, onSuccess, hasApprov
                                 Required. It links this dealer&apos;s invoices — and their revenue — to this lead.
                             </p>
                         )}
+                    </div>
+                    <div>
+                        <Label htmlFor="won-payment-ref">Payment reference (UTR)</Label>
+                        <input
+                            id="won-payment-ref"
+                            className={`mt-1 w-full rounded-md border px-3 py-2 text-sm font-mono tracking-wide ${
+                                paymentTouched && paymentProblem ? "border-red-400" : "border-gray-200"
+                            }`}
+                            placeholder="e.g. UTR 412345678901"
+                            maxLength={64}
+                            autoComplete="off"
+                            value={paymentRef}
+                            onChange={(e) => setPaymentRef(e.target.value)}
+                            onBlur={() => setPaymentTouched(true)}
+                        />
+                        <p className={`mt-1 text-xs ${paymentTouched && paymentProblem ? "text-red-600" : "text-gray-500"}`}>
+                            {paymentTouched && paymentProblem
+                                ? paymentProblem
+                                : "Required. The UTR / transaction or cheque number of the dealer's payment."}
+                        </p>
                     </div>
                     <div>
                         <Label>Notes (optional)</Label>

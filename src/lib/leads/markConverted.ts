@@ -10,6 +10,11 @@
 // is never left Won without an application. Re-running is safe — the
 // application is created ON CONFLICT DO NOTHING, keyed on the lead.
 //
+// 25 Nov (items 6 + 7): Won means the deal closed AND the dealer paid — not a
+// Hot lead, not a submitted onboarding (leadMatch no longer sets Won). Mark Won
+// carries the payment reference (UTR / cheque / transaction no.), kept on the
+// lead (E-397, behind hasWonPaymentColumns) and always in the timeline note.
+//
 // Won is allowed before a dealer-approved quote and FLAGGED
 // (won_without_approved_quote, E-314) — decision still open with business.
 //
@@ -32,6 +37,8 @@ import { createOnboardingApplicationForConvertedLead } from "@/lib/onboarding/fr
 import { notifyRoles, notifyUser } from "@/lib/notifications/notify";
 import { withLeadActor } from "@/lib/leads/actorContext";
 import { normalizeGstin } from "@/lib/leads/gstin";
+import { normalizePaymentReference } from "@/lib/leads/wonPayment";
+export { normalizePaymentReference, paymentReferenceProblem } from "@/lib/leads/wonPayment";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -73,7 +80,29 @@ export type MarkConvertedInput = {
     /** Already normalised + validated (isValidGstin). */
     gstin: string;
     notes?: string | null;
+    /**
+     * 25 Nov item 7: the payment reference (UTR etc.). Required by the screen
+     * and the Assistant; optional here only so an Assistant action proposed
+     * before this change still applies.
+     */
+    paymentReference?: string | null;
 };
+
+let wonPaymentProbe: Promise<boolean> | null = null;
+/** E-397 applied here? Cached per process; a failed probe is retried next call. */
+export function hasWonPaymentColumns(): Promise<boolean> {
+    wonPaymentProbe ??= (async () => {
+        const r = (await db.execute(sql`
+            SELECT EXISTS (SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'dealer_leads' AND column_name = 'won_payment_reference') AS ok
+        `)) as unknown as Array<{ ok: boolean }>;
+        return !!r[0]?.ok;
+    })().catch(() => {
+        wonPaymentProbe = null;
+        return false;
+    });
+    return wonPaymentProbe;
+}
 
 export type MarkConvertedResult = {
     applicationId: string;
@@ -144,11 +173,22 @@ export async function markLeadConverted(
         }
 
         const closingRole = deriveConvertClosingRole(actor.role, state.asm_id);
-        const remarks = input.notes?.trim() || "Lead marked Won. Dealer onboarding initiated.";
+        const paymentRef = normalizePaymentReference(input.paymentReference);
+        const remarks =
+            (input.notes?.trim() || "Lead marked Won (dealer paid). Dealer onboarding initiated.") +
+            (paymentRef ? ` Payment ref: ${paymentRef}.` : "");
 
         await tx.execute(sql`
             UPDATE dealer_leads SET gstin = ${input.gstin} WHERE id = ${leadId}
         `);
+        // E-397: the reference on the lead. A repeat Mark Won (double tap) keeps the first one.
+        if (paymentRef && (await hasWonPaymentColumns())) {
+            await tx.execute(sql`
+                UPDATE dealer_leads
+                   SET won_payment_reference = ${paymentRef}, won_payment_recorded_at = NOW()
+                 WHERE id = ${leadId} AND (won_payment_reference IS NULL OR ${!repeat})
+            `);
+        }
 
         await writeTouchpoint(
             {
@@ -159,7 +199,8 @@ export async function markLeadConverted(
                 statusChange: {
                     from: fromStatus,
                     to: "Won",
-                    reasonNotes: input.notes ?? null,
+                    reasonNotes:
+                        [input.notes?.trim(), paymentRef ? `Payment ref: ${paymentRef}` : null].filter(Boolean).join(" · ") || null,
                     closingRole,
                     event: "mark_won",
                 },

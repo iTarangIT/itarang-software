@@ -24,7 +24,7 @@ export const dynamic = "force-dynamic";
 export const GET = withErrorHandler(async (_req: Request, ctx: { params: Promise<{ id: string }> | { id: string } }) => {
     const user = await requireRole([...ACCOUNT_QUOTE_VIEW_ROLES]);
     const { id } = await ctx.params;
-    await assertAccountQuoteAccess(user, id, "view");
+    await assertAccountQuoteAccess(user, id, "page");
 
     const [health, booking, claimsOn, teamIds] = await Promise.all([
         listDealerHealth().then((rows) => rows.find((r) => r.account_id === id) ?? null),
@@ -61,7 +61,7 @@ export const GET = withErrorHandler(async (_req: Request, ctx: { params: Promise
         last_visit_at: lastVisit?.at ?? null,
         next_visit: booking,
         // Same rules as the My dealers row (IDs 210 and 5).
-        can_log_visit: mayLogAccountVisit({ userId: user.id, ownerId: health?.owner_id ?? null, teamIds }),
+        can_log_visit: mayLogAccountVisit({ userId: user.id, ownerId: health?.owner_id ?? null, teamIds, role: user.role }),
         can_record_order:
             claimsOn && !!health && health.owner_id === user.id && health.bucket !== "closed" && !health.order_claim,
         owner_is_you: !!health && health.owner_id === user.id,

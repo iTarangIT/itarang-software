@@ -63,6 +63,7 @@ export const STATUS_EVENTS = [
     "mark_won",
     "onboarding_approved",
     // ID 214: a dealer's onboarding was submitted on this lead → Won (system).
+    // Retired 25 Nov (Won means the dealer paid); kept so old history rows read.
     "onboarding_submitted",
     "mark_lost",
     "reactivation",
@@ -162,7 +163,9 @@ export function checkStatusMove(input: {
             return { ok: true };
         case "onboarding_approved":
             if (to !== "Converted") return { ok: false, reason: "Onboarding approval can only set Converted." };
-            if (!open) return { ok: false, reason: `The lead is already ${label(from)}.` };
+            // 25 Nov: a submitted onboarding no longer reopens a Lost lead to Won,
+            // so a lost dealer who came back and was approved converts from Lost.
+            if (from === "Converted") return { ok: false, reason: "The lead is already Converted." };
             return { ok: true };
         case "mark_lost":
             if (to !== "Lost") return { ok: false, reason: "Mark Lost can only set Lost." };

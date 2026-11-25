@@ -113,6 +113,7 @@ export const POST = withErrorHandler(
             auto_approved: outcome.autoApproved,
             oem_evaluation: outcome.evaluation,
             terms_hold: outcome.termsHold,
+            replaced_versions: outcome.replacedVersions,
         });
     },
 );

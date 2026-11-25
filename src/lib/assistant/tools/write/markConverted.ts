@@ -23,12 +23,16 @@ import { leadUrl } from "../leads";
 import { defineApplier } from "../../applierSpec";
 import { Remarks } from "./vocabSchemas";
 import { gstinQuestion } from "./updateLead";
+import { normalizePaymentReference, paymentReferenceProblem } from "@/lib/leads/wonPayment";
 
 export const MarkConvertedPlan = z.object({
     lead_id: z.string().min(1),
     // ID 62 — a stored plan must pass the same rule the question used (own GSTIN refused).
     gstin: z.string().refine((g) => checkCustomerGstin(g) === "ok"),
     notes: z.string().nullable(),
+    // 25 Nov item 7: optional in the STORED plan only, so an action proposed
+    // before this change still applies; the tool below always asks for it.
+    payment_reference: z.string().nullable().optional(),
 });
 export type MarkConvertedPlan = z.infer<typeof MarkConvertedPlan>;
 
@@ -55,11 +59,18 @@ export const markConverted: ToolFactory = () =>
         name: "mark_converted",
         kind: "write",
         description:
-            "Propose marking a lead the user owns as Won (it becomes Converted when the dealer's onboarding is approved). Needs the dealer's 15-character GSTIN — ask for it, never " +
+            "Propose marking a lead the user owns as Won (it becomes Converted when the dealer's onboarding is approved). Won means the deal is closed AND the dealer has paid — " +
+            "not a Hot lead. Needs the dealer's 15-character GSTIN and the payment reference (UTR / transaction number) — ask for both, never " +
             "invent one. Creates the dealer onboarding application. Nothing is saved until Confirm.",
         schema: z.object({
             lead_id: LeadId,
             gstin: z.string().trim().max(40).describe("The dealer's GSTIN exactly as the user gave it"),
+            payment_reference: z
+                .string()
+                .trim()
+                .max(200)
+                .optional()
+                .describe("The UTR / transaction number of the dealer's payment, exactly as the user gave it"),
             notes: Remarks.optional(),
         }),
         run: async (ctx, input): Promise<ToolResult> => {
@@ -77,13 +88,29 @@ export const markConverted: ToolFactory = () =>
             const gstin = normalizeGstin(input.gstin);
             const gstinAsk = gstinQuestion(gstin);
             if (gstinAsk) return ask(gstinAsk);
+            // 25 Nov items 6 + 7: Won means the dealer paid — ask for the reference.
+            const paymentRef = normalizePaymentReference(input.payment_reference);
+            const paymentProblem = paymentReferenceProblem(paymentRef);
+            if (paymentProblem) {
+                return ask(
+                    paymentRef
+                        ? `${paymentProblem} What is the payment reference?`
+                        : "Won means the dealer has paid. What is the payment reference (UTR / transaction number)?",
+                );
+            }
             // ID 74: the same test the writer flags with (won_without_approved_quote).
             const approvedQuote = await hasDealerApprovedQuote(lead.id);
 
-            const plan: MarkConvertedPlan = { lead_id: lead.id, gstin, notes: input.notes?.trim() || null };
+            const plan: MarkConvertedPlan = {
+                lead_id: lead.id,
+                gstin,
+                notes: input.notes?.trim() || null,
+                payment_reference: paymentRef,
+            };
             const lines: Preview["lines"] = [
                 { label: "Status", value: `${statusLabel(lead.lead_status)} → Won` },
                 { label: "GSTIN", value: gstin },
+                { label: "Payment ref", value: paymentRef! },
             ];
             if (plan.notes) lines.push({ label: "Notes", value: plan.notes });
             lines.push({ label: "Creates", value: "the dealer onboarding application" });
@@ -118,7 +145,7 @@ export const markConvertedApplier = defineApplier<MarkConvertedPlan>({
     schema: MarkConvertedPlan,
     apply: async ({ tx, user }, p) => {
         const { applicationId, notify } = await markLeadConverted(
-            { leadId: p.lead_id, actor: { id: user.id, name: user.name, role: user.role }, gstin: p.gstin, notes: p.notes },
+            { leadId: p.lead_id, actor: { id: user.id, name: user.name, role: user.role }, gstin: p.gstin, notes: p.notes, paymentReference: p.payment_reference ?? null },
             { tx },
         );
         return { onboarding_application_id: applicationId, afterCommit: notify };

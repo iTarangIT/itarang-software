@@ -27,7 +27,9 @@ describe("checkStatusMove", () => {
         expect(checkStatusMove({ from: "Won", to: "Converted", event: "onboarding_approved" }).ok).toBe(true);
         expect(checkStatusMove({ from: "Under_Discussion", to: "Converted", event: "progress" }).ok).toBe(false);
         expect(checkStatusMove({ from: "Under_Discussion", to: "Won", event: "progress" }).ok).toBe(false);
-        expect(checkStatusMove({ from: "Lost", to: "Converted", event: "onboarding_approved" }).ok).toBe(false);
+        // 25 Nov: submission no longer reopens a Lost lead to Won, so approval converts it from Lost.
+        expect(checkStatusMove({ from: "Lost", to: "Converted", event: "onboarding_approved" }).ok).toBe(true);
+        expect(checkStatusMove({ from: "Under_Discussion", to: "Converted", event: "onboarding_approved" }).ok).toBe(true);
         expect(checkStatusMove({ from: "Commercials_Finalised", to: "Lost", event: "mark_lost" }).ok).toBe(true);
         expect(checkStatusMove({ from: "Won", to: "Transferred_to_ASM", event: "transfer" }).ok).toBe(false);
         expect(checkStatusMove({ from: "Converted", to: "Lost", event: "mark_lost" }).ok).toBe(false);

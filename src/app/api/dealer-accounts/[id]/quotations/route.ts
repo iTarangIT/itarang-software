@@ -42,6 +42,7 @@ export const POST = withErrorHandler(async (req: Request, ctx: { params: { id: s
             approval_status: result.approvalStatus,
             auto_approved: result.autoApproved,
             terms_hold: result.termsHold,
+            replaced_versions: result.replacedVersions,
             quote_number,
         },
         201,

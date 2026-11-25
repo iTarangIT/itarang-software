@@ -275,6 +275,14 @@ export const ANALYST_RULES: ReadonlyArray<{ topics: readonly AnalystTopic[]; tex
             "Marked Won = status history to_status 'Won' with won_undone_at NULL (not changed_by 'system'), credited to closing_owner_id. " +
             "Won is the rep's mark; Converted is onboarding approved — targets, credit and incentives use Converted.",
     },
+    // 25 Nov (task list items 6 + 7): what Won MEANS.
+    {
+        topics: ["won", "leads"],
+        text:
+            "Won = the deal is closed and the dealer has PAID: Mark Won records the payment reference (UTR), " +
+            "dealer_leads.won_payment_reference (E-397). It is not a Hot lead, and since 25 Nov a submitted onboarding no longer sets Won " +
+            "(earlier system Wons carry the note 'Dealer onboarding submitted' and are already excluded from Marked Won).",
+    },
     {
         topics: ["calls", "people"],
         text:

@@ -12,6 +12,7 @@ export const dynamic = "force-dynamic";
 
 export const GET = withErrorHandler(async (_req: Request, ctx: { params: { id: string } }) => {
     const user = await requireRole([...ACCOUNT_QUOTE_VIEW_ROLES]);
-    const access = await assertAccountQuoteAccess(user, ctx.params.id, "view");
-    return successResponse({ account: access.account, can_create: access.canCreate });
+    // 25 Nov item 9: an ASM opens any dealer's page (to log a visit); its quotes stay scoped.
+    const access = await assertAccountQuoteAccess(user, ctx.params.id, "page");
+    return successResponse({ account: access.account, can_create: access.canCreate, can_view_quotes: access.canView });
 });

@@ -645,6 +645,15 @@ export async function startOemPriceSweepTicker() {
       if (r.error) {
         console.error(`[instrumentation:oem-price-sweep] sweep failed: ${r.error}`);
       }
+
+      // 25 Nov item 1: a scheduled price reaching its day changes the price
+      // without anyone saving — pending quotes it makes stale are rejected
+      // here (the CEO's Approve re-checks too, for the hours in between).
+      const { recheckPendingQuotes } = await import("@/lib/quotes/priceChangeRecheck");
+      const q = await recheckPendingQuotes();
+      if (q.rejected > 0 || q.failed > 0) {
+        console.log(`[instrumentation:oem-price-sweep] pending quotes checked=${q.checked} rejected=${q.rejected} failed=${q.failed}`);
+      }
     } catch (err) {
       // runOemPriceSweep already swallows its own failures; this catches the
       // import itself (e.g. a DB with no E-230 columns) so a broken sweep can

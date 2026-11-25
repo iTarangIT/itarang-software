@@ -9,6 +9,7 @@ import { hasAccountOwnershipTables } from "@/lib/accounts/tables";
 import {
     ACCOUNT_QUOTE_TEAM_ROLES,
     mayCreateAccountQuote,
+    mayOpenAccountPage,
     mayViewAccountQuotes,
 } from "@/lib/accounts/quotationAccess";
 
@@ -70,7 +71,13 @@ export async function loadAccountSummary(accountId: string): Promise<AccountSumm
     return rows[0] ?? null;
 }
 
-export type AccountQuoteAccess = { account: AccountSummary; canCreate: boolean; canView: boolean };
+export type AccountQuoteAccess = {
+    account: AccountSummary;
+    canCreate: boolean;
+    canView: boolean;
+    /** 25 Nov item 9: may open the dealer page (an ASM, for any onboarded dealer). */
+    canOpenPage: boolean;
+};
 
 /**
  * Who the user is to this account's quotations. The team (direct reports) is
@@ -86,21 +93,29 @@ export async function accountQuoteAccess(
         ? await getTeamMemberIds(user.id)
         : [];
     const actor = { role: user.role, userId: user.id, ownerId: account.owner_id, teamIds };
-    return { account, canCreate: mayCreateAccountQuote(actor), canView: mayViewAccountQuotes(actor) };
+    return {
+        account,
+        canCreate: mayCreateAccountQuote(actor),
+        canView: mayViewAccountQuotes(actor),
+        canOpenPage: mayOpenAccountPage(actor),
+    };
 }
 
-/** Throw 404 / 403 unless the user may act (`create`) on or read (`view`) this account's quotations. */
+/**
+ * Throw 404 / 403 unless the user may act (`create`) on or read (`view`) this
+ * account's quotations, or open its page (`page`, 25 Nov item 9).
+ */
 export async function assertAccountQuoteAccess(
     user: { id: string; role: string },
     accountId: string,
-    need: "view" | "create",
+    need: "view" | "create" | "page",
 ): Promise<AccountQuoteAccess> {
     if (!(await hasAccountQuotationTables())) {
         throw new AccountQuoteError("Account quotations are not set up on this server yet (E-358).", 503);
     }
     const access = await accountQuoteAccess(user, accountId);
     if (!access) throw new AccountQuoteError("Account not found.", 404);
-    const ok = need === "create" ? access.canCreate : access.canView;
+    const ok = need === "create" ? access.canCreate : need === "page" ? access.canOpenPage : access.canView;
     if (!ok) {
         throw new AccountQuoteError(
             need === "create"

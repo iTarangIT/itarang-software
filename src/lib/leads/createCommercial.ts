@@ -30,6 +30,13 @@ import {
     type OemEvaluation,
 } from "@/lib/leads/oemPricing";
 import type { CommercialsProductLine } from "@/lib/inside-sales/types";
+import { lockLeadForQuote } from "@/lib/leads/withdrawQuote";
+import {
+    quoteEditBlock,
+    supersededReason,
+    versionsToSupersede,
+    type QuoteVersionState,
+} from "@/lib/quotes/quoteRules";
 import {
     applyTermsHold,
     getStandardQuoteTerms,
@@ -126,6 +133,8 @@ export type CreateCommercialResult = {
     evaluation: OemEvaluation | null;
     /** E-322: set when the quote waits because of credit terms. */
     termsHold: TermsHold | null;
+    /** 25 Nov item 4: earlier versions withdrawn because this one replaced them before they were sent. */
+    replacedVersions: number[];
     /** Draft PDF, touchpoint, notifications. Run after COMMIT. Never throws past a draft failure. */
     afterCommit: () => Promise<{ quote_number: string | null }>;
 };
@@ -138,6 +147,28 @@ export async function createLeadCommercial(
     const performedAt = args.performedAt ?? new Date();
 
     const write = async (tx: Tx) => {
+        // 25 Nov items 4 + 5 — one active quotation per dealer. A new quote
+        // version is refused while an approved one is with the dealer
+        // (quoteEditBlock), and replaces every version still open but never
+        // sent (versionsToSupersede: withdrawn below, after the insert number
+        // is known). The lead is locked first — lead → quote, the order
+        // withdrawQuote and the CEO reject take — so a withdrawal or reject
+        // running at the same time waits for this.
+        let supersede: QuoteVersionState[] = [];
+        if (isGatedQuoteEvent(body.event_type)) {
+            await lockLeadForQuote(tx, id);
+            const versions = (await tx.execute(sql`
+                SELECT c.commercial_id::text AS id, c.version_no, c.approval_status,
+                       c.withdrawn_at::text AS withdrawn_at, c.dealer_decision,
+                       EXISTS (SELECT 1 FROM quotation_dispatches d
+                                WHERE d.commercial_id = c.commercial_id AND d.status = 'sent') AS sent
+                  FROM dealer_lead_commercials c
+                 WHERE c.dealer_lead_id = ${id} AND c.event_type IN ('quote_issue', 'quote_revision')
+            `)) as unknown as QuoteVersionState[];
+            const block = quoteEditBlock(versions, "lead");
+            if (block) throw new CommercialInputError(block.message);
+            supersede = versionsToSupersede(versions);
+        }
         const maxRows = await tx.execute<{ max_v: number | null }>(sql`
             SELECT MAX(version_no) AS max_v FROM dealer_lead_commercials WHERE dealer_lead_id = ${id}
         `);
@@ -303,6 +334,14 @@ export async function createLeadCommercial(
             );
         }
 
+        if (supersede.length > 0) {
+            await tx.execute(sql`
+                UPDATE dealer_lead_commercials
+                   SET withdrawn_at = NOW(), withdrawn_by = ${actor.id},
+                       withdraw_reason = ${supersededReason(nextVersion)}, updated_at = NOW()
+                 WHERE commercial_id IN (${sql.join(supersede.map((v) => sql`${v.id}::uuid`), sql`, `)})
+            `);
+        }
         await tx.execute(sql`
             UPDATE dealer_lead_commercials
             SET is_current = false, updated_at = NOW()
@@ -376,6 +415,7 @@ export async function createLeadCommercial(
             autoApproved: approvalMode === "auto",
             evaluation: oemEvaluation,
             termsHold: hold,
+            replacedVersions: supersede.map((v) => v.version_no).sort((a, b) => a - b),
         };
     };
 

@@ -73,7 +73,7 @@ export default async function VisitCapturePage({
         `)) as unknown as Array<{ id: string; name: string; owner_id: string | null }>;
         const back = `/my-dealers/${encodeURIComponent(sp.account)}`;
         if (!acct) return refuse("Dealer not found.", "/my-dealers");
-        const ok = mayLogAccountVisit({ userId: user.id, ownerId: acct.owner_id, teamIds: await getTeamMemberIds(user.id) });
+        const ok = mayLogAccountVisit({ userId: user.id, ownerId: acct.owner_id, teamIds: await getTeamMemberIds(user.id), role: user.role });
         if (!ok) return refuse("Only this dealer's owner or their manager can log a visit here.", back);
         // ID 241-2: dealer outcomes + next visit once E-386 is on this database.
         const dealerOutcomes = await hasDealerVisitOutcomes();

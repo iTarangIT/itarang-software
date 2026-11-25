@@ -64,12 +64,15 @@ export const POST = withErrorHandler(async (req: Request) => {
     }
     const body = Body.parse(await req.json());
 
+    // 25 Nov item 9: read from accounts so an unowned dealer (no ownership row) is found too.
     const [acct] = (await db.execute(sql`
-        SELECT ao.owner_user_id::text AS owner_id, ao.source_dealer_lead_id AS lead_id
-          FROM account_ownership ao WHERE ao.account_id = ${body.account_id}
-    `)) as unknown as Array<{ owner_id: string | null; lead_id: string | null }>;
-    if (!mayLogAccountVisit({ userId: user.id, ownerId: acct?.owner_id, teamIds: await getTeamMemberIds(user.id) })) {
-        return errorResponse("Only this counter's owner, or their manager, can log a visit here.", 403);
+        SELECT a.id, ao.owner_user_id::text AS owner_id, ao.source_dealer_lead_id AS lead_id
+          FROM accounts a LEFT JOIN account_ownership ao ON ao.account_id = a.id
+         WHERE a.id = ${body.account_id}
+    `)) as unknown as Array<{ id: string; owner_id: string | null; lead_id: string | null }>;
+    if (!acct) return errorResponse("Dealer account not found.", 404);
+    if (!mayLogAccountVisit({ userId: user.id, ownerId: acct?.owner_id, teamIds: await getTeamMemberIds(user.id), role: user.role })) {
+        return errorResponse("Only this counter's owner, their manager, or an ASM can log a visit here.", 403);
     }
     const leadId = acct?.lead_id ?? null;
 
