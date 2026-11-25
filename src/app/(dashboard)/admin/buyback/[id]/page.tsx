@@ -430,8 +430,11 @@ function AdminBuybackDetail() {
       : marginMode === "FLAT"
         ? Math.round(Number(marginValue) || 0)
         : Math.round((dealer * (Number(marginValue) || 0)) / 100);
-    return { line: l, dealer, margin: m, ask: dealer + m };
+    return { line: l, dealer, margin: m, ask: dealer + m, priced: l.dealer_price != null };
   });
+  // A line with no accepted dealer price must never read as ₹0 — that is how a
+  // ₹8 lakh order once showed as a ₹0 order with a ₹3,093 vendor quote. Name it.
+  const unpricedCount = marginPreview.filter((r) => !r.priced).length;
   const askTotal = marginPreview.reduce((s, r) => s + r.ask * r.line.quantity, 0);
   const dealerTotal = marginPreview.reduce((s, r) => s + r.dealer * r.line.quantity, 0);
 
@@ -901,6 +904,14 @@ function AdminBuybackDetail() {
                   </span>
                 </div>
 
+                {unpricedCount > 0 && (
+                  <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                    No accepted dealer price on {unpricedCount} of {marginPreview.length} line
+                    {marginPreview.length === 1 ? "" : "s"}, so margin cannot be locked. Reopen the
+                    dealer leg and agree a price, or ask iTarang tech to repair this request.
+                  </div>
+                )}
+
                 <div className="overflow-hidden rounded-lg border border-gray-200">
                   <div className="grid grid-cols-[1.6fr_1fr_1fr_1fr] bg-[#FAFBFC] px-3 py-2 text-[10.5px] font-bold uppercase tracking-wide text-slate-400">
                     <span>SKU</span>
@@ -909,7 +920,7 @@ function AdminBuybackDetail() {
                     <span className="text-right">Final ask</span>
                   </div>
 
-                  {marginPreview.map(({ line, dealer, margin, ask }) => (
+                  {marginPreview.map(({ line, dealer, margin, ask, priced }) => (
                     <div
                       key={line.id}
                       className="grid grid-cols-[1.6fr_1fr_1fr_1fr] items-center border-t border-slate-100 px-3 py-2 text-[12.5px] tabular-nums"
@@ -917,25 +928,30 @@ function AdminBuybackDetail() {
                       <span className="font-semibold">
                         <BatteryLineLabel line={line} />
                       </span>
-                      <span className="text-right">{inr(dealer)}</span>
+                      <span className="text-right">{priced ? inr(dealer) : "—"}</span>
                       <span className="text-right font-semibold text-green-700">
                         +{inr(margin)}
                       </span>
-                      <span className="text-right font-extrabold">{inr(ask)}</span>
+                      <span className="text-right font-extrabold">{priced ? inr(ask) : "—"}</span>
                     </div>
                   ))}
 
                   <div className="grid grid-cols-[1.6fr_1fr_1fr_1fr] border-t border-gray-200 bg-green-50 px-3 py-2 text-[12.5px] font-extrabold tabular-nums text-green-800">
                     <span>Order total</span>
-                    <span className="text-right">{inr(dealerTotal)}</span>
+                    <span className="text-right">{unpricedCount > 0 ? "—" : inr(dealerTotal)}</span>
                     <span className="text-right">+{inr(askTotal - dealerTotal)}</span>
-                    <span className="text-right">{inr(askTotal)}</span>
+                    <span className="text-right">{unpricedCount > 0 ? "—" : inr(askTotal)}</span>
                   </div>
                 </div>
 
                 {can("set_margin") && (
                   <button
-                    disabled={busy}
+                    disabled={busy || unpricedCount > 0}
+                    title={
+                      unpricedCount > 0
+                        ? "Every line needs an accepted dealer price before margin can be locked."
+                        : undefined
+                    }
                     onClick={() =>
                       void post(`/api/admin/buyback/requests/${id}/margin`, {
                         margin_mode: marginMode,
@@ -975,7 +991,7 @@ function AdminBuybackDetail() {
                     <span className="text-[10.5px] text-[#7C93A8]">Q-{d.request_no}</span>
                   </div>
                   <div className="p-3.5 text-[12.5px]">
-                    {quotePreview.map(({ line, ask }) => {
+                    {quotePreview.map(({ line, ask, priced }) => {
                       const f = formatBatteryLine(line);
                       return (
                         <div
@@ -989,13 +1005,15 @@ function AdminBuybackDetail() {
                               {line.photo_count} photos
                             </span>
                           </span>
-                          <b className="tabular-nums text-green-600">{inr(ask)}/u</b>
+                          <b className="tabular-nums text-green-600">{priced ? `${inr(ask)}/u` : "—"}</b>
                         </div>
                       );
                     })}
                     <div className="flex items-center justify-between pt-2.5 text-sm">
                       <span className="font-bold">Total ask</span>
-                      <b className="tabular-nums text-green-600">{inr(quoteTotal)}</b>
+                      <b className="tabular-nums text-green-600">
+                        {unpricedCount > 0 ? "—" : inr(quoteTotal)}
+                      </b>
                     </div>
                     <div className="mt-2.5 rounded-md bg-slate-50 px-2.5 py-[7px] text-[11px] text-slate-400">
                       ⚠ Per-SKU ask prices, condition &amp; photos only. No dealer name or
