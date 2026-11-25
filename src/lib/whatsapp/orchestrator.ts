@@ -73,7 +73,11 @@ import {
   resolveDealerForSalesperson,
   resolveSalesperson,
 } from "./salesperson-identity";
-import { classifyDocument } from "./extraction";
+import {
+  classifyDocument,
+  readDocument,
+  type ClassificationResult,
+} from "./extraction";
 import { answerGeneralQuestion } from "./general-info";
 import { classifyIntent } from "./intent";
 import {
@@ -1496,6 +1500,26 @@ function normalizeOnboardingDocType(documentType: string): string {
   return documentType;
 }
 
+// Safety net for the classifier calling an Aadhaar letter (address block on
+// top, card stub below) an "address_proof" — which no onboarding company type
+// requires, so the owner's real Aadhaar was rejected over and over. Re-read the
+// file as an owner Aadhaar; only if it carries a 12-digit Aadhaar number do we
+// re-route it, so a genuine utility bill / voter ID is still rejected.
+async function rescueAadhaarFromAddressProof(
+  c: ClassificationResult,
+  buffer: Buffer,
+  mimeType: string,
+): Promise<void> {
+  if (c.documentType !== "address_proof") return;
+  const r = await readDocument(buffer, mimeType, "owner_aadhaar");
+  const digits = String(r.fields?.aadhaar_number ?? "").replace(/\D/g, "");
+  if (!r.ok || digits.length !== 12) return;
+  c.documentType = "owner_aadhaar";
+  c.fields = { ...r.fields, aadhaar_number: digits };
+  c.confidence = r.confidence;
+  c.legible = r.legible;
+}
+
 // Classify an uploaded file and route it:
 //   • unreadable / unidentifiable → don't store; ask to resend (auto-skip the
 //     expected document after repeated bad tries so the dealer is never stuck);
@@ -1515,6 +1539,7 @@ async function ingestClassifiedFile(
   const c = await classifyDocument(media.buffer, media.mimeType);
   // Dealer's personal PAN == company PAN for onboarding (see helper above).
   c.documentType = normalizeOnboardingDocType(c.documentType);
+  await rescueAadhaarFromAddressProof(c, media.buffer, media.mimeType);
 
   // Couldn't read / identify → don't store; ask to resend.
   if (!c.ok || !c.legible || c.documentType === "unknown") {
@@ -1699,6 +1724,7 @@ async function onZipUpload(
 
     // Dealer's personal PAN == company PAN for onboarding (see helper above).
     c.documentType = normalizeOnboardingDocType(c.documentType);
+    await rescueAadhaarFromAddressProof(c, entry.buffer, entry.mime);
 
     const spec = docSpec(ct, c.documentType);
 
