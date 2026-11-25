@@ -73,7 +73,8 @@ export const LEAD_STATUS_LABEL: Record<LeadStatus, string> = {
   Awaiting_Customer_Decision: "Awaiting decision",
   // ID 77: shown as "Awaiting field visit" — only a visit (or "Visit not needed") ends it.
   Transferred_to_ASM: "Awaiting field visit",
-  Won: "Won — onboarding",
+  // 25 Nov (items 6 + 7): Won means the dealer PAID (Mark Won records the UTR), not a Hot lead or a submitted onboarding.
+  Won: "Won — paid",
   Converted: "Converted",
   Lost: "Lost",
 };

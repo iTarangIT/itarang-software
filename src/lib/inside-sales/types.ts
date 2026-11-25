@@ -147,6 +147,8 @@ export type LeadDetailLead = QueueRow & {
     acquisition_campaign_name?: string | null;
     /** ID 74 (E-314): when the rep marked the lead Won. */
     won_at?: string | null;
+    /** 25 Nov item 7 (E-397): the payment reference (UTR) recorded on Mark Won. */
+    won_payment_reference?: string | null;
     /** ID 246 (header, display only): the lead's one open booking (ID 247 rule). */
     has_open_booking?: boolean | null;
     next_booking_date?: string | null;

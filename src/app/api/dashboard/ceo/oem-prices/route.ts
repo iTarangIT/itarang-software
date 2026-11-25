@@ -29,6 +29,7 @@ import {
     OemPriceOverlapError,
     OEM_ASSET_TYPES,
 } from "@/lib/leads/oemPrices";
+import { recheckAfterPriceSave } from "@/lib/quotes/priceChangeRecheck";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -149,6 +150,10 @@ export async function POST(req: NextRequest) {
             note: body.note ?? null,
             created_by: user.id,
         });
+
+        // 25 Nov item 1: a price that starts now makes pending quotes carrying
+        // this product stale — they are rejected and the rep asked to resubmit.
+        await recheckAfterPriceSave({ asset_type: body.asset_type, product_id: body.product_id }, effectiveFrom);
 
         return NextResponse.json({
             success: true,

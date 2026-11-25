@@ -34,6 +34,7 @@ import {
     type TermsHold,
 } from "@/lib/leads/quoteTerms";
 import { AccountQuoteError, type AccountSummary } from "./access";
+import { quoteEditBlock, supersededReason, versionsToSupersede, type QuoteVersionState } from "@/lib/quotes/quoteRules";
 import { tryGenerateAccountQuotationDraft } from "./draft";
 import { notifyAccountQuotationApproved, notifyAccountQuotationPendingApproval } from "./notify";
 import { sendQuoteApprovalRequestEmail, termsLabel } from "@/lib/leads/quoteApprovalEmail";
@@ -62,6 +63,8 @@ export type CreateAccountQuoteResult = {
     approvalStatus: "approved" | "pending";
     autoApproved: boolean;
     termsHold: TermsHold | null;
+    /** 25 Nov item 4: earlier versions withdrawn as replaced by this one. */
+    replacedVersions: number[];
     afterCommit: () => Promise<{ quote_number: string | null }>;
 };
 
@@ -88,6 +91,28 @@ export async function createAccountQuotation(args: {
             SELECT MAX(version_no) AS max_v FROM account_quotations WHERE account_id = ${account.id}
         `)) as unknown as Array<{ max_v: number | null }>;
         const versionNo = Number(maxRows[0]?.max_v ?? 0) + 1;
+
+        // 25 Nov items 4 + 5 — one active quotation per dealer: refused while
+        // an approved version is with the dealer unanswered; every version
+        // still open but never sent is withdrawn as replaced by this one.
+        const versions = (await tx.execute(sql`
+            SELECT q.quotation_id::text AS id, q.version_no, q.approval_status,
+                   q.withdrawn_at::text AS withdrawn_at, q.dealer_decision,
+                   EXISTS (SELECT 1 FROM account_quotation_dispatches d
+                            WHERE d.quotation_id = q.quotation_id AND d.status = 'sent') AS sent
+              FROM account_quotations q WHERE q.account_id = ${account.id}
+        `)) as unknown as QuoteVersionState[];
+        const block = quoteEditBlock(versions, "account");
+        if (block) throw new AccountQuoteError(block.message);
+        const supersede = versionsToSupersede(versions);
+        if (supersede.length > 0) {
+            await tx.execute(sql`
+                UPDATE account_quotations
+                   SET withdrawn_at = NOW(), withdrawn_by = ${actor.id}::uuid,
+                       withdraw_reason = ${supersededReason(versionNo)}, is_current = false, updated_at = NOW()
+                 WHERE quotation_id IN (${sql.join(supersede.map((v) => sql`${v.id}::uuid`), sql`, `)})
+            `);
+        }
 
         const standard = await getStandardQuoteTerms(tx);
         const terms = resolveQuoteTerms(body.terms, standard);
@@ -132,7 +157,8 @@ export async function createAccountQuotation(args: {
             .returning({ id: accountQuotations.quotation_id });
         const quotationId = inserted[0]?.id;
         if (!quotationId) throw new AccountQuoteError("Could not save the quotation.", 500);
-        return { quotationId, versionNo, decision, evaluation, hold, terms };
+        const replacedVersions = supersede.map((v) => v.version_no).sort((a, b) => a - b);
+        return { quotationId, versionNo, decision, evaluation, hold, terms, replacedVersions };
     });
 
     const afterCommit = async (): Promise<{ quote_number: string | null }> => {
@@ -192,6 +218,7 @@ export async function createAccountQuotation(args: {
         approvalStatus: outcome.decision.status,
         autoApproved: outcome.decision.mode === "auto",
         termsHold: outcome.hold,
+        replacedVersions: outcome.replacedVersions,
         afterCommit,
     };
 }

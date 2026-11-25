@@ -90,5 +90,9 @@ describe("ID 241-1: one history", () => {
     it("filters", () => {
         expect(items.filter((i) => historyMatches(i, "visits")).map((i) => i.kind)).toEqual(["booked", "visit"]);
         expect(items.filter((i) => historyMatches(i, "invoices")).map((i) => i.kind)).toEqual(["invoice"]);
+        // 25 Nov item 8: recorded orders have their own filter.
+        const order: HistoryItem = { kind: "order", at: "2026-10-05", title: "Order recorded", detail: null };
+        expect(historyMatches(order, "orders")).toBe(true);
+        expect(historyMatches(order, "invoices")).toBe(false);
     });
 });

@@ -54,15 +54,21 @@ export const POST = withErrorHandler(async (req: Request) => {
     if (leadId) {
         await assertOwner(leadId, user.id);
     } else {
+        // 25 Nov item 9: an ASM may visit any onboarded dealer, owned or not —
+        // so the account itself must exist (an unowned one has no ownership row).
         const rows = (await db.execute(sql`
-            SELECT owner_user_id::text AS owner_id FROM account_ownership WHERE account_id = ${accountId}
-        `)) as unknown as Array<{ owner_id: string | null }>;
+            SELECT a.id, ao.owner_user_id::text AS owner_id
+              FROM accounts a LEFT JOIN account_ownership ao ON ao.account_id = a.id
+             WHERE a.id = ${accountId}
+        `)) as unknown as Array<{ id: string; owner_id: string | null }>;
+        if (!rows[0]) return errorResponse("Dealer account not found.", 404);
         const ok = mayLogAccountVisit({
             userId: user.id,
             ownerId: rows[0]?.owner_id ?? null,
             teamIds: await getTeamMemberIds(user.id),
+            role: user.role,
         });
-        if (!ok) return errorResponse("Only this counter's owner, or their manager, can log a visit here.", 403);
+        if (!ok) return errorResponse("Only this counter's owner, their manager, or an ASM can log a visit here.", 403);
     }
 
     try {

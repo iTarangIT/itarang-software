@@ -151,6 +151,15 @@ export function LeadDetailHeader({
                             <NeodoveTag syncStatus={lead.neodove_sync_status} />
                             <IvrTag isIvr={lead.is_ivr} />
                             {wonWithoutQuote(lead) && <WonWithoutQuoteChip />}
+                            {/* 25 Nov item 7: Won means paid — show the payment reference recorded on Mark Won. */}
+                            {(lead.lead_status === "Won" || lead.lead_status === "Converted") && lead.won_payment_reference && (
+                                <span
+                                    className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-800"
+                                    title="Payment reference recorded on Mark Won"
+                                >
+                                    Paid · {lead.won_payment_reference}
+                                </span>
+                            )}
                             {/* ID 158: Admin, Sales Head, CEO — not partner. */}
                             {lead.lead_status === "Lost" && canReactivateLead(viewerRole) && (
                                 <ReactivateLeadButton leadId={lead.id} onDone={onUpdated} compact />

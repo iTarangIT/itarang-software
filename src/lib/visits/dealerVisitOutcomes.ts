@@ -221,12 +221,14 @@ export function sortHistory(items: HistoryItem[]): HistoryItem[] {
         .map((x) => x.it);
 }
 
-export const HISTORY_FILTERS = ["all", "visits", "quotes", "invoices"] as const;
+// 25 Nov item 8: recorded orders get their own filter (they used to sit under Invoices).
+export const HISTORY_FILTERS = ["all", "visits", "quotes", "orders", "invoices"] as const;
 export type HistoryFilter = (typeof HISTORY_FILTERS)[number];
 
 export function historyMatches(item: HistoryItem, f: HistoryFilter): boolean {
     if (f === "all") return true;
     if (f === "visits") return item.kind === "visit" || item.kind === "booked";
     if (f === "quotes") return item.kind === "quote";
-    return item.kind === "invoice" || item.kind === "order";
+    if (f === "orders") return item.kind === "order";
+    return item.kind === "invoice";
 }

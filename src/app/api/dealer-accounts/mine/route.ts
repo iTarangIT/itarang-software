@@ -18,6 +18,7 @@ export const dynamic = "force-dynamic";
 
 export const GET = withErrorHandler(async () => {
     const user = await requireRole(MY_DEALERS_ROLES);
-    const { rows, scope } = await myDealerRows(user);
+    // 25 Nov item 9: an ASM also sees every other onboarded dealer, to log visits.
+    const { rows, scope } = await myDealerRows(user, { includeVisitable: true });
     return successResponse({ rows, scope, can_record_orders: await hasOrderClaimTables() });
 });
