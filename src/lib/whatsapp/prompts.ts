@@ -172,7 +172,7 @@ const DOC_FIELDS: Record<string, DocFieldSpec> = {
   },
   address_proof: {
     description:
-      "an Indian address proof document (Aadhaar, utility bill, voter ID, passport, or any document showing a residential address)",
+      "an Indian NON-Aadhaar address proof document (utility bill, voter ID, passport, rent agreement, or any other document showing a residential address). NEVER use this for an Aadhaar card or UIDAI Aadhaar letter",
     fields: {
       name: "the person's name, if shown",
       address_line1: "house/street part of the residential address",
@@ -248,6 +248,7 @@ export function buildClassifyPrompt(): string {
     "- If a field is not present or not readable, return null for it.",
     '- If the file is not a recognisable business document, set document_type="unknown", fields={}.',
     "- Remove spaces from GSTIN / PAN / IFSC / account numbers.",
+    '- Anything issued by UIDAI / showing "Aadhaar" and a 12-digit Aadhaar number is an AADHAAR type, never "address_proof" — this includes the full Aadhaar letter / e-Aadhaar printout that has an address block at the top and the cut-out card (photo, DOB) below. Use "aadhaar_front" when the photo/name/DOB side is visible (even alongside the address), "aadhaar_back" only when just the address side is shown.',
   ].join("\n");
 }
 
