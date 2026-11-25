@@ -696,3 +696,53 @@ describe("routeMessage — round 2 (Phase A)", () => {
         expect([...n.ai].length).toBe(300);
     });
 });
+
+describe("routeMessage — E-396 visit proof", () => {
+    const PIN = { lat: 18.52, lng: 73.85, name: null, address: null };
+    const FLOW = { token: "visit:11111111-1111-4111-8111-111111111111", photos: [{ id: "9001", mimeType: "image/jpeg", sha256: null }] };
+
+    it("a pin while a visit waits → visitPin's step, no media store, no agent", async () => {
+        const f = fakeDeps();
+        f.deps.visitPin = vi.fn(async () => ({ kind: "text" as const, body: "Step 2 of 2 — tap Take shop photo" }));
+        await routeMessage(msg({ type: "location", text: null, location: PIN }), "r1", f.deps);
+        expect(f.deps.visitPin).toHaveBeenCalledTimes(1);
+        expect(f.deps.storeMedia).not.toHaveBeenCalled();
+        expect(f.deps.runTextTurn).not.toHaveBeenCalled();
+        expect(f.handled.at(-1)?.handling).toBe("visit_pin");
+        expect(f.replies.at(-1)?.text).toContain("Step 2 of 2");
+    });
+
+    it("a pin with no visit waiting goes the ordinary media way", async () => {
+        const f = fakeDeps();
+        f.deps.visitPin = vi.fn(async () => null);
+        await routeMessage(msg({ type: "location", text: null, location: PIN }), "r2", f.deps);
+        expect(f.deps.storeMedia).toHaveBeenCalledTimes(1);
+        expect(f.deps.runTextTurn).toHaveBeenCalledTimes(1);
+        expect(f.handled.at(-1)?.handling).toBe("media_agent");
+    });
+
+    it("a submitted camera Flow → visitPhoto's card, before any tap handling, no agent", async () => {
+        const f = fakeDeps();
+        f.deps.visitPhoto = vi.fn(async () => ({
+            payload: { kind: "buttons" as const, body: "Log visit — ABC", buttons: [{ id: "ast:c:x", title: "Confirm" }] },
+            actionId: "11111111-1111-4111-8111-111111111111",
+        }));
+        await routeMessage(msg({ type: "interactive", text: null, replyId: null, flowReply: FLOW }), "r3", f.deps);
+        expect(f.deps.visitPhoto).toHaveBeenCalledWith(RAHUL.kind === "ok" ? RAHUL.user : null, FLOW, "r3");
+        expect(f.deps.runTextTurn).not.toHaveBeenCalled();
+        expect(f.deps.confirmAction).not.toHaveBeenCalled();
+        expect(f.handled.at(-1)).toMatchObject({ handling: "visit_photo", extra: { actionId: "11111111-1111-4111-8111-111111111111" } });
+        expect(f.replies.at(-1)?.kind).toBe("buttons");
+    });
+
+    it("an unlinked sender's pin or Flow never reaches the proof steps", async () => {
+        const f = fakeDeps({ kind: "unlinked" });
+        f.deps.visitPin = vi.fn(async () => null);
+        f.deps.visitPhoto = vi.fn(async () => ({ payload: { kind: "text" as const, body: "x" }, actionId: null }));
+        await routeMessage(msg({ type: "location", text: null, location: PIN }), "r4", f.deps);
+        await routeMessage(msg({ type: "interactive", text: null, flowReply: FLOW }), "r5", f.deps);
+        expect(f.deps.visitPin).not.toHaveBeenCalled();
+        expect(f.deps.visitPhoto).not.toHaveBeenCalled();
+        expect(f.replies.every((r) => r.text === REPLY.unlinked)).toBe(true);
+    });
+});
