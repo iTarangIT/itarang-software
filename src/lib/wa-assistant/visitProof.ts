@@ -63,7 +63,7 @@ export function provedLines(lines: Preview["lines"], distanceM: number | null): 
     ];
 }
 
-async function loadProofRow(where: { userId: string; actionId?: string; stages: string[] }): Promise<ProofRow | null> {
+export async function loadProofRow(where: { userId: string; actionId?: string; stages: string[] }): Promise<ProofRow | null> {
     const rows = await db.execute<{ id: string; lead_id: string; input: unknown; preview: unknown }>(sql`
         SELECT id::text AS id, lead_id, input, preview
           FROM assistant_actions
