@@ -26,9 +26,11 @@ import { and, eq, ne, sql } from "drizzle-orm";
 
 import { finalOfferLines, finalOffers } from "@/lib/db/schema";
 
-import { ValidationError } from "./errors";
+import { TransitionError, ValidationError } from "./errors";
+import { buildAskPrices } from "./floor";
 import { linesForRequest } from "./queries";
-import type { DealAction } from "./state-machine";
+import { transition } from "./state-machine";
+import type { DealAction, DealState } from "./state-machine";
 import { applyTransition } from "./transition";
 import type { BuybackTx } from "./tx";
 
@@ -160,4 +162,97 @@ export async function acceptStandingCounter({
   });
 
   return { status: result.to, final_offer_id: offer.id, total };
+}
+
+/**
+ * The review-bar Accept (SUBMITTED / UNDER_REVIEW → DEALER_ACCEPTED): iTarang
+ * agrees to the dealer's OWN asking price on every line, with no haggle.
+ *
+ * Before this existed the `accept` action only flipped the status. No ACCEPTED
+ * final offer was written, so linesForRequest returned dealer_price = NULL, the
+ * Margin & Routing tab showed the whole order at ₹0, and set_margin refused to
+ * lock. Every OTHER road into DEALER_ACCEPTED (final offer → dealer_accept, and
+ * acceptStandingCounter above) snapshots an ACCEPTED final offer; this makes
+ * the review-bar accept do the same, so all three leave the deal in one shape.
+ *
+ * A line with no usable asking price is refused before anything is written —
+ * the admin must Negotiate (which prices every line) instead.
+ */
+export async function acceptDealerAsk({
+  tx,
+  dealId,
+  requestId,
+  requestNo,
+  offerVersion,
+  currentStatus,
+  actor,
+}: {
+  tx: BuybackTx;
+  dealId: string;
+  requestId: string;
+  requestNo: string;
+  offerVersion: number;
+  currentStatus: DealState;
+  actor: { id: string; role: "admin" };
+}): Promise<{ from: DealState; to: DealState; final_offer_id: string; total: number }> {
+  // State gate first, so a wrong-state click gets the state machine's reason,
+  // not a price complaint. applyTransition re-checks it under the status guard.
+  const gate = transition(currentStatus, "accept", "admin");
+  if (!gate.ok) throw new TransitionError(gate.reason);
+
+  const allLines = await linesForRequest(requestId, tx);
+  const ask = buildAskPrices(allLines);
+  if (!ask.ok) {
+    throw new ValidationError(
+      ask.reason === "empty"
+        ? "This request has no battery lines to accept."
+        : ask.reason === "missing"
+          ? `${ask.variant_type} has no asking price from the dealer. Use Negotiate to price every line before accepting.`
+          : `The dealer's asking price for ${ask.variant_type} is not usable (${ask.raw}). Use Negotiate to price every line before accepting.`,
+    );
+  }
+
+  await tx
+    .delete(finalOffers)
+    .where(
+      and(
+        eq(finalOffers.deal_id, dealId),
+        eq(finalOffers.version_no, offerVersion),
+        ne(finalOffers.status, "ACCEPTED"),
+      ),
+    );
+
+  const [offer] = await tx
+    .insert(finalOffers)
+    .values({
+      deal_id: dealId,
+      version_no: offerVersion,
+      status: "ACCEPTED",
+      note: "Accepted the dealer's asking price at review.",
+      sent_by: actor.id,
+      responded_at: new Date(),
+    })
+    .returning({ id: finalOffers.id });
+
+  await tx.insert(finalOfferLines).values(
+    ask.prices.map((p) => ({
+      final_offer_id: offer.id,
+      line_id: p.line_id,
+      price_per_unit: String(p.price_per_unit),
+    })),
+  );
+
+  const result = await applyTransition({
+    tx,
+    dealId,
+    requestId,
+    currentStatus,
+    offerVersion,
+    action: "accept",
+    actor,
+    after: { final_offer_id: offer.id, total: ask.total, lines: ask.prices },
+    notificationPayload: { request_no: requestNo, total: ask.total },
+  });
+
+  return { from: result.from, to: result.to, final_offer_id: offer.id, total: ask.total };
 }

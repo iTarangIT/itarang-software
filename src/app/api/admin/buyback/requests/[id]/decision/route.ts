@@ -28,6 +28,7 @@ import {
   negotiationRounds,
 } from "@/lib/db/schema";
 import { loadAnyRequest, requireBuybackAdmin } from "@/lib/buyback/auth";
+import { acceptDealerAsk } from "@/lib/buyback/dealer-accept";
 import { NotFoundError, ValidationError } from "@/lib/buyback/errors";
 import { linesForRequest, nextRoundNo } from "@/lib/buyback/queries";
 import { applyTransition, loadDealForUpdate } from "@/lib/buyback/transition";
@@ -69,17 +70,31 @@ export const POST = withErrorHandler(
       if (!deal) throw new NotFoundError("Deal not found.");
 
       switch (body.action) {
-        case "start_review":
-        case "accept": {
+        case "start_review": {
           return applyTransition({
             tx,
             dealId: deal.id,
             requestId: request.id,
             currentStatus: deal.status,
             offerVersion: deal.offer_version,
-            action: body.action,
+            action: "start_review",
             actor: { id: actor.id, role: "admin" },
             notificationPayload: { request_no: request.request_no },
+          });
+        }
+
+        case "accept": {
+          // Accept = agree to the dealer's asking price on every line. It MUST
+          // record that price (an ACCEPTED final offer) — a bare status flip left
+          // dealer_price NULL and the Margin tab showed the order at ₹0.
+          return acceptDealerAsk({
+            tx,
+            dealId: deal.id,
+            requestId: request.id,
+            requestNo: request.request_no,
+            offerVersion: deal.offer_version,
+            currentStatus: deal.status,
+            actor: { id: actor.id, role: "admin" },
           });
         }
 

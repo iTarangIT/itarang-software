@@ -82,6 +82,42 @@ export function resolveDealerPrice(
   return { ok: true, price: n };
 }
 
+export interface AskPriceLine {
+  id: string;
+  variant_type: string;
+  quantity: number;
+  expected_price_per_unit: number | string | null;
+}
+
+export type AskPrices =
+  | { ok: true; prices: Array<{ line_id: string; price_per_unit: number }>; total: number }
+  | { ok: false; reason: "empty" | "missing" | "unusable"; variant_type: string | null; raw: string };
+
+/**
+ * The review-bar `accept` agrees to the dealer's OWN asking price on every line.
+ * This turns those asks into the per-line accepted prices that get snapshotted
+ * as an ACCEPTED final offer — the same record linesForRequest reads dealer_price
+ * from. Before it existed, `accept` wrote no price at all, dealer_price came back
+ * NULL, and the Margin tab showed a whole order at ₹0.
+ *
+ * Each ask goes through resolveDealerPrice, so a missing or zero ask is refused
+ * rather than accepted as ₹0. Pure, so it is tested without a database.
+ */
+export function buildAskPrices(lines: AskPriceLine[]): AskPrices {
+  if (lines.length === 0) {
+    return { ok: false, reason: "empty", variant_type: null, raw: "" };
+  }
+  const prices: Array<{ line_id: string; price_per_unit: number }> = [];
+  let total = 0;
+  for (const l of lines) {
+    const r = resolveDealerPrice(l.expected_price_per_unit);
+    if (!r.ok) return { ok: false, reason: r.reason, variant_type: l.variant_type, raw: r.raw };
+    prices.push({ line_id: l.id, price_per_unit: r.price });
+    total += l.quantity * r.price;
+  }
+  return { ok: true, prices, total };
+}
+
 export function checkFloor(lines: FloorCheckLine[], floorTotal: number | string | null): FloorCheck {
   const total = totalOf(lines);
   const floor = Number(floorTotal ?? 0);
