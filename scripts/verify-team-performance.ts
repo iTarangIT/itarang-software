@@ -9,7 +9,8 @@
 import { buildTeamPerformance } from "@/lib/dashboard/teamPerformance";
 import { buildSalesDashboard } from "@/lib/admin/salesDashboard";
 import { peopleSheet, teamPerformanceSheets } from "@/lib/dashboard/teamPerformanceReport";
-import { sumCounts, monthRange, previousMonth } from "@/lib/dashboard/teamPerformanceRules";
+import { sumCounts, monthRange, previousMonth, TEAM_COUNT_DRILL, TARGET_METRIC_DRILL } from "@/lib/dashboard/teamPerformanceRules";
+import { DRILL_KINDS, salesDrillRows, type DrillKind } from "@/lib/dashboard/salesDrill";
 import { db } from "@/lib/db";
 import { sql } from "drizzle-orm";
 
@@ -64,6 +65,45 @@ async function run(from: string, to: string) {
     check(bad.length === 0, "target state agrees with targets in force");
     for (const p of tp.people.filter((x) => x.target_status.state !== "accepted")) {
         console.log(`    ${String(p.name).padEnd(22)} ${p.target_status.label.padEnd(18)} ${p.target_status.detail}`);
+    }
+
+    // 6. every clickable number opens exactly that many rows (team-wide and per person)
+    const ids = tp.people.map((p) => p.user_id);
+    const kinds = Object.entries(TEAM_COUNT_DRILL).filter(([k]) => k !== "revenue") as Array<[keyof typeof TEAM_COUNT_DRILL, string]>;
+    check([...Object.values(TEAM_COUNT_DRILL), ...Object.values(TARGET_METRIC_DRILL)].every((k) => (DRILL_KINDS as readonly string[]).includes(k)), "every drill kind exists");
+    let badDrill = 0;
+    for (const [key, kind] of kinds) {
+        const rows = await salesDrillRows(kind as DrillKind, { from, to }, { persons: ids.length ? ids : ["__nobody__"], limit: 20000 });
+        if (rows.length !== tp.team[key]) {
+            badDrill++;
+            console.log(`    team ${key}: number ${tp.team[key]} vs rows ${rows.length}`);
+        }
+        for (const p of tp.people.filter((x) => Number(x[key]) > 0)) {
+            const pr = await salesDrillRows(kind as DrillKind, { from, to }, { persons: [p.user_id], limit: 20000 });
+            if (pr.length !== Number(p[key])) {
+                badDrill++;
+                console.log(`    ${p.name} ${key}: number ${p[key]} vs rows ${pr.length}`);
+            }
+        }
+    }
+    check(badDrill === 0, `every team / person number = rows it opens (${kinds.map(([k]) => k).join(", ")})`);
+    // 7. target rows: count metrics open as many rows as the actual
+    let badTarget = 0;
+    for (const r of tp.team_targets.filter((x) => x.kind === "count" && x.actual != null && TARGET_METRIC_DRILL[x.metric] && tp.target_window)) {
+        const rows = await salesDrillRows(TARGET_METRIC_DRILL[r.metric] as DrillKind, tp.target_window!, { persons: r.user_ids, limit: 20000 });
+        // Batteries are a quantity over lines, not a row count — skipped here.
+        if (r.metric !== "batteries_sold" && rows.length !== r.actual) {
+            badTarget++;
+            console.log(`    target ${r.metric}: actual ${r.actual} vs rows ${rows.length}`);
+        }
+    }
+    check(badTarget === 0, "target-row actuals (count metrics) = rows they open");
+
+    // 8. a manager's team = the manager + direct reports, and its totals are theirs
+    for (const m of tp.managers) {
+        const mt = await buildTeamPerformance({ from, to, team: "all", manager_id: m.id });
+        const ok = mt.people.every((p) => p.user_id === m.id || tp.people.find((x) => x.user_id === p.user_id)?.manager === m.name);
+        check(ok && mt.people.length <= m.members + 1, `${m.name}'s team: ${mt.people.map((p) => p.name).join(", ")} (visits ${mt.team.visits}, quotes ${mt.team.quotes_issued})`);
     }
 
     const sheets = teamPerformanceSheets(tp);

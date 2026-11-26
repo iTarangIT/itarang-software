@@ -1,5 +1,6 @@
 // GET /api/admin/reports/team-performance
-//   ?from=YYYY-MM-DD&to=YYYY-MM-DD&state=&city=&business_type=&team=all|field|inside[&format=xlsx|csv]
+//   ?from=YYYY-MM-DD&to=YYYY-MM-DD&state=&city=&business_type=&team=all|field|inside
+//   [&manager_id=<user>  a manager's team: them + direct reports][&format=xlsx|csv]
 //
 // Sales Head › Team performance (26 Nov task): the whole team's visits,
 // Hot/Warm/Cold, quotes, dealers onboarded, conversion and progress against
@@ -31,6 +32,7 @@ const Params = z.object({
     city: z.string().max(80).optional(),
     business_type: z.string().max(40).optional(),
     team: z.enum(["all", "field", "inside"]).default("all"),
+    manager_id: z.string().uuid().optional(),
     format: z.enum(["json", "xlsx", "csv"]).default("json"),
 });
 
@@ -55,6 +57,7 @@ export const GET = withErrorHandler(async (req: NextRequest) => {
             city: p.city ?? null,
             business_type: p.business_type ?? null,
             team: p.team,
+            manager_id: p.manager_id ?? null,
         });
     } catch (e) {
         if (e instanceof RangeError) return errorResponse(e.message, 400);

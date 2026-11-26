@@ -28,6 +28,7 @@ import { buildSalesDashboard } from "@/lib/admin/salesDashboard";
 import type { SalesSpocBlock } from "@/lib/admin/salesDashboardTypes";
 import { leadScopeSql } from "@/lib/leads/leadScopeSql";
 import { listTargets, workingDayContext } from "@/lib/targets/service";
+import { getTeamMemberIds } from "@/lib/users/team";
 import {
     conversionPct,
     inSegment,
@@ -50,6 +51,8 @@ export interface TeamPerformanceInput {
     city?: string | null;
     business_type?: string | null;
     team: TeamSegment;
+    /** A manager's team: that person plus their direct reports (current reporting line). */
+    manager_id?: string | null;
 }
 
 export interface TeamPersonTarget {
@@ -77,10 +80,27 @@ export interface TeamPerson extends PerfCounts {
 }
 
 export interface TeamPerformance {
-    filters: { from: string; to: string; state: string | null; city: string | null; business_type: string | null; team: TeamSegment };
+    filters: {
+        from: string;
+        to: string;
+        state: string | null;
+        city: string | null;
+        business_type: string | null;
+        team: TeamSegment;
+        manager_id: string | null;
+        manager_name: string | null;
+    };
     as_of: string;
     /** YYYY-MM the targets are read for (the range's end date). */
     target_month: string;
+    /**
+     * The days the target actuals cover (1st of the target month to today, or
+     * to month end for a past month) — what a target row's drill lists. Target
+     * actuals ignore the state / city / type filters, as on Admin › Targets.
+     */
+    target_window: { from: string; to: string } | null;
+    /** Everyone with direct reports on the sales team — the Manager filter's choices. */
+    managers: Array<{ id: string; name: string | null; members: number }>;
     working_days: { total: number; elapsed: number };
     team: PerfCounts & { conversion_pct: number | null; people: number };
     team_targets: TeamTargetRow[];
@@ -155,13 +175,20 @@ async function onboardedAndLost(f: { from: string; to: string; state?: string | 
     return out;
 }
 
-async function salesTeam(): Promise<Array<{ id: string; name: string | null; role: string; manager: string | null }>> {
+type TeamMember = { id: string; name: string | null; role: string; manager: string | null; manager_id: string | null; manager_role: string | null };
+
+async function salesTeam(): Promise<TeamMember[]> {
     return (await db.execute(sql`
-        SELECT u.id::text AS id, u.name, LOWER(u.role) AS role, m.name AS manager
+        SELECT u.id::text AS id, u.name, LOWER(u.role) AS role, m.name AS manager, m.id::text AS manager_id, LOWER(m.role) AS manager_role
           FROM users u
           LEFT JOIN users m ON m.id::text = to_jsonb(u) ->> 'reports_to'
          WHERE u.is_active = TRUE AND LOWER(u.role) IN (${sql.join(SALES_ROLES.map((r) => sql`${r}`), sql`, `)})
-    `)) as unknown as Array<{ id: string; name: string | null; role: string; manager: string | null }>;
+    `)) as unknown as TeamMember[];
+}
+
+async function userName(id: string): Promise<string | null> {
+    const r = (await db.execute(sql`SELECT name FROM users WHERE id::text = ${id}`)) as unknown as Array<{ name: string | null }>;
+    return r[0]?.name ?? null;
 }
 
 export async function buildTeamPerformance(input: TeamPerformanceInput): Promise<TeamPerformance> {
@@ -175,12 +202,16 @@ export async function buildTeamPerformance(input: TeamPerformanceInput): Promise
     });
     const { from, to } = dash.filters;
     const month = to.slice(0, 7);
-    const [extras, team, targetRows, ctx] = await Promise.all([
+    const managerId = input.manager_id || null;
+    const [extras, team, targetRows, ctx, reports] = await Promise.all([
         onboardedAndLost({ from, to, state: input.state, city: input.city, business_type: input.business_type }),
         salesTeam(),
         listTargets({ month, viewer: "manager" }),
         workingDayContext(month),
+        managerId ? getTeamMemberIds(managerId) : Promise.resolve([] as string[]),
     ]);
+    // The manager's team: the manager and their direct reports.
+    const managerTeam = managerId ? new Set([managerId, ...reports]) : null;
 
     const blocks = new Map((dash.per_spoc ?? []).map((b) => [b.spoc_id, b]));
     const teamById = new Map(team.map((t) => [t.id, t]));
@@ -192,8 +223,13 @@ export async function buildTeamPerformance(input: TeamPerformanceInput): Promise
         const b = blocks.get(id);
         const t = teamById.get(id);
         const role = (t?.role ?? b?.role ?? targetRows.find((r) => r.user_id === id)?.user_role ?? null)?.toLowerCase() ?? null;
-        // Only the sales team: an admin / CEO / partner row with activity stays on the scorecard, not here.
-        if (segmentOf(role) === "other") continue;
+        if (managerTeam) {
+            // A manager's team: exactly its people (the manager may be a Sales Head).
+            if (!managerTeam.has(id)) continue;
+        } else if (segmentOf(role) === "other") {
+            // Only the sales team: an admin / CEO / partner row with activity stays on the scorecard, not here.
+            continue;
+        }
         if (!inSegment(role, input.team)) continue;
         if (b?.is_active === false && !t) continue;
         const c = countsOf(b);
@@ -228,6 +264,16 @@ export async function buildTeamPerformance(input: TeamPerformanceInput): Promise
     }
     people.sort((a, b) => a.segment.localeCompare(b.segment) || (a.name ?? "").localeCompare(b.name ?? ""));
 
+    // Managers: everyone a sales person reports to, with how many report to them.
+    const byManager = new Map<string, { id: string; name: string | null; members: number }>();
+    for (const t of team) {
+        if (!t.manager_id) continue;
+        const m = byManager.get(t.manager_id) ?? { id: t.manager_id, name: t.manager, members: 0 };
+        m.members += 1;
+        byManager.set(t.manager_id, m);
+    }
+    const managers = [...byManager.values()].sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""));
+
     const total = sumCounts(people);
     const states = { none: 0, with_sales_head: 0, awaiting_acceptance: 0, correction_asked: 0, accepted: 0, partly_accepted: 0 };
     for (const p of people) states[p.target_status.state] += 1;
@@ -240,9 +286,13 @@ export async function buildTeamPerformance(input: TeamPerformanceInput): Promise
             city: input.city ?? null,
             business_type: input.business_type ?? null,
             team: input.team,
+            manager_id: managerId,
+            manager_name: managerId ? (managers.find((m) => m.id === managerId)?.name ?? (await userName(managerId))) : null,
         },
         as_of: dash.as_of_date,
         target_month: month,
+        target_window: ctx.actuals_up_to ? { from: ctx.month, to: ctx.actuals_up_to } : null,
+        managers,
         working_days: { total: ctx.working_days_total, elapsed: ctx.working_days_elapsed },
         team: { ...total, conversion_pct: conversionPct(total.converted, total.lost), people: people.length },
         team_targets: rollupTeamTargets(targetRows as unknown as TargetLike[], new Set(people.map((p) => p.user_id))),

@@ -30,7 +30,8 @@ import { sql, type SQL } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { leadScopeSql } from "@/lib/leads/leadScopeSql";
-import { engagedCall, humanCall, isFirstQuote } from "@/lib/reports/metricDefinitions";
+import { engagedCall, firstMoveToField, humanCall, isFirstQuote, transferCredit, wasHotAt } from "@/lib/reports/metricDefinitions";
+import { matchedLinesUnion, matchedUnion, REVENUE_NOT_VOID } from "@/lib/dashboard/revenueSource";
 import { freshRepeatJoins, isFreshSql, isNewToItarangSql, isRepeatSql, visitedRowSql } from "@/lib/visits/freshRepeat";
 import { asmTransferRecipientFromVisitSql } from "@/lib/leads/closingOwner";
 import { accountOwnerOn, dealerLeadByGstin, GSTIN_KEY } from "@/lib/leads/gstinMatch";
@@ -87,6 +88,16 @@ export const DRILL_KINDS = [
     "fv_moved",
     "fv_waiting",
     "fv_past_limit",
+    // 26 Nov — Team performance card (teamPerformance.ts) and its target rows.
+    "hot",
+    "warm",
+    "cold",
+    "lost",
+    "onboarded",
+    "hot_to_ground",
+    "scrap_deals",
+    "revenue",
+    "batteries",
 ] as const;
 export type DrillKind = (typeof DRILL_KINDS)[number];
 
@@ -131,6 +142,15 @@ export const DRILL_TITLES: Record<DrillKind, string> = {
     fv_moved: "Moved on without a visit (retired: now part of closed without a visit)",
     fv_waiting: "Still waiting at the end",
     fv_past_limit: "Still waiting at the end, past the limit",
+    hot: "Hot leads (open, today)",
+    warm: "Warm leads (open, today)",
+    cold: "Cold leads (open, today)",
+    lost: "Lost",
+    onboarded: "Dealers onboarded",
+    hot_to_ground: "Hot leads shared with ground",
+    scrap_deals: "Scrap deals",
+    revenue: "Invoices (revenue)",
+    batteries: "Battery lines sold",
 };
 
 /** The fv_* kinds and the measure each one lists. */
@@ -376,6 +396,39 @@ async function leadEvents(kind: DrillKind, f: DrillFilters, persons: string[] | 
                           AND dl.lost_reason IN (${list(SALES_LOST_REASONS)})
                           AND dl.closed_at IS NOT NULL AND ${onIstDays(sql`dl.closed_at`, f)}
                           AND COALESCE(h.from_status, 'Unknown') = ${key ?? ""} ${scope}`;
+        case "hot":
+        case "warm":
+        case "cold":
+            // salesDashboard.ts queryInterest (OPEN_RATED_LEAD): open rated leads now, by current owner.
+            return sql`SELECT dl.id AS lead_id, dl.current_owner_id::text AS person,
+                              COALESCE(dl.interest_changed_at, dl.created_at) AS at,
+                              concat('Rated ', ${kind}::text, ' since ', to_char(COALESCE(dl.interest_changed_at, dl.created_at) AT TIME ZONE ${IST}, 'DD Mon YYYY')) AS detail
+                         FROM dealer_leads dl
+                        WHERE lower(dl.interest_level) = ${kind}
+                          AND dl.is_active IS NOT FALSE
+                          AND dl.lead_status IS DISTINCT FROM 'Converted'
+                          AND dl.lead_status IS DISTINCT FROM 'Lost'
+                          ${scope} ${who(sql`dl.current_owner_id`, f, persons)}`;
+        case "lost": {
+            // teamPerformance.ts lost: closed Lost in the period, credited to the closing owner.
+            const lostBy = sql`COALESCE(dl.closing_owner_id, dl.current_owner_id)`;
+            return sql`SELECT dl.id AS lead_id, (${lostBy})::text AS person, dl.closed_at AS at,
+                              concat_ws(' · ', replace(dl.lost_reason, '_', ' '), left(dl.lost_reason_notes, 140)) AS detail
+                         FROM dealer_leads dl
+                        WHERE dl.lead_status = 'Lost' AND dl.closed_at IS NOT NULL AND dl.deleted_at IS NULL
+                          AND ${onIstDays(sql`dl.closed_at`, f)} ${scope} ${who(lostBy, f, persons)}`;
+        }
+        case "hot_to_ground":
+            // targets/service.ts measuresFor "hot": Hot at the moment of the first move to the field.
+            return sql`SELECT DISTINCT ON (${transferCredit()}, t.dealer_lead_id)
+                              t.dealer_lead_id AS lead_id, (${transferCredit()})::text AS person, t.performed_at AS at,
+                              concat('Shared with ground · ', left(t.remarks, 140)) AS detail
+                         FROM lead_touchpoints t JOIN dealer_leads dl ON dl.id = t.dealer_lead_id
+                        WHERE ${firstMoveToField()}
+                          AND ${wasHotAt(sql`t.dealer_lead_id`, sql`t.performed_at`, sql`dl.interest_level`)}
+                          AND ${onIstDays(sql`t.performed_at`, f)} AND ${transferCredit()} IS NOT NULL
+                          ${scope} ${who(transferCredit(), f, persons)}
+                        ORDER BY ${transferCredit()}, t.dealer_lead_id, t.performed_at`;
         default: {
             const measure = FV_DRILL_MEASURE[kind];
             if (!measure) return null;
@@ -414,6 +467,9 @@ export async function salesDrillRows(
     const key = opts.key ?? null;
 
     if (kind === "kyc_submitted") return kycRows(f, persons, limit);
+    if (kind === "onboarded") return onboardedRows(f, persons, limit);
+    if (kind === "scrap_deals") return scrapRows(f, persons, limit);
+    if (kind === "revenue" || kind === "batteries") return invoiceRows(kind, f, persons, limit);
     if (ECOFY_DRILL_KINDS.includes(kind)) return ecofyRows(kind, key, limit);
 
     const ev = await leadEvents(kind, f, persons, key);
@@ -485,4 +541,86 @@ async function ecofyRows(kind: DrillKind, key: string | null, limit: number): Pr
          LIMIT ${limit}
     `)) as unknown as Array<Omit<DrillRow, "href">>;
     return rows.map((r) => ({ ...r, href: `/sales-head/ecofy/leads/${encodeURIComponent(r.id)}` }));
+}
+
+/**
+ * teamPerformance.ts onb: onboarding approved in the period, credited to the
+ * salesperson on the application, else the originating lead's closing / current
+ * owner, else the sponsoring ASM, else the onboarding owner.
+ */
+async function onboardedRows(f: DrillFilters, persons: string[] | null, limit: number): Promise<DrillRow[]> {
+    const credit = sql`COALESCE(NULLIF(to_jsonb(app) ->> 'salesperson_user_id', ''), dl.closing_owner_id, dl.current_owner_id,
+                                NULLIF(app.sponsoring_asm_id, ''), NULLIF(app.owner_id, ''))`;
+    const geo = (col: SQL, v: string | null | undefined) => (v ? sql` AND lower(trim(${col})) = lower(trim(${v}))` : sql``);
+    const rows = (await db.execute(sql`
+        SELECT x.*, pu.name AS person_name FROM (
+            SELECT app.id::text AS id, app.company_name AS name, app.owner_phone AS phone, app.city, app.state,
+                   'Onboarding approved' AS status, dl.interest_level AS rating,
+                   (${credit})::text AS person_id, app.owner_name AS owner_name,
+                   app.approved_at::text AS at,
+                   concat_ws(' · ', 'GSTIN ' || app.gst_number, CASE WHEN dl.id IS NOT NULL THEN 'from lead ' || COALESCE(NULLIF(dl.shop_name, ''), dl.dealer_name) END) AS detail
+              FROM dealer_onboarding_applications app
+              LEFT JOIN dealer_leads dl ON dl.id = app.originating_dealer_lead_id
+             WHERE app.approved_at IS NOT NULL
+               AND ((app.approved_at AT TIME ZONE 'UTC') AT TIME ZONE ${IST})::date BETWEEN ${f.from}::date AND ${f.to}::date
+               ${geo(sql`app.state`, f.state)} ${geo(sql`app.city`, f.city)}
+               ${f.business_type ? leadScopeSql({ business_type: f.business_type }) : sql``}
+               ${who(credit, f, persons)}
+        ) x
+        LEFT JOIN users pu ON pu.id::text = x.person_id
+        ORDER BY pu.name NULLS LAST, x.at DESC
+        LIMIT ${limit}
+    `)) as unknown as Array<Omit<DrillRow, "href">>;
+    return rows.map((r) => ({ ...r, href: `/admin/dealer-verification/${encodeURIComponent(r.id)}` }));
+}
+
+/** targets/service.ts measuresFor "scrap": buyback requests the dealer accepted in the period, by owner. */
+async function scrapRows(f: DrillFilters, persons: string[] | null, limit: number): Promise<DrillRow[]> {
+    const rows = (await db.execute(sql`
+        SELECT br.id::text AS id, br.request_no AS name, NULL::text AS phone, NULL::text AS city, NULL::text AS state,
+               'Dealer accepted' AS status, NULL::text AS rating, br.owner_id AS person_id, pu.name AS person_name,
+               br.dealer_entity_id AS owner_name, MIN(al.created_at)::text AS at, NULL::text AS detail
+          FROM buyback_activity_log al
+          JOIN buyback_requests br ON br.id = al.request_id
+          LEFT JOIN users pu ON pu.id::text = br.owner_id
+         WHERE al.action = 'dealer_accept' AND br.owner_id IS NOT NULL
+           AND ${onIstDays(sql`al.created_at`, f)} ${who(sql`br.owner_id`, f, persons)}
+         GROUP BY br.id, br.request_no, br.owner_id, pu.name, br.dealer_entity_id
+         ORDER BY pu.name NULLS LAST, MIN(al.created_at) DESC
+         LIMIT ${limit}
+    `)) as unknown as Array<Omit<DrillRow, "href">>;
+    return rows.map((r) => ({ ...r, href: `/admin/buyback/${encodeURIComponent(r.id)}` }));
+}
+
+/**
+ * salesDashboard.ts queryOutcome revenue / batteries: non-void invoices in the
+ * period matched to a dealer (account or lead GSTIN), credited to the owner on
+ * the invoice date. Revenue = one row per invoice; batteries = one row per
+ * battery line (quantity in the detail).
+ */
+async function invoiceRows(kind: "revenue" | "batteries", f: DrillFilters, persons: string[] | null, limit: number): Promise<DrillRow[]> {
+    const src = kind === "revenue" ? await matchedUnion() : await matchedLinesUnion();
+    if (!src) return [];
+    const inr = (v: SQL) => sql`'₹' || to_char(${v}, 'FM99,99,99,99,990')`;
+    const rows = (await db.execute(sql`
+        SELECT r.id::text || ${kind === "batteries" ? sql`':' || COALESCE(r.item_name, '')` : sql`''`} AS id,
+               COALESCE(r.dealer_name, r.customer_name, r.invoice_number) AS name, NULL::text AS phone,
+               dl.city, dl.state, r.status, NULL::text AS rating,
+               r.dealer_owner_id::text AS person_id, pu.name AS person_name, r.customer_name AS owner_name,
+               r.invoice_date::text AS at,
+               ${kind === "revenue"
+                   ? sql`concat_ws(' · ', 'Invoice ' || r.invoice_number, ${inr(sql`r.total`)}, r.source)`
+                   : sql`concat_ws(' · ', 'Invoice ' || r.invoice_number, r.item_name, 'qty ' || r.quantity)`} AS detail
+          FROM ${src} AS r
+          LEFT JOIN dealer_leads dl ON dl.id = r.dealer_lead_id
+          LEFT JOIN users pu ON pu.id::text = r.dealer_owner_id::text
+         WHERE ${REVENUE_NOT_VOID}
+           AND (r.account_id IS NOT NULL OR r.dealer_lead_id IS NOT NULL)
+           ${kind === "batteries" ? sql`AND r.product_class = 'battery'` : sql``}
+           AND r.invoice_date >= ${f.from}::date AND r.invoice_date <= ${f.to}::date
+           ${leadScopeSql(f)} ${who(sql`r.dealer_owner_id`, f, persons)}
+         ORDER BY pu.name NULLS LAST, r.invoice_date DESC
+         LIMIT ${limit}
+    `)) as unknown as Array<Omit<DrillRow, "href">>;
+    return rows.map((r) => ({ ...r, href: null }));
 }
