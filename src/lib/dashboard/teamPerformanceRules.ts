@@ -208,6 +208,8 @@ export interface TeamTargetRow {
     kind: "count" | "money" | "per_day";
     /** People whose target for this metric is in force. */
     people: number;
+    /** Their ids — the rows behind the actual are theirs only. */
+    user_ids: string[];
     /** Σ monthly targets in force. For a per-day metric, Σ of each person's daily rate. */
     monthly_target: number;
     /** Σ month-to-date (pro-rata) targets. */
@@ -231,10 +233,11 @@ export function rollupTeamTargets(rows: TargetLike[], userIds: ReadonlySet<strin
         if (r.status !== "pushed" && r.status !== "accepted") continue;
         const t =
             by.get(r.metric) ??
-            ({ metric: r.metric, label: r.metric_label, kind: r.kind, people: 0, monthly_target: 0, mtd_target: 0, actual: 0, pct: null, measured: 0 } as TeamTargetRow & {
+            ({ metric: r.metric, label: r.metric_label, kind: r.kind, people: 0, user_ids: [], monthly_target: 0, mtd_target: 0, actual: 0, pct: null, measured: 0 } as TeamTargetRow & {
                 measured: number;
             });
         t.people += 1;
+        t.user_ids.push(r.user_id);
         t.monthly_target += Number(r.progress.monthly_target ?? r.final_target ?? 0);
         t.mtd_target += Number(r.progress.mtd_target ?? 0);
         if (r.progress.actual != null) {
@@ -301,3 +304,40 @@ export function recentMonths(today: string, n: number): string[] {
     }
     return out;
 }
+
+// ── Click a number → its rows (salesDrill.ts) ───────────────────────────────
+
+/**
+ * The drill kind behind each target metric's actual (targets/service.ts
+ * measuresFor). calls_per_day lists the calls behind the daily average; a
+ * metric with nothing to list (KYC disbursed, a custom metric) has none.
+ */
+export const TARGET_METRIC_DRILL: Record<string, string> = {
+    dealer_visits: "dealers_visited",
+    new_dealer_visits: "new_dealers",
+    batteries_sold: "batteries",
+    kyc_submitted: "kyc_submitted",
+    revenue: "revenue",
+    scrap_deals: "scrap_deals",
+    calls_per_day: "calls",
+    hot_to_ground: "hot_to_ground",
+};
+
+/** The Team card's numbers and the drill kind each opens. */
+export const TEAM_COUNT_DRILL = {
+    visits: "visits",
+    unique_visits: "dealers_visited",
+    new_visits: "new_dealers",
+    calls: "calls",
+    hot: "hot",
+    warm: "warm",
+    cold: "cold",
+    new_hot: "new_hot",
+    quotes_issued: "quotes_issued",
+    quote_revisions: "quote_revisions",
+    dealers_onboarded: "onboarded",
+    converted: "converted",
+    lost: "lost",
+    kyc_submitted: "kyc_submitted",
+    revenue: "revenue",
+} as const satisfies Partial<Record<keyof PerfCounts, string>>;

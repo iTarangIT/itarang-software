@@ -132,6 +132,7 @@ export function teamPerformanceSheets(d: TeamPerformance): ReportSheet[] {
         rows: [
             ["Period", `${f.from} to ${f.to}`],
             ["Team", TEAM_LABEL[f.team]],
+            ["Manager's team", f.manager_id ? `${f.manager_name ?? f.manager_id} and direct reports` : "All managers"],
             ["State", f.state ?? "All"],
             ["City", f.city ?? "All"],
             ["Type of business", f.business_type ?? "All"],
@@ -190,5 +191,6 @@ export function teamPerformanceSheets(d: TeamPerformance): ReportSheet[] {
 }
 
 export function reportFilename(d: TeamPerformance): string {
-    return `team-performance-${d.filters.team}-${d.filters.from}_${d.filters.to}`;
+    const mgr = d.filters.manager_name ? `-${d.filters.manager_name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-team` : "";
+    return `team-performance-${d.filters.team}${mgr}-${d.filters.from}_${d.filters.to}`;
 }

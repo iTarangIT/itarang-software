@@ -11,6 +11,8 @@ import {
     rollupTeamTargets,
     segmentOf,
     sumCounts,
+    TARGET_METRIC_DRILL,
+    TEAM_COUNT_DRILL,
     ZERO_COUNTS,
     type TargetLike,
 } from "../teamPerformanceRules";
@@ -171,9 +173,20 @@ describe("team report sheets", () => {
         ],
     };
     const data: TeamPerformance = {
-        filters: { from: "2026-11-01", to: "2026-11-26", state: null, city: null, business_type: null, team: "all" },
+        filters: {
+            from: "2026-11-01",
+            to: "2026-11-26",
+            state: null,
+            city: null,
+            business_type: null,
+            team: "all",
+            manager_id: "m1",
+            manager_name: "Ravi",
+        },
         as_of: "2026-11-26",
         target_month: "2026-11",
+        target_window: { from: "2026-11-01", to: "2026-11-26" },
+        managers: [{ id: "m1", name: "Ravi", members: 1 }],
         working_days: { total: 25, elapsed: 22 },
         team: { ...sumCounts([person]), conversion_pct: 50, people: 1 },
         team_targets: rollupTeamTargets([row({ user_id: "a" })], new Set(["a"])),
@@ -188,9 +201,23 @@ describe("team report sheets", () => {
         expect(s.rows[0][s.headers.indexOf("Dealers onboarded")]).toBe(1);
         expect(s.rows[0][s.headers.indexOf("Target status")]).toBe("Accepted");
     });
-    it("the workbook has Summary, People and Targets", () => {
+    it("the workbook has Summary, People and Targets, and names the manager's team", () => {
         const sheets = teamPerformanceSheets(data);
         expect(sheets.map((s) => s.name)).toEqual(["Summary", "People", "Targets"]);
         expect(sheets[2].rows[0]).toContain("Dealer visits");
+        expect(sheets[0].rows).toContainEqual(["Manager's team", "Ravi and direct reports"]);
+    });
+});
+
+describe("drill maps", () => {
+    it("every target metric with a measured actual opens a drill (KYC disbursed and custom metrics have none)", () => {
+        expect(Object.keys(TARGET_METRIC_DRILL).sort()).toEqual(
+            ["batteries_sold", "calls_per_day", "dealer_visits", "hot_to_ground", "kyc_submitted", "new_dealer_visits", "revenue", "scrap_deals"],
+        );
+        expect(TEAM_COUNT_DRILL.unique_visits).toBe("dealers_visited");
+    });
+    it("a target row carries the people it covers", () => {
+        const [r] = rollupTeamTargets([row({ user_id: "a" }), row({ user_id: "b" })], new Set(["a", "b"]));
+        expect(r.user_ids).toEqual(["a", "b"]);
     });
 });
