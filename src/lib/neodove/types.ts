@@ -83,6 +83,14 @@ export type NeodoveInboundEvent = {
     // can never be rendered as though it were a label.
     disposition: string | null;
     dispositionCode: string | null;
+    // ID 242: the status NAME for the call — what NeoDove sent, else the measured
+    // code table (statusCodes.ts) for a code that came with no name. Shown on
+    // screen only; never used to classify the call.
+    statusName?: string | null;
+    // ID 242: NeoDove's follow-up date for the lead (`follow_up_date` /
+    // `follow_up_date_time`). Shown on the call; not turned into a CRM reminder
+    // (that waits for the 242 decision).
+    followUpAt?: Date | null;
     stage: string | null;
     // NeoDove's lead tag (`lead_tag_name`), e.g. "Service Issue".
     tag: string | null;
