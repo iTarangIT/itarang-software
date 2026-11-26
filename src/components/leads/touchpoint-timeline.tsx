@@ -18,6 +18,8 @@
 "use client";
 
 import { useState } from "react";
+// ID 242: old "[NeoDove] … status code 6" lines read with the status name.
+import { readableNeodoveRemarks } from "@/lib/neodove/statusCodes";
 import { AlarmClock, Download } from "lucide-react";
 import { limitEventOwnerLine, limitEventTitle, type LimitEventLike } from "@/lib/leads/limitEventLabels";
 import {
@@ -309,7 +311,7 @@ export function TouchpointTimeline({
                                                     failed ? "text-rose-800" : "text-gray-700"
                                                 }`}
                                             >
-                                                {t.remarks}
+                                                {readableNeodoveRemarks(t.remarks)}
                                             </p>
                                         )}
                                         {t.call_duration_sec != null && (

@@ -8,6 +8,8 @@ import type {
 } from "@/lib/inside-sales/types";
 import { limitEventOwnerLine, limitEventTitle } from "@/lib/leads/limitEventLabels";
 import { handoverNoteInWords, istDateTimeWords, timeLimitLine } from "@/lib/leads/leadPage246";
+// ID 242: old "[NeoDove] … status code 6" lines read with the status name.
+import { readableNeodoveRemarks } from "@/lib/neodove/statusCodes";
 import {
     TOUCHPOINT_ICONS as ICONS,
     TOUCHPOINT_TYPE_LABEL as TYPE_LABEL,
@@ -180,7 +182,7 @@ export function TouchpointHistoryPane({ leadId, touchpoints, limitEvents = [], c
                                         {t.remarks && (
                                             <p className={`text-sm mt-1.5 whitespace-pre-wrap ${failed ? "text-rose-800" : "text-gray-700"}`}>
                                                 {/* ID 246: a hand-over to the field reads in words (stored text unchanged). */}
-                                                {t.touchpoint_type === "asm_transfer" ? handoverNoteInWords(t.remarks) : t.remarks}
+                                                {t.touchpoint_type === "asm_transfer" ? handoverNoteInWords(t.remarks) : readableNeodoveRemarks(t.remarks)}
                                             </p>
                                         )}
                                         {t.call_duration_sec != null && (
