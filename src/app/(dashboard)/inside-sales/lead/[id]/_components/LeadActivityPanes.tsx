@@ -19,9 +19,10 @@ import { LeadTrackingPanel } from "@/components/leads/lead-tracking-panel";
 import { LeadDocumentsPanel } from "@/components/leads/lead-documents-panel";
 
 import { AiCallHistoryPane } from "./AiCallHistoryPane";
+import { CallHistoryPane } from "./CallHistoryPane";
 import { TouchpointHistoryPane } from "./TouchpointHistoryPane";
 
-type Tab = "touchpoints" | "calls" | "tracking" | "documents";
+type Tab = "touchpoints" | "phone" | "calls" | "tracking" | "documents";
 
 export function LeadActivityPanes({
     leadId,
@@ -43,6 +44,9 @@ export function LeadActivityPanes({
             label: "Activity",
             count: activity.length,
         },
+        // NeoDove task (26 Nov): every human call — CRM and NeoDove — with time and status.
+        // No count here: the page holds the latest 100 touchpoints only; the tab's header shows the full count.
+        { value: "phone", label: "Calls" },
         { value: "calls", label: "AI calls" },
         // E-295 — the journey (who held it, for how long, what they did) and
         // its CSV. The rep / ASM is on their own lead here, so the endpoint's
@@ -73,6 +77,8 @@ export function LeadActivityPanes({
                         limitEvents={bundle.limit_events ?? []}
                         canExport={canExportHistory}
                     />
+                ) : tab === "phone" ? (
+                    <CallHistoryPane leadId={leadId} />
                 ) : tab === "calls" ? (
                     <AiCallHistoryPane leadId={leadId} />
                 ) : tab === "tracking" ? (

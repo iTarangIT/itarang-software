@@ -284,11 +284,27 @@ describe("parseInboundEvent — the first REAL live webhook", () => {
         expect(remarksFor(withName)).toContain("Disposition: Interested");
         expect(remarksFor(withName)).not.toContain("Disposition: 6");
 
-        // With no readable label, the code is LABELLED as a code rather than
-        // being passed off as a disposition.
+        // ID 242: with no name sent, a code in the measured table reads as its
+        // name WITH the code, and is still never used as the disposition.
         const codeOnly = parseInboundEvent(LIVE_DISPOSE_PAYLOAD);
         expect(codeOnly.dispositionCode).toBe("6");
-        expect(remarksFor(codeOnly)).toContain("status code 6");
+        expect(codeOnly.disposition).toBeNull();
+        expect(codeOnly.statusName).toBe("In-Progress");
+        expect(remarksFor(codeOnly)).toContain("Disposition: In-Progress (NeoDove code 6)");
+        // A code outside the table stays labelled as a code.
+        const unknown = parseInboundEvent({ ...LIVE_DISPOSE_PAYLOAD, lead_status: "99" });
+        expect(unknown.statusName).toBeNull();
+        expect(remarksFor(unknown)).toContain("status code 99");
+    });
+
+    it("ID 242: reads NeoDove's follow-up date and puts it on the call line", () => {
+        const e = parseInboundEvent(LIVE_DISPOSE_PAYLOAD);
+        // follow_up_date 1785787221858 = the payload's own "04/08/2026, 01:30 am" (IST).
+        expect(e.followUpAt?.getTime()).toBe(1785787221858);
+        expect(remarksFor(e)).toContain("Follow-up: 4 Aug 2026, 1:30 am");
+        const none = parseInboundEvent({ ...LIVE_DISPOSE_PAYLOAD, follow_up_date: null, follow_up_date_time: null });
+        expect(none.followUpAt).toBeNull();
+        expect(remarksFor(none)).not.toContain("Follow-up");
     });
 
     it("carries dispose_remarks — the reason the telecaller typed", () => {

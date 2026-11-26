@@ -20,6 +20,7 @@ import { createHash } from "node:crypto";
 // so it can be unit-tested. Same implementation either way — dedupe.ts
 // re-exports it.
 import { normalizePhone } from "@/lib/leads/dedupe-rules";
+import { istDateTime, neodoveStatusName, parseNeodoveFollowUp } from "@/lib/neodove/statusCodes";
 import {
     callStatusForDisposition,
     classifyDisposition,
@@ -423,6 +424,15 @@ export function parseInboundEvent(raw: unknown): NeodoveInboundEvent {
         // label but is still available for diagnosis and for building the code
         // table once they supply it.
         dispositionCode: asString(pick(flat, "lead_status", "leadStatus")),
+        // ID 242: the name for the screen — sent, else from the measured code table.
+        statusName: neodoveStatusName(
+            asString(pick(flat, "lead_status", "leadStatus")),
+            asString(pick(flat, "lead_status_name", "leadStatusName")),
+        ),
+        followUpAt: parseNeodoveFollowUp(
+            pick(flat, "follow_up_date", "followUpDate"),
+            pick(flat, "follow_up_date_time", "followUpDateTime"),
+        ),
         tag: asString(pick(flat, "lead_tag_name", "leadTagName", "tag")),
         // `lead_stage_name` is the real key ("Open" in their sample); the three
         // we guessed at are absent from the payload.
@@ -647,13 +657,26 @@ export function callOutcomeFor(
  * instead, and is labelled as a code so nobody reads "6" as a disposition.
  */
 export function remarksFor(event: NeodoveInboundEvent): string {
+    // ID 242: a code that came with no name reads as its name from the measured
+    // table ("In-Progress (NeoDove code 6)"); an unknown code stays a code.
+    const code = event.dispositionCode;
+    const tableName = !event.disposition && code ? neodoveStatusName(code, null) : null;
     const label =
         event.disposition ??
-        (event.dispositionCode ? `status code ${event.dispositionCode}` : null);
+        (tableName
+            ? // A CSV-imported "code" is the name itself; only a number is shown as a code.
+              tableName === code
+                ? tableName
+                : `${tableName} (NeoDove code ${code})`
+            : code
+              ? `status code ${code}`
+              : null);
     const bits = [
         label ? `Disposition: ${label}` : null,
         event.stage ? `Stage: ${event.stage}` : null,
         event.tag ? `Tag: ${event.tag}` : null,
+        // ID 242: NeoDove's follow-up date — it was sent on every In-Progress call and dropped.
+        event.followUpAt ? `Follow-up: ${istDateTime(event.followUpAt)}` : null,
         // The telecaller's own words, last so they read as the payoff.
         event.remarks ? `“${event.remarks}”` : null,
     ].filter(Boolean);

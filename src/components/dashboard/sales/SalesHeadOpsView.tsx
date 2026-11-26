@@ -70,8 +70,10 @@ import { orderByTeam } from "@/lib/users/teamRules";
 import type { TeamScorecardSubtotal } from "@/lib/admin/teamScorecardSubtotals";
 import { InvoicesReadUpTo } from "@/components/sales/InvoicesReadUpTo";
 import { lostReasonWords } from "@/lib/leads/lostReasons";
+import { TeamPerformanceCard } from "./TeamPerformanceCard";
+import { monthLabel, monthRange, previousMonth, recentMonths } from "@/lib/dashboard/teamPerformanceRules";
 
-type Period = "today" | "week" | "month";
+type Period = "today" | "week" | "month" | "last_month";
 type TeamSeg = "all" | "field" | "inside";
 
 const FIELD_ROLES = ["asm", "sales_manager"];
@@ -100,6 +102,8 @@ function presets(now: Date): Record<Period, { from: string; to: string }> {
         today: { from: today, to: today },
         week: { from: ymd(monday), to: today },
         month: { from: `${today.slice(0, 8)}01`, to: today },
+        // Monthly review: the whole of last month.
+        last_month: monthRange(previousMonth(today), today),
     };
 }
 
@@ -154,7 +158,16 @@ export function SalesHeadOpsView() {
     // tell them apart — the button last pressed wins while it still matches.
     const matches = (p: Period) => preset[p].from === from && preset[p].to === to;
     const period = pressed && matches(pressed) ? pressed : ((Object.keys(preset) as Period[]).find(matches) ?? null);
-    const monthToDate = period === "month";
+    // A whole calendar month (to today while it runs) — the monthly review.
+    const reviewMonth = (() => {
+        const m = from.slice(0, 7);
+        if (to.slice(0, 7) !== m) return "";
+        const r = monthRange(m, preset.today.to);
+        return r.from === from && r.to === to ? m : "";
+    })();
+    // The targets service's progress is month-to-date (the whole month for a
+    // past one), so a whole-month range reads it as is, not pro-rata.
+    const monthToDate = period === "month" || reviewMonth !== "";
 
     /** Rewrite the URL filters; an empty value removes the key. */
     const update = (patch: Record<string, string>) => {
@@ -390,7 +403,14 @@ export function SalesHeadOpsView() {
     const cell = (userId: string, metric: TargetMetric | null, fallback: number, money = false): ScoreCell => {
         const fmt = (v: number) => (money ? inr(v) : num(v));
         const t = metric ? targetOf(userId, metric) : null;
-        if (!t) return { actual: fmt(fallback), target: null, pct: null, note: "no target", bar: 0 };
+        if (!t) {
+            // 26 Nov task 4: a target the CEO posted that is still in the Sales
+            // Head's queue is not "no target" — it is waiting for the push.
+            const waiting =
+                metric != null &&
+                targets.data?.rows.some((r) => r.user_id === userId && r.metric === metric && (r.status === "pending_approval" || r.status === "rejected"));
+            return { actual: fmt(fallback), target: null, pct: null, note: waiting ? "not pushed yet" : "no target", bar: 0 };
+        }
         if (monthToDate) {
             return {
                 actual: t.progress.actual == null ? fmt(fallback) : fmt(t.progress.actual),
@@ -721,6 +741,7 @@ export function SalesHeadOpsView() {
                                 { value: "today", label: "Today" },
                                 { value: "week", label: "This week" },
                                 { value: "month", label: "This month" },
+                                { value: "last_month", label: "Last month" },
                             ]}
                             value={(period ?? "") as Period}
                             onChange={(p) => {
@@ -728,6 +749,30 @@ export function SalesHeadOpsView() {
                                 update(p === "month" ? { from: "", to: "" } : preset[p]);
                             }}
                         />
+                        {/* Monthly review: any of the last 12 months, 1st to month end. */}
+                        <label className="flex items-center gap-1.5 text-[13px] text-ink-muted">
+                            Month
+                            <select
+                                aria-label="Review a whole month"
+                                data-testid="review-month"
+                                value={reviewMonth}
+                                onChange={(e) => {
+                                    const m = e.target.value;
+                                    if (!m) return;
+                                    setPressed(null);
+                                    const r = monthRange(m, preset.today.to);
+                                    update(r.from === preset.month.from && r.to === preset.month.to ? { from: "", to: "" } : r);
+                                }}
+                                className={SELECT}
+                            >
+                                <option value="">Pick a month</option>
+                                {recentMonths(preset.today.to, 12).map((m) => (
+                                    <option key={m} value={m}>
+                                        {monthLabel(m)}
+                                    </option>
+                                ))}
+                            </select>
+                        </label>
                         {/* Any date range: the presets above are shortcuts for it. A
                             From after To pulls the other end along, never past today, and the range stays within the API's SALES_DASHBOARD_MAX_DAYS. */}
                         <div className="flex items-center gap-1.5">
@@ -772,6 +817,17 @@ export function SalesHeadOpsView() {
                     {(dash.error as Error).message}
                 </div>
             )}
+
+            {/* 26 Nov — the team as one: KPIs, progress against target, target status, report. */}
+            <TeamPerformanceCard
+                from={from}
+                to={to}
+                state={filters.state || undefined}
+                city={filters.city || undefined}
+                businessType={filters.business_type || undefined}
+                team={team}
+                onPickPerson={(id) => update({ spoc_id: id })}
+            />
 
             {/* Needs action now */}
             <div className="flex flex-col gap-3">

@@ -18,7 +18,7 @@ import { dateOnlyWords, isDateOnly } from "@/lib/visits/visitTimeText";
 
 export type SalesDrillTarget = {
     title: string;
-    /** The number that was clicked. */
+    /** The number that was clicked; -1 when it is a rate or an amount (the rows found are counted). */
     count: number;
 } & (
     | { query: string; rows?: undefined; csvName?: undefined }
@@ -95,8 +95,10 @@ export function SalesDrillModal({ target, onClose }: { target: SalesDrillTarget;
                     <div className="min-w-0">
                         <h3 className="text-base font-bold text-ink">{target.title}</h3>
                         <p className="mt-0.5 text-xs text-ink-muted">
-                            {target.count} {target.count === 1 ? "row" : "rows"}
-                            {!loading && rows.length >= 500 && target.count > rows.length
+                            {/* count < 0: the clicked figure is a rate or an amount, not a row count — show the rows found. */}
+                            {target.count < 0 ? (loading ? "…" : rows.length) : target.count}{" "}
+                            {(target.count < 0 ? rows.length : target.count) === 1 ? "row" : "rows"}
+                            {!loading && rows.length >= 500 && (target.count < 0 || target.count > rows.length)
                                 ? ` · showing the first ${rows.length} — download the CSV for all`
                                 : ""}
                         </p>
