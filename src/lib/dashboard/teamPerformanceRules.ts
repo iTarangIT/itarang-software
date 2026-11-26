@@ -177,7 +177,7 @@ export function personTargetStatus(rows: TargetLike[], month: string): PersonTar
             state: "accepted",
             label: "Accepted",
             detail:
-                `All ${inForce.length} target${inForce.length === 1 ? "" : "s"} accepted` +
+                (inForce.length === 1 ? "The target is accepted" : `All ${inForce.length} targets accepted`) +
                 (waiting.length ? `; ${waiting.length} more posted but not pushed yet.` : "."),
         };
     }
