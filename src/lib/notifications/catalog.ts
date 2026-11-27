@@ -319,6 +319,8 @@ export const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   "loan.rejected_by_nbfc": "Loan & Sanction",
   "lead.recalled": "Loan & Sanction",
   "lead.resubmitted": "Loan & Sanction",
+  // 27 Nov — no routing rule / scheme fits; the Sales Head must pick the lender.
+  "lead.manual_selection_needed": "Loan & Sanction",
   "loan.winner_selected": "Loan & Sanction",
   "loan.not_selected": "Loan & Sanction",
   "loan.sanctioned": "Loan & Sanction",
@@ -556,6 +558,8 @@ const WARNING = new Set([
   // a resubmitted one is waiting on the NBFC's second look.
   "lead.recalled",
   "lead.resubmitted",
+  // 27 Nov — the file is parked until the Sales Head picks a lender.
+  "lead.manual_selection_needed",
   // E-307 — each is an Ecofy lead waiting on the recipient: a new lead to
   // assign, a lead to call, a follow-up or meeting now due, a withdrawal or an
   // eligibility check awaiting the Sales Head.

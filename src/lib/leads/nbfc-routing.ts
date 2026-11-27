@@ -15,7 +15,7 @@
  * No rule / BRE says no → nothing changes: today's Step 4 choice, where the
  * older city_default_loan_products pins still narrow the list.
  */
-import { and, desc, eq, isNotNull } from "drizzle-orm";
+import { and, desc, eq, isNotNull, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import {
@@ -25,10 +25,12 @@ import {
   nbfcRoutingRules,
   productCategories,
   productSelections,
+  users,
 } from "@/lib/db/schema";
 
 import { pickRoutingRule, describeRuleScope, type RoutingLead } from "./nbfc-routing-rules";
 import { loadSectionGOptions } from "./section-g";
+import { rankBestFit, type BestFitCandidate, type DealerNbfcHistory } from "./best-fit-rules";
 
 export * from "./nbfc-routing-rules";
 
@@ -92,7 +94,7 @@ export type RoutingTarget =
       ok: true;
       /** null when the target is the sales head's scheme pick (E-394), not a rule. */
       rule: RoutingRuleRow | null;
-      source: "rule" | "scheme_pick";
+      source: "rule" | "scheme_pick" | "best_fit";
       nbfcId: number;
       loanProductId: number;
       nbfcName: string;
@@ -162,18 +164,6 @@ export async function resolveRoutingTarget(leadId: string): Promise<RoutingTarge
     });
     if (picked) return picked;
   }
-  const rules = await activeRoutingRules();
-  if (!rules.length) return { ok: false, why: "No routing rules are set up" };
-
-  const facts: RoutingLead = {
-    dealer_id: lead.dealer_id,
-    state: lead.state,
-    city: lead.city,
-    category: await categoryName(lead.product_category_id),
-  };
-  const rule = pickRoutingRule(rules, facts);
-  if (!rule) return { ok: false, why: "No routing rule matches this lead" };
-
   const assigned = await db
     .select({ nbfc_id: nbfcLeadAssignments.nbfc_id })
     .from(nbfcLeadAssignments)
@@ -189,25 +179,120 @@ export async function resolveRoutingTarget(leadId: string): Promise<RoutingTarge
     lead.requested_loan_amount != null ? Number(lead.requested_loan_amount) : null,
     { excludeNbfcIds: assigned.map((a) => a.nbfc_id), skipPinnedDefault: true },
   );
-  const nbfc = options.find((o) => o.nbfcId === rule.nbfc_id);
-  const product = nbfc?.activeLoanProducts.find((p) => p.id === rule.loan_product_id);
-  const scope = describeRuleScope(rule);
-  if (!nbfc || !product) {
-    return {
-      ok: false,
-      rule,
-      why: `Rule #${rule.id} (${scope}) matches, but its loan product does not fit this lead (eligibility, amount, location, dealer block, or the lead was already with that NBFC)`,
+  // 1) The most specific NBFC routing rule, when its product passes the BRE.
+  const rules = await activeRoutingRules();
+  let ruleMiss: string;
+  let missedRule: RoutingRuleRow | undefined;
+  if (!rules.length) {
+    ruleMiss = "No routing rules are set up";
+  } else {
+    const facts: RoutingLead = {
+      dealer_id: lead.dealer_id,
+      state: lead.state,
+      city: lead.city,
+      category: await categoryName(lead.product_category_id),
     };
+    const rule = pickRoutingRule(rules, facts);
+    if (!rule) {
+      ruleMiss = "No routing rule matches this lead";
+    } else {
+      const nbfc = options.find((o) => o.nbfcId === rule.nbfc_id);
+      const product = nbfc?.activeLoanProducts.find((p) => p.id === rule.loan_product_id);
+      const scope = describeRuleScope(rule);
+      if (nbfc && product) {
+        return {
+          ok: true,
+          rule,
+          source: "rule",
+          nbfcId: rule.nbfc_id,
+          loanProductId: rule.loan_product_id,
+          nbfcName: nbfc.shortName || nbfc.legalName,
+          productName: product.productName,
+          scope,
+        };
+      }
+      missedRule = rule;
+      ruleMiss = `Rule #${rule.id} (${scope}) matches, but its loan product does not fit this lead`;
+    }
   }
+
+  // 2) 27 Nov — no rule decided: auto-select the most relevant eligible
+  //    product (pinned default → dealer history → cheapest → fastest), so the
+  //    Sales Head only has to step in when NOTHING fits.
+  const best = await bestFitTarget(lead, options);
+  if (best) return best;
+
+  return {
+    ok: false,
+    rule: missedRule,
+    why: `${ruleMiss}, and no NBFC loan product fits this lead (check the loan amount, city, battery category and the dealer's allowed NBFCs)`,
+  };
+}
+
+/** The best-ranked BRE-eligible product for this lead, or null when none fits. */
+async function bestFitTarget(
+  lead: NonNullable<Awaited<ReturnType<typeof leadRow>>>,
+  options: Awaited<ReturnType<typeof loadSectionGOptions>>,
+): Promise<RoutingTarget | null> {
+  const candidates: BestFitCandidate[] = options.flatMap((n) =>
+    n.activeLoanProducts.map((p) => ({
+      nbfcId: n.nbfcId,
+      nbfcName: n.shortName || n.legalName,
+      loanProductId: p.id,
+      productName: p.productName,
+      minRoiPct: Number(p.minRoiPct) || 0,
+      processingFeeRupees: p.processingFeeRupees,
+      fileChargeFixedRupees: p.fileChargeFixed != null ? Number(p.fileChargeFixed) || 0 : null,
+      disbursementTatHours: p.disbursementTatHours,
+    })),
+  );
+  if (candidates.length === 0) return null;
+
+  // The admin's pinned default for this dealer / city / state, if one is eligible.
+  let pinnedKey: string | null = null;
+  try {
+    const { resolveDefaultProductRules } = await import("./city-default-product");
+    const pins = await resolveDefaultProductRules({
+      dealerCode: lead.dealer_id,
+      customerState: lead.state,
+      customerCity: lead.city,
+    });
+    const hit = pins.find((r) => candidates.some((c) => c.nbfcId === r.nbfcId && c.loanProductId === r.loanProductId));
+    if (hit) pinnedKey = `${hit.nbfcId}:${hit.loanProductId}`;
+  } catch (err) {
+    console.warn("[nbfc-routing] pinned default not readable", err instanceof Error ? err.message : String(err));
+  }
+
+  // This dealer's history with each NBFC.
+  const history = new Map<number, DealerNbfcHistory>();
+  if (lead.dealer_id) {
+    try {
+      const rows = await db
+        .select({
+          nbfc_id: nbfcLeadAssignments.nbfc_id,
+          sent: sql<number>`count(*)::int`,
+          approved: sql<number>`(count(*) filter (where ${nbfcLeadAssignments.status} = 'selected'))::int`,
+        })
+        .from(nbfcLeadAssignments)
+        .innerJoin(leads, eq(leads.id, nbfcLeadAssignments.lead_id))
+        .where(eq(leads.dealer_id, lead.dealer_id))
+        .groupBy(nbfcLeadAssignments.nbfc_id);
+      for (const r of rows) history.set(r.nbfc_id, { approved: Number(r.approved), sent: Number(r.sent) });
+    } catch (err) {
+      console.warn("[nbfc-routing] dealer history not readable", err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  const [top] = rankBestFit(candidates, { pinnedKey, history });
   return {
     ok: true,
-    rule,
-    source: "rule",
-    nbfcId: rule.nbfc_id,
-    loanProductId: rule.loan_product_id,
-    nbfcName: nbfc.shortName || nbfc.legalName,
-    productName: product.productName,
-    scope,
+    rule: null,
+    source: "best_fit",
+    nbfcId: top.nbfcId,
+    loanProductId: top.loanProductId,
+    nbfcName: top.nbfcName,
+    productName: top.productName,
+    scope: `automatic best-fit selection — ${top.reason}`,
   };
 }
 
@@ -248,7 +333,12 @@ export async function autoRouteLead(leadId: string, opts: { trigger: string }): 
     if (submitted) return { routed: false, why: "Step 4 already submitted" };
 
     const target = await resolveRoutingTarget(leadId);
-    if (!target.ok) return { routed: false, why: target.why };
+    if (!target.ok) {
+      // 27 Nov — Step 4 is open and nothing chose a lender: tell the Sales
+      // Heads (bell + email + WhatsApp, once per file) to pick one manually.
+      void flagManualSelection(leadId, lead.full_name || lead.owner_name || null, target.why, opts.trigger);
+      return { routed: false, why: target.why };
+    }
 
     const { getPreSanctionBucket } = await import("./pre-sanction-bucket");
     const { items: preSanctionDocs } = await getPreSanctionBucket(leadId).catch(() => ({ items: [] as never[] }));
@@ -465,6 +555,114 @@ export async function step4OpenedFor(leadId: string, trigger: string): Promise<v
   }
 }
 
+export const MANUAL_SELECTION_ACTION = "LEAD_AUTO_ROUTE_FAILED";
+export const MANUAL_SELECTION_TYPE = "lead.manual_selection_needed";
+
+/** In-process guard: autoRouteLead runs on every Step-4 page load. */
+const manualFlagInFlight = new Set<string>();
+
+/**
+ * Automatic lender selection was not possible for this lead — record why
+ * (audit LEAD_AUTO_ROUTE_FAILED, read back by the Scheme pick card) and alert
+ * every Sales Head by bell, email and WhatsApp with a link to the manual pick.
+ * Once per file: a later page load / trigger does not re-alert. Never throws.
+ */
+export async function flagManualSelection(
+  leadId: string,
+  customer: string | null,
+  why: string,
+  trigger: string,
+): Promise<void> {
+  if (manualFlagInFlight.has(leadId)) return;
+  manualFlagInFlight.add(leadId);
+  try {
+    const [already] = await db
+      .select({ id: auditLogs.id })
+      .from(auditLogs)
+      .where(
+        and(
+          eq(auditLogs.entity_type, "lead"),
+          eq(auditLogs.entity_id, leadId),
+          eq(auditLogs.action, MANUAL_SELECTION_ACTION),
+        ),
+      )
+      .limit(1);
+    if (already) return;
+
+    await db.insert(auditLogs).values({
+      id: `AUDIT-${Date.now()}-autoroute-failed`,
+      entity_type: "lead",
+      entity_id: leadId,
+      action: MANUAL_SELECTION_ACTION,
+      changes: { why, trigger },
+      performed_by: null,
+      timestamp: new Date(),
+    });
+
+    const who = customer ? `${customer} (${leadId})` : leadId;
+    const title = `Pick the lender manually — ${customer ?? leadId}`;
+    const message =
+      `Automatic NBFC / loan product selection was not possible for ${who}: ${why}. ` +
+      `Open the file and choose the lender and scheme in the "NBFC scheme" card.`;
+    const href = `/admin/kyc-review/${leadId}`;
+
+    const { emit } = await import("@/lib/notifications/emit");
+    await emit({
+      type: MANUAL_SELECTION_TYPE,
+      title,
+      message,
+      leadId,
+      stage: "Step 4 — lender selection",
+      to: [{ audience: { kind: "roles", roles: ["sales_head"] }, as: { party: "admin", label: "Sales Head" }, href }],
+      email: true,
+    });
+
+    // WhatsApp to every Sales Head — unless File action alerts governs this
+    // type, in which case emit() already sent the ticked WhatsApps.
+    const { partyRuleFor } = await import("@/lib/notifications/party-routing");
+    if (await partyRuleFor(MANUAL_SELECTION_TYPE)) return;
+    const heads = await db
+      .select({ phone: users.phone })
+      .from(users)
+      .where(and(sql`LOWER(${users.role}) = 'sales_head'`, eq(users.is_active, true)));
+    const { sendStaffWhatsApp } = await import("@/lib/whatsapp/staff-notify");
+    const { buildPartyWhatsApp } = await import("@/lib/notifications/party-routing-rules");
+    const body =
+      buildPartyWhatsApp({ title, message, customer: customer ?? "Customer", reference: leadId }) +
+      `\nOpen: ${(process.env.NEXT_PUBLIC_APP_URL || "https://crm.itarang.com").replace(/\/+$/, "")}${href}`;
+    const sent = new Set<string>();
+    for (const h of heads) {
+      const ten = (h.phone ?? "").replace(/\D/g, "").slice(-10);
+      if (ten.length !== 10 || sent.has(ten)) continue;
+      sent.add(ten);
+      await sendStaffWhatsApp(ten, body, { customer: customer ?? "Customer", ref: leadId, what: title });
+    }
+  } catch (err) {
+    console.warn("[nbfc-routing] manual-selection alert failed", err instanceof Error ? err.message : String(err));
+  } finally {
+    manualFlagInFlight.delete(leadId);
+  }
+}
+
+/** Why auto-selection failed for this lead, if it did and nothing routed it since. */
+export async function manualSelectionNeeded(leadId: string): Promise<{ why: string; at: string } | null> {
+  const [row] = await db
+    .select({ changes: auditLogs.changes, at: auditLogs.timestamp })
+    .from(auditLogs)
+    .where(
+      and(
+        eq(auditLogs.entity_type, "lead"),
+        eq(auditLogs.entity_id, leadId),
+        eq(auditLogs.action, MANUAL_SELECTION_ACTION),
+      ),
+    )
+    .orderBy(desc(auditLogs.timestamp))
+    .limit(1);
+  if (!row) return null;
+  const why = (row.changes as { why?: unknown } | null)?.why;
+  return { why: typeof why === "string" ? why : "No routing rule matched", at: (row.at ?? new Date()).toISOString() };
+}
+
 /** For the admin screen: rules with what each points at. */
 export async function listRulesForAdmin() {
   const rules = await db.select().from(nbfcRoutingRules).orderBy(desc(nbfcRoutingRules.is_active), desc(nbfcRoutingRules.id));
@@ -474,6 +672,9 @@ export async function listRulesForAdmin() {
 /** Used by the server guard in submitStep4ProductSelection. */
 export async function routingOverrideFor(leadId: string): Promise<{ nbfcId: number; loanProductId: number } | null> {
   const t = await resolveRoutingTarget(leadId).catch(() => null);
-  return t && t.ok ? { nbfcId: t.nbfcId, loanProductId: t.loanProductId } : null;
+  // Only a configured decision (routing rule / Sales Head scheme pick) may
+  // override what a person submitted — the automatic best fit is a default
+  // for when nobody chose, never a correction of somebody who did.
+  return t && t.ok && t.source !== "best_fit" ? { nbfcId: t.nbfcId, loanProductId: t.loanProductId } : null;
 }
 
