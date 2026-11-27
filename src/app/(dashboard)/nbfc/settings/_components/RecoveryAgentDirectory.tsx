@@ -16,6 +16,8 @@
  * but their past collections still name them, and reactivating beats re-typing.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Truck } from "lucide-react";
+import { SectionHeader } from "./SettingsCard";
 
 type Channel = "email" | "sms" | "whatsapp";
 
@@ -272,25 +274,25 @@ export default function RecoveryAgentDirectory({ canEdit }: { canEdit: boolean }
   }
 
   return (
-    <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-4">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h2 className="text-sm font-bold text-slate-800 dark:text-slate-100">
-            Recovery Agents
-          </h2>
-          <p className="text-[11px] text-slate-500 mt-0.5 max-w-2xl">
-            The people you send to collect a flagged battery. They do not log in —
-            assigning one emails them a single-use link that captures their
-            location and photographs at the borrower&apos;s address. Add at least one
-            before dispatching from the Recovery queue.
-          </p>
-        </div>
+    <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-4">
+      <SectionHeader
+        icon={Truck}
+        tone="amber"
+        title="Recovery agents"
+        desc={
+          <>
+            The people you send to collect a flagged battery. They don&apos;t need a login —
+            assigning one emails them a one-time link to record their location and photos at the
+            borrower&apos;s address. Add at least one before dispatching from the Recovery queue.
+          </>
+        }
+      >
         {loaded ? (
-          <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400 shrink-0">
+          <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
             {activeCount} active
           </span>
         ) : null}
-      </div>
+      </SectionHeader>
 
       {!loaded ? (
         <p className="text-[11px] text-slate-400">Loading…</p>
@@ -388,7 +390,7 @@ export default function RecoveryAgentDirectory({ canEdit }: { canEdit: boolean }
       {canEdit ? (
         adding ? (
           <div className="border-t border-slate-200 dark:border-slate-700 pt-3 space-y-2">
-            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+            <p className="text-xs font-medium text-slate-600 dark:text-slate-300">
               Add agent
             </p>
             {fields(draft, setDraft, "draft")}

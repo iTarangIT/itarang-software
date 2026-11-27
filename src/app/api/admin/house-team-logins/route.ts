@@ -21,7 +21,7 @@
 // when the person needs both).
 
 import { z } from "zod";
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { houseLoginStaffLinks, users } from "@/lib/db/schema";
@@ -34,6 +34,7 @@ import { supabaseAdmin } from "@/lib/supabase/admin";
 import { resolveHouseDealer } from "@/lib/whatsapp/customer-lead";
 import { getDealerCheckSettings, setHouseApprover } from "@/lib/leads/dealer-check-settings";
 import { sendEmail } from "@/lib/email/mailer";
+import { existingLogin, takenMessage } from "@/lib/users/house-logins";
 
 export const dynamic = "force-dynamic";
 
@@ -58,10 +59,18 @@ const patchSchema = z
     active: z.boolean().optional(),
     staffUserId: z.string().uuid().nullable().optional(),
     canApprove: z.boolean().optional(),
+    // 27 Nov — Sales Head sets a new password: typed, or generated when blank.
+    resetPassword: z.boolean().optional(),
+    password: z
+      .string()
+      .max(72)
+      .optional()
+      .refine((v) => !v || (v.length >= 8 && /[A-Za-z]/.test(v) && /\d/.test(v)), "Use at least 8 characters with a letter and a number"),
   })
-  .refine((b) => b.active !== undefined || b.staffUserId !== undefined || b.canApprove !== undefined, {
-    message: "Nothing to change",
-  });
+  .refine(
+    (b) => b.active !== undefined || b.staffUserId !== undefined || b.canApprove !== undefined || b.resetPassword,
+    { message: "Nothing to change" },
+  );
 
 async function staffLinks(loginIds: string[]): Promise<Map<string, string>> {
   if (!loginIds.length) return new Map();
@@ -86,10 +95,17 @@ async function house() {
   return h ? { code: h.dealerCode, sharedUserId: h.uploaderId } : null;
 }
 
-export const GET = withErrorHandler(async () => {
+export const GET = withErrorHandler(async (req: Request) => {
   await requireRole(HOUSE_TEAM_LOGIN_ROLES);
   const h = await house();
   if (!h) return errorResponse("The iTarang house dealer is not set up on this environment.", 500);
+
+  // 27 Nov — live check while the Sales Head types the login ID.
+  const check = new URL(req.url).searchParams.get("checkEmail")?.trim().toLowerCase();
+  if (check) {
+    const taken = await existingLogin(check, h.code);
+    return successResponse({ email: check, taken: !!taken, message: taken ? takenMessage(check, taken) : null });
+  }
   const rows = await db
     .select({
       id: users.id,
@@ -127,12 +143,9 @@ export const POST = withErrorHandler(async (req: Request) => {
   const h = await house();
   if (!h) return errorResponse("The iTarang house dealer is not set up on this environment.", 500);
 
-  const [taken] = await db
-    .select({ id: users.id })
-    .from(users)
-    .where(eq(sql`lower(${users.email})`, email))
-    .limit(1);
-  if (taken) return errorResponse("A login with this email already exists.", 409);
+  // 27 Nov — one login ID per person: say WHO already holds this ID.
+  const taken = await existingLogin(email, h.code);
+  if (taken) return errorResponse(takenMessage(email, taken), 409);
 
   const temporaryPassword = generateTemporaryPassword();
   const { data: created, error } = await supabaseAdmin.auth.admin.createUser({
@@ -145,7 +158,7 @@ export const POST = withErrorHandler(async (req: Request) => {
     const msg = error?.message ?? "unknown error";
     return errorResponse(
       /already/i.test(msg)
-        ? "This email already has a sign-in (Supabase Auth). Use another email or ask a developer to link it."
+        ? `Change the login ID — ${email} is already an iTarang sign-in (used on the other CRM environment). Use a different email.`
         : `Could not create the sign-in: ${msg}`,
       /already/i.test(msg) ? 409 : 500,
     );
@@ -175,53 +188,92 @@ export const POST = withErrorHandler(async (req: Request) => {
 
   console.log(`[house-team-logins] ${admin.id} created house login ${created.user.id} (${email})`);
 
-  // 23 Nov (point 2): email the sign-in details to the new login.
-  let emailed = false;
+  // 23 Nov (point 2) / 27 Nov: welcome email with the login ID + temporary password.
+  const emailed = await sendCredentialsEmail({
+    to: email,
+    name,
+    by: admin.name || "iTarang",
+    password: temporaryPassword,
+    kind: "welcome",
+  });
+  return successResponse({ userId: created.user.id, email, name, temporaryPassword, emailed }, 201);
+});
+
+async function sendCredentialsEmail(p: {
+  to: string;
+  name: string;
+  by: string;
+  password: string;
+  kind: "welcome" | "reset";
+}): Promise<boolean> {
   try {
     const base = (process.env.APP_URL || process.env.NEXT_PUBLIC_APP_URL || "https://crm.itarang.com").replace(/\/+$/, "");
     const loginUrl = `${base}/login`;
-    const esc = (x: string) => x.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+    const esc = (x: string) =>
+      x.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+    const intro =
+      p.kind === "welcome"
+        ? `Welcome to iTarang! ${p.by} created an iTarang House login for you.`
+        : `${p.by} set a new temporary password for your iTarang House login.`;
     const res = await sendEmail({
-      to: email,
-      subject: "[iTarang] Your iTarang House login",
+      to: p.to,
+      subject: p.kind === "welcome" ? "[iTarang] Welcome — your iTarang House login" : "[iTarang] Your new iTarang password",
       text:
-        `Hi ${name},
-
-${admin.name || "iTarang"} created an iTarang House login for you.
-
-` +
-        `Sign in: ${loginUrl}
-Email: ${email}
-Temporary password: ${temporaryPassword}
-
-` +
-        `You will be asked to set your own password the first time you sign in. Every step you take on a customer file is recorded under your name.
-
-iTarang`,
+        `Hi ${p.name},\n\n${intro}\n\nSign in: ${loginUrl}\nLogin ID: ${p.to}\nTemporary password: ${p.password}\n\n` +
+        `You will be asked to set your own password when you sign in. Every step you take on a customer file is recorded under your name.\n\niTarang`,
       html:
-        `<p>Hi ${esc(name)},</p><p>${esc(admin.name || "iTarang")} created an <b>iTarang House</b> login for you.</p>` +
-        `<p>Sign in: <a href="${esc(loginUrl)}">${esc(loginUrl)}</a><br/>Email: <b>${esc(email)}</b><br/>Temporary password: <code style="font-size:15px">${esc(temporaryPassword)}</code></p>` +
-        `<p>You will be asked to set your own password the first time you sign in. Every step you take on a customer file is recorded under your name.</p><p>iTarang</p>`,
+        `<p>Hi ${esc(p.name)},</p><p>${esc(intro)}</p>` +
+        `<p>Sign in: <a href="${esc(loginUrl)}">${esc(loginUrl)}</a><br/>Login ID: <b>${esc(p.to)}</b><br/>Temporary password: <code style="font-size:15px">${esc(p.password)}</code></p>` +
+        `<p>You will be asked to set your own password when you sign in. Every step you take on a customer file is recorded under your name.</p><p>iTarang</p>`,
     });
-    emailed = !!res?.messageId && !(res.rejected && res.rejected.length);
+    return !!res?.messageId && !(res.rejected && res.rejected.length);
   } catch (err) {
     console.warn("[house-team-logins] credentials email failed", err instanceof Error ? err.message : String(err));
+    return false;
   }
-  return successResponse({ userId: created.user.id, email, name, temporaryPassword, emailed }, 201);
-});
+}
 
 export const PATCH = withErrorHandler(async (req: Request) => {
   const admin = await requireRole(HOUSE_TEAM_LOGIN_ROLES);
   const parsed = patchSchema.safeParse(await req.json().catch(() => null));
-  if (!parsed.success) return errorResponse("Pick a login.", 400);
+  if (!parsed.success) return errorResponse(parsed.error.issues[0]?.message ?? "Pick a login.", 400);
   const h = await house();
   if (!h) return errorResponse("The iTarang house dealer is not set up on this environment.", 500);
   const [login] = await db
-    .select({ id: users.id })
+    .select({ id: users.id, name: users.name, email: users.email })
     .from(users)
     .where(and(eq(users.id, parsed.data.userId), eq(users.dealer_id, h.code), eq(users.role, "dealer")))
     .limit(1);
   if (!login) return errorResponse("That is not a house team login.", 404);
+
+  // 27 Nov — change the password (Sales Head / Admin). The person gets the new
+  // temporary password by email and must set their own at the next sign-in.
+  if (parsed.data.resetPassword) {
+    if (parsed.data.userId === h.sharedUserId) {
+      return errorResponse(
+        "The shared house login's password can't be changed here — everyone using it would be locked out.",
+        409,
+      );
+    }
+    const password = parsed.data.password || generateTemporaryPassword();
+    const { error } = await supabaseAdmin.auth.admin.updateUserById(login.id, { password });
+    if (error) return errorResponse(`Could not change the password: ${error.message}`, 500);
+    await db
+      .update(users)
+      .set({ password_hash: await hashPassword(password), must_change_password: true, updated_at: new Date() })
+      .where(eq(users.id, login.id));
+    console.log(`[house-team-logins] ${admin.id} changed the password of ${login.id}`);
+    const emailed = login.email
+      ? await sendCredentialsEmail({
+          to: login.email,
+          name: login.name || "there",
+          by: admin.name || "iTarang",
+          password,
+          kind: "reset",
+        })
+      : false;
+    return successResponse({ userId: login.id, email: login.email, temporaryPassword: password, emailed });
+  }
 
   // E-390 — link / unlink the iTarang sales person who uses this login.
   if (parsed.data.staffUserId !== undefined) {

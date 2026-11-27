@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { Copy, Mail, Phone, Send, Trash2, UserPlus, Users, X } from "lucide-react";
 import {
   NBFC_ORIGINATION_ROLES,
   NBFC_MONITORING_ROLES,
@@ -39,6 +40,29 @@ function roleLabel(role: string): string {
   return (NBFC_ROLE_LABELS as Record<string, string>)[role] ?? role;
 }
 
+const LABEL = "mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300";
+const INPUT =
+  "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900";
+
+const AVATAR_TONES = [
+  "bg-sky-100 text-sky-700",
+  "bg-emerald-100 text-emerald-700",
+  "bg-violet-100 text-violet-700",
+  "bg-amber-100 text-amber-700",
+  "bg-rose-100 text-rose-700",
+  "bg-teal-100 text-teal-700",
+];
+function avatarTone(id: string): string {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return AVATAR_TONES[h % AVATAR_TONES.length];
+}
+function initialsOf(s: string): string {
+  const base = s.includes("@") ? s.split("@")[0] : s;
+  const parts = base.split(/[\s._-]+/).filter(Boolean);
+  return ((parts[0]?.[0] ?? "?") + (parts[1]?.[0] ?? "")).toUpperCase();
+}
+
 export default function UsersSection({ currentUserId, members, canManage = false, cibilReviewEnabledAt = null }: Props) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -59,6 +83,7 @@ export default function UsersSection({ currentUserId, members, canManage = false
   const [customRoles, setCustomRoles] = useState<{ id: string; name: string }[]>([]);
   // Set once when a brand-new login is provisioned — shown to the admin to relay.
   const [newLogin, setNewLogin] = useState<{ email: string; password: string } | null>(null);
+  const [inviteOpen, setInviteOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -132,6 +157,7 @@ export default function UsersSection({ currentUserId, members, canManage = false
       setNav([...CHILD_DEFAULT_NAV]);
       setTitle(CHILD_DEFAULT_TITLE);
       setRoleValue("sys:viewer");
+      setInviteOpen(false);
       router.refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -165,111 +191,99 @@ export default function UsersSection({ currentUserId, members, canManage = false
   }
 
   return (
-    <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-4">
-      <div>
-        <h2 className="text-sm font-bold uppercase tracking-widest text-slate-500">Users</h2>
-        <p className="text-xs text-slate-500 mt-0.5">
-          NBFC partner users with access to this tenant&apos;s portal.
-        </p>
+    <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex items-start gap-3">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-sky-50 text-sky-700">
+            <Users className="h-[18px] w-[18px]" />
+          </span>
+          <div>
+            <h3 className="font-semibold text-slate-900 dark:text-slate-100">
+              Team members <span className="ml-1 text-sm font-normal text-slate-400">{members.length}</span>
+            </h3>
+            <p className="text-sm text-slate-500">People who can log in to your NBFC portal.</p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setInviteOpen((v) => !v)}
+          className={`inline-flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-semibold shadow-sm transition ${
+            inviteOpen
+              ? "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+              : "bg-[color:var(--color-brand-navy)] text-white hover:opacity-90"
+          }`}
+        >
+          {inviteOpen ? <X className="h-4 w-4" /> : <UserPlus className="h-4 w-4" />}
+          {inviteOpen ? "Close" : "Invite user"}
+        </button>
       </div>
 
-      <table className="w-full text-sm">
-        <thead className="bg-slate-50 dark:bg-slate-800/50 text-xs uppercase tracking-widest text-slate-500">
-          <tr>
-            <th className="px-3 py-2 text-left font-bold">User</th>
-            <th className="px-3 py-2 text-left font-bold">Role</th>
-            <th className="px-3 py-2 text-left font-bold">Reports to</th>
-            <th className="px-3 py-2 text-left font-bold">Joined</th>
-            <th className="px-3 py-2"></th>
-          </tr>
-        </thead>
-        <tbody>
-          {members.length === 0 ? (
-            <tr>
-              <td colSpan={5} className="px-3 py-6 text-center text-slate-500">
-                No members yet. Invite someone below.
-              </td>
-            </tr>
-          ) : (
-            members.map((m) => (
-              <tr key={m.user_id} className="border-t border-slate-100 dark:border-slate-800">
-                <td className="px-3 py-2">
-                  <div className="font-medium">{m.name ?? m.email ?? m.user_id}</div>
-                  <div className="text-xs text-slate-500">
-                    {m.email ?? ""}
-                    {m.phone ? <span className="ml-2 tabular-nums">· {m.phone}</span> : null}
-                  </div>
-                </td>
-                <td className="px-3 py-2 text-xs font-bold">{roleLabel(m.role)}</td>
-                <td className="px-3 py-2 text-xs">
-                  {m.parent_user_id ? (
-                    <span className="inline-flex items-center gap-1 rounded bg-emerald-50 px-1.5 py-0.5 font-semibold text-emerald-800">
-                      {memberLabel(members, m.parent_user_id)}
-                    </span>
-                  ) : members.some((c) => c.parent_user_id === m.user_id) ? (
-                    <span className="inline-flex items-center rounded bg-sky-50 px-1.5 py-0.5 font-semibold text-sky-800">
-                      Approver
-                    </span>
-                  ) : (
-                    <span className="text-slate-400">—</span>
-                  )}
-                </td>
-                <td className="px-3 py-2 text-xs text-slate-500 tabular-nums">
-                  {m.created_at ? new Date(m.created_at).toLocaleDateString() : "—"}
-                </td>
-                <td className="px-3 py-2 text-right">
-                  {m.user_id !== currentUserId ? (
-                    <button
-                      onClick={() => remove(m.user_id)}
-                      disabled={busy}
-                      className="text-xs text-red-600 hover:underline disabled:opacity-50"
-                    >
-                      Remove
-                    </button>
-                  ) : (
-                    <span className="text-xs text-slate-400">You</span>
-                  )}
-                </td>
-              </tr>
-            ))
-          )}
-        </tbody>
-      </table>
+      {newLogin ? (
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm space-y-2 dark:border-emerald-800 dark:bg-emerald-900/20">
+          <div className="font-semibold text-emerald-800 dark:text-emerald-300">
+            New login created — share these once. The user must change the password on first login.
+          </div>
+          <div className="font-mono text-xs text-slate-700 dark:text-slate-200">
+            <div>
+              <span className="text-slate-500">Email:</span> {newLogin.email}
+            </div>
+            <div>
+              <span className="text-slate-500">Password:</span> {newLogin.password}
+            </div>
+          </div>
+          <div className="flex gap-3 text-xs">
+            <button
+              onClick={() =>
+                navigator.clipboard?.writeText(
+                  `Login: ${newLogin.email}\nPassword: ${newLogin.password}`,
+                )
+              }
+              className="inline-flex items-center gap-1 font-bold text-emerald-700 hover:underline dark:text-emerald-300"
+            >
+              <Copy className="h-3.5 w-3.5" /> Copy credentials
+            </button>
+            <button onClick={() => setNewLogin(null)} className="text-slate-500 hover:underline">
+              Dismiss
+            </button>
+          </div>
+        </div>
+      ) : null}
 
-      <div className="border-t border-slate-200 dark:border-slate-800 pt-4">
-        <h3 className="text-xs font-bold uppercase tracking-widest text-slate-500 mb-2">
-          Invite user
-        </h3>
-        <div className="flex flex-wrap items-end gap-2">
-          <div className="flex-1 min-w-[200px]">
-            <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">
-              Email
-            </label>
+      {inviteOpen ? (
+      <div className="rounded-xl border border-sky-100 bg-sky-50/50 p-5 dark:border-sky-900 dark:bg-sky-900/10">
+        <h4 className="mb-1 font-semibold text-slate-900 dark:text-slate-100">Invite a new user</h4>
+        <p className="mb-4 text-xs text-slate-500">
+          If the email already has an iTarang account we link it. Otherwise a new login is created
+          and a one-time password is shown for you to share.
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <div>
+            <label className={LABEL}>Email *</label>
             <input
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               disabled={busy}
-              className="w-full border border-slate-300 rounded px-2 py-1 text-sm"
+              className={INPUT}
               placeholder="user@example.com"
             />
           </div>
-          <div className="flex-1 min-w-[160px]">
-            <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">
-              Name <span className="font-normal normal-case text-slate-400">(new logins)</span>
+          <div>
+            <label className={LABEL}>
+              Full name <span className="font-normal text-slate-400">(for new logins)</span>
             </label>
             <input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
               disabled={busy}
-              className="w-full border border-slate-300 rounded px-2 py-1 text-sm"
+              className={INPUT}
               placeholder="Jane Partner"
             />
           </div>
-          <div className="min-w-[140px]">
-            <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">
-              Mobile <span className="font-normal normal-case text-slate-400">(optional)</span>
+          <div>
+            <label className={LABEL}>
+              Mobile <span className="font-normal text-slate-400">(optional)</span>
             </label>
             <input
               type="tel"
@@ -277,19 +291,17 @@ export default function UsersSection({ currentUserId, members, canManage = false
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
               disabled={busy}
-              className="w-full border border-slate-300 rounded px-2 py-1 text-sm"
+              className={INPUT}
               placeholder="98XXXXXXXX"
             />
           </div>
           <div>
-            <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">
-              Role
-            </label>
+            <label className={LABEL}>Role</label>
             <select
               value={roleValue}
               onChange={(e) => setRoleValue(e.target.value)}
               disabled={busy}
-              className="border border-slate-300 rounded px-2 py-1 text-sm"
+              className={INPUT}
             >
               {ROLE_OPTIONS.map((r) => (
                 <option key={r} value={`sys:${r}`}>
@@ -315,16 +327,16 @@ export default function UsersSection({ currentUserId, members, canManage = false
             </select>
           </div>
           <div>
-            <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">
-              Reports to <span className="font-normal normal-case text-slate-400">(child user)</span>
+            <label className={LABEL}>
+              Reports to <span className="font-normal text-slate-400">(needs approval from)</span>
             </label>
             <select
               value={parentId}
               onChange={(e) => setParentId(e.target.value)}
               disabled={busy}
-              className="border border-slate-300 rounded px-2 py-1 text-sm"
+              className={INPUT}
             >
-              <option value="">Nobody (independent)</option>
+              <option value="">Nobody — works independently</option>
               {parentOptions.map((m) => (
                 <option key={m.user_id} value={m.user_id}>
                   {m.name ?? m.email ?? m.user_id}
@@ -332,16 +344,19 @@ export default function UsersSection({ currentUserId, members, canManage = false
               ))}
             </select>
           </div>
-          <button
-            onClick={invite}
-            disabled={busy}
-            className="px-4 py-1.5 text-sm font-bold rounded bg-[color:var(--color-brand-navy)] text-white disabled:opacity-50"
-          >
-            {busy ? "Inviting…" : "Invite"}
-          </button>
+          <div className="flex items-end">
+            <button
+              onClick={invite}
+              disabled={busy}
+              className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-[color:var(--color-brand-navy)] px-4 py-2 text-sm font-semibold text-white shadow-sm hover:opacity-90 disabled:opacity-50"
+            >
+              <Send className="h-4 w-4" />
+              {busy ? "Sending invite…" : "Send invite"}
+            </button>
+          </div>
         </div>
         {parentId ? (
-          <div className="mt-3 rounded border border-emerald-200 bg-emerald-50/60 px-3 py-2.5 text-xs">
+          <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50/60 px-4 py-3 text-xs">
             <p className="font-semibold text-emerald-900">
               Child user — uploads the CIBIL report and a note and sends them to{" "}
               {memberLabel(members, parentId)} for approval. After approval{" "}
@@ -365,47 +380,85 @@ export default function UsersSection({ currentUserId, members, canManage = false
             <StepTicks value={steps} onChange={setSteps} disabled={busy} />
           </div>
         ) : null}
-        {error ? (
-          <div className="mt-2 px-3 py-2 bg-red-50 text-red-700 text-xs rounded">{error}</div>
-        ) : null}
-        {newLogin ? (
-          <div className="mt-3 px-3 py-3 bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 rounded text-xs space-y-2">
-            <div className="font-bold text-emerald-800 dark:text-emerald-300">
-              New login created — share these once. The user must change the password on first login.
-            </div>
-            <div className="font-mono text-slate-700 dark:text-slate-200">
-              <div>
-                <span className="text-slate-500">Email:</span> {newLogin.email}
-              </div>
-              <div>
-                <span className="text-slate-500">Password:</span> {newLogin.password}
-              </div>
-            </div>
-            <div className="flex gap-3">
-              <button
-                onClick={() =>
-                  navigator.clipboard?.writeText(
-                    `Login: ${newLogin.email}\nPassword: ${newLogin.password}`,
-                  )
-                }
-                className="text-emerald-700 dark:text-emerald-300 font-bold hover:underline"
-              >
-                Copy credentials
-              </button>
-              <button
-                onClick={() => setNewLogin(null)}
-                className="text-slate-500 hover:underline"
-              >
-                Dismiss
-              </button>
-            </div>
-          </div>
-        ) : null}
-        <p className="text-[11px] text-slate-500 mt-2">
-          If the email already has an iTarang account we link it to this tenant. Otherwise a brand-new
-          login is created and a one-time password is shown here for you to relay.
-        </p>
       </div>
+      ) : null}
+
+      {error ? (
+        <div className="rounded-lg bg-red-50 px-4 py-2.5 text-sm text-red-700">{error}</div>
+      ) : null}
+
+      {members.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-slate-300 px-4 py-10 text-center text-sm text-slate-500">
+          No team members yet. Click <b>Invite user</b> to add someone.
+        </div>
+      ) : (
+        <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200 dark:divide-slate-800 dark:border-slate-800">
+          {members.map((m) => {
+            const display = m.name ?? m.email ?? m.user_id;
+            const isApprover = members.some((c) => c.parent_user_id === m.user_id);
+            const isMe = m.user_id === currentUserId;
+            return (
+              <li key={m.user_id} className="flex flex-wrap items-center gap-4 px-4 py-3.5 hover:bg-slate-50/60 dark:hover:bg-slate-800/40">
+                <span
+                  className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-bold ${avatarTone(m.user_id)}`}
+                >
+                  {initialsOf(display)}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="truncate font-medium text-slate-900 dark:text-slate-100">{display}</span>
+                    {isMe ? (
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">You</span>
+                    ) : null}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-500">
+                    {m.email ? (
+                      <span className="inline-flex items-center gap-1">
+                        <Mail className="h-3 w-3" /> {m.email}
+                      </span>
+                    ) : null}
+                    {m.phone ? (
+                      <span className="inline-flex items-center gap-1 tabular-nums">
+                        <Phone className="h-3 w-3" /> {m.phone}
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700">
+                    {roleLabel(m.role)}
+                  </span>
+                  {m.parent_user_id ? (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-800">
+                      Reports to {memberLabel(members, m.parent_user_id)}
+                    </span>
+                  ) : isApprover ? (
+                    <span className="rounded-full bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-800">
+                      Approver
+                    </span>
+                  ) : null}
+                </div>
+                <div className="hidden w-28 text-right text-xs text-slate-400 sm:block">
+                  {m.created_at ? `Joined ${new Date(m.created_at).toLocaleDateString("en-IN")}` : ""}
+                </div>
+                <div className="w-9 text-right">
+                  {!isMe ? (
+                    <button
+                      onClick={() => remove(m.user_id)}
+                      disabled={busy}
+                      title="Remove user"
+                      aria-label={`Remove ${display}`}
+                      className="rounded-lg p-2 text-slate-400 transition hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  ) : null}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
 
       <ApprovalHierarchyPanel
         members={members}

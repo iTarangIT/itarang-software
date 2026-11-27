@@ -114,7 +114,7 @@ export default function EsignCredentialsPanel({
     }
   }
 
-  const label = "block text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1";
+  const label = "block text-xs font-medium text-slate-600 dark:text-slate-300 mb-1";
 
   return (
     <div className="mt-2 ml-7 border-l-2 border-slate-200 dark:border-slate-700 pl-4 space-y-3">
@@ -124,7 +124,7 @@ export default function EsignCredentialsPanel({
           value={esignProvider ?? ""}
           disabled={!canEdit || busy || loading}
           onChange={(e) => onProviderChange(e.target.value || null)}
-          className="w-full border border-slate-300 rounded px-2 py-1 text-sm bg-white dark:bg-slate-900"
+          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100 text-sm bg-white dark:bg-slate-900"
         >
           <option value="">iTarang e-sign (iTarang&apos;s account — default)</option>
           {providers.map((p) => (
@@ -154,7 +154,7 @@ export default function EsignCredentialsPanel({
                 value={environment}
                 disabled={!canEdit || busy}
                 onChange={(e) => setEnvironment(e.target.value as "sandbox" | "production")}
-                className="w-full border border-slate-300 rounded px-2 py-1 text-sm bg-white dark:bg-slate-900"
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100 text-sm bg-white dark:bg-slate-900"
               >
                 {selected.environments.map((env) => (
                   <option key={env} value={env}>
@@ -175,7 +175,7 @@ export default function EsignCredentialsPanel({
                 disabled={!canEdit || busy || !vaultEnabled}
                 placeholder={selected.configured ? "•••••• (unchanged)" : f.placeholder ?? f.label}
                 onChange={(e) => setSecrets((s) => ({ ...s, [f.key]: e.target.value }))}
-                className="w-full border border-slate-300 rounded px-2 py-1 text-sm font-mono"
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100 text-sm font-mono"
               />
             </div>
           ))}

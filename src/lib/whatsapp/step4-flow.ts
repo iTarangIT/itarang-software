@@ -107,6 +107,7 @@ import {
 import type { InboundEvent, ListRow, ReplyButton } from "./types";
 import { oneLine } from "./window";
 import { nbfcRoutingBlock } from "@/lib/leads/dealer-assignment";
+import { routesToNbfc } from "@/lib/leads/payment-method";
 
 /** "Up to how much loan do you want?" */
 export const DC_S4_AMT = "DC_S4_AMT";
@@ -258,7 +259,7 @@ export async function pushStep4ToWhatsApp(leadId: string): Promise<void> {
     .limit(1);
 
   if (!lead) return;
-  if (String(lead.payment_method || "").toLowerCase() !== "finance") return;
+  if (!routesToNbfc(lead.payment_method)) return;
   if (!STEP4_UNLOCKED_STATUSES.has(String(lead.kyc_status))) return;
   // E-390 — wait for the iTarang admin's dealer check; approving it re-sends this.
   if (await nbfcRoutingBlock(leadId)) return;
@@ -459,7 +460,7 @@ async function onStep4Start(
     .limit(1);
   if (!lead) return await lostTrack(session);
 
-  if (String(lead.payment_method || "").toLowerCase() !== "finance") {
+  if (!routesToNbfc(lead.payment_method)) {
     await reply(
       session,
       "This application is a cash purchase — there's no financing to choose.",
@@ -518,7 +519,7 @@ async function onStep4Again(
     .where(eq(leads.id, leadId))
     .limit(1);
   if (!lead) return await lostTrack(session);
-  if (String(lead.payment_method || "").toLowerCase() !== "finance") {
+  if (!routesToNbfc(lead.payment_method)) {
     await reply(
       session,
       "This application is a cash purchase — there's no lender to choose.",

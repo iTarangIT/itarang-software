@@ -22,6 +22,10 @@ type State = {
   } | null;
   options: Option[];
   locked: boolean;
+  /** 27 Nov — automatic selection failed; the Sales Head must pick. */
+  manual_needed?: { why: string; at: string } | null;
+  /** 27 Nov — the lender the system will choose by itself (routing rule or best fit). */
+  auto_pick?: { label: string; why: string; source: string } | null;
   can_pick: boolean;
 };
 
@@ -67,8 +71,22 @@ export default function SchemePickCard({ leadId }: { leadId: string }) {
   // Nothing to show to a role that cannot pick and when nothing was picked.
   if (!state.can_pick && !state.current) return null;
 
+  const manual = state.manual_needed;
+
   return (
-    <section className="mb-3 rounded-xl border border-slate-200 bg-white p-4">
+    <section
+      className={`mb-3 rounded-xl border bg-white p-4 ${manual ? "border-amber-300 ring-2 ring-amber-100" : "border-slate-200"}`}
+    >
+      {manual ? (
+        <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-900">
+          <p className="font-semibold">Automatic lender selection was not possible — please pick manually.</p>
+          <p className="mt-0.5">
+            Reason: {manual.why}. Choose the NBFC and loan product below; the file goes to that lender as soon as you
+            save.
+          </p>
+          <p className="mt-0.5 text-amber-700">Flagged {new Date(manual.at).toLocaleString("en-IN")}</p>
+        </div>
+      ) : null}
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-sm font-semibold text-slate-800">NBFC scheme</h3>
         {state.locked ? <span className="text-[11px] text-slate-500">File is already with a lender</span> : null}
@@ -82,6 +100,16 @@ export default function SchemePickCard({ leadId }: { leadId: string }) {
             <span className="text-amber-700"> — no longer fits this lead; the routing rules will decide.</span>
           ) : null}
         </p>
+      ) : state.auto_pick ? (
+        <div className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-xs text-emerald-900">
+          <p>
+            <span className="font-semibold">Selected automatically:</span> <b>{state.auto_pick.label}</b>
+          </p>
+          <p className="mt-0.5 text-emerald-800">Why: {state.auto_pick.why}.</p>
+          <p className="mt-0.5 text-emerald-700">
+            Nothing to do — the file goes to this lender when Step 4 opens. Pick below only to choose a different one.
+          </p>
+        </div>
       ) : (
         <p className="mt-1 text-xs text-slate-500">
           No scheme picked — the NBFC routing rules choose the lender when Step 4 opens.

@@ -41,10 +41,18 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   const user = await requireAdminAppUserForLead(leadId);
   if (!user) return NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 });
   try {
-    const [current, options, locked] = await Promise.all([
+    const [current, options, locked, manual, auto] = await Promise.all([
       getLeadSchemePick(leadId),
       listSchemeOptions(leadId),
       withLender(leadId),
+      // 27 Nov — automatic selection failed for this file (once recorded).
+      import("@/lib/leads/nbfc-routing")
+        .then((m) => m.manualSelectionNeeded(leadId))
+        .catch(() => null),
+      // 27 Nov — what the system will choose by itself (rule or best fit).
+      import("@/lib/leads/nbfc-routing")
+        .then((m) => m.resolveRoutingTarget(leadId))
+        .catch(() => null),
     ]);
     const hit = current
       ? options.find((o) => o.nbfcId === current.nbfc_id && o.loanProductId === current.loan_product_id)
@@ -64,6 +72,11 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
         : null,
       options,
       locked,
+      manual_needed: !locked && !current && !(auto && auto.ok) ? manual : null,
+      auto_pick:
+        !locked && !current && auto && auto.ok
+          ? { label: `${auto.nbfcName} — ${auto.productName}`, why: auto.source === "rule" && auto.rule ? `NBFC routing rule #${auto.rule.id} (${auto.scope})` : auto.scope, source: auto.source }
+          : null,
       can_pick: mayPickScheme(user.role) && !locked,
     });
   } catch (e) {

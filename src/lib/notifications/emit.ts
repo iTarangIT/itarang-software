@@ -35,8 +35,15 @@ import {
 import { sendEmail } from "@/lib/email/mailer";
 import { CHILD_DEFAULT_NAV, cleanAllowedNav, isNavAllowed, navIdForPath } from "@/lib/nbfc/portal-nav";
 import { blockedDashboardsFor } from "@/lib/notifications/access";
-import { resolveEmailChannel } from "@/lib/notifications/catalog";
+import { isEmailLocked, linkFor, resolveEmailChannel } from "@/lib/notifications/catalog";
 import { emailOverrideFor } from "@/lib/notifications/email-access";
+import { partyRuleFor, resolveFileParties, type FileParties } from "@/lib/notifications/party-routing";
+import {
+  buildPartyWhatsApp,
+  channelsForPerson,
+  type TypeRule,
+} from "@/lib/notifications/party-routing-rules";
+import { getSessionUser } from "@/lib/nbfc/tenant";
 import { getEmailTransport } from "@/lib/notifications/resolve-channel";
 import {
   buildDealerWhatsAppMessage,
@@ -132,6 +139,9 @@ export interface EmitInput {
   stage?: string | null;
   /** Who raised it. Use `actingParty()` in a request context. */
   from?: Party;
+  /** users.id of the person who did the action. Optional — read from the
+   *  session when omitted; only File action alerts use it. */
+  actorUserId?: string | null;
   to: Recipient[];
   /** Shared payload merged into every row's `data`. */
   data?: Record<string, unknown>;
@@ -371,6 +381,18 @@ export async function emit(input: EmitInput): Promise<void> {
   // Empty (the common case) makes the filter below a no-op.
   const blocked = new Set(await blockedDashboardsFor(type));
 
+  // 27 Nov — Sales Head "File action alerts". When this type has a saved rule,
+  // the six parties of the file (action person, dealer, salesperson, Sales
+  // Head, NBFC partner, NBFC child) get exactly the ticked channels; everyone
+  // else keeps the built-in behaviour. No rule (the default) = no change.
+  const party = await loadPartyContext(type, input.leadId, input.actorUserId);
+  const bellDone = new Set<string>();
+  const mailDone = new Set<string>();
+  const memberChannels = (userId: string) => {
+    const m = party?.parties.members.get(userId);
+    return m && party ? channelsForPerson(party.rule, m.parties) : null;
+  };
+
   for (const recipient of input.to) {
     try {
       const targets = await filterByNbfcMenus(
@@ -402,9 +424,12 @@ export async function emit(input: EmitInput): Promise<void> {
       // Filtering `targets` instead would silence the email too, which is not
       // what "silent in the bell" means — and would let an admin stop an
       // agreement link from a settings screen.
-      const bellTargets = blocked.size
-        ? targets.filter((t) => !blocked.has((t.role ?? "").trim().toLowerCase()))
-        : targets;
+      const bellTargets = targets.filter((t) => {
+        const ch = memberChannels(t.userId);
+        if (ch) return ch.bell; // a party of the file: the Sales Head's tick decides
+        return !blocked.has((t.role ?? "").trim().toLowerCase());
+      });
+      bellTargets.forEach((t) => bellDone.add(t.userId));
 
       if (bellTargets.length > 0) {
         await db.insert(notifications).values(
@@ -433,8 +458,15 @@ export async function emit(input: EmitInput): Promise<void> {
         emailOverride,
         recipient.email ?? input.email,
       );
-      if (sendMail) {
-        await emailTargets(targets, {
+      // A party of the file is emailed only when ticked — except on the
+      // EMAIL_LOCKED types (agreement / consent / sanction links).
+      const mailTargets = targets.filter((t) => {
+        const ch = memberChannels(t.userId);
+        return !ch || ch.email || isEmailLocked(type);
+      });
+      if (sendMail && mailTargets.length > 0) {
+        mailTargets.forEach((t) => mailDone.add(t.userId));
+        await emailTargets(mailTargets, {
           subject: recipient.emailSubject ?? input.emailSubject ?? `[iTarang] ${title}`,
           title,
           message,
@@ -449,6 +481,17 @@ export async function emit(input: EmitInput): Promise<void> {
     }
   }
 
+  if (party) {
+    // Custom rule: the parties' bell / email / WhatsApp come from the ticks,
+    // so the two built-in WhatsApp pushes below are replaced, not doubled.
+    try {
+      await deliverToParties(type, input, from, party, bellDone, mailDone, alreadyNotified);
+    } catch (err) {
+      console.error(`[notify] party routing for ${type} failed:`, err);
+    }
+    return;
+  }
+
   // Pile B items 9–10 — the dealer also hears about NBFC status changes on
   // WhatsApp. Fire-and-forget: never awaited, never throws into the caller.
   void pushDealerWhatsApp(type, input).catch((err) =>
@@ -459,6 +502,151 @@ export async function emit(input: EmitInput): Promise<void> {
   void import("./initiator-whatsapp")
     .then((m) => m.pushInitiatorWhatsApp({ type, title: input.title, message: input.message, leadId: input.leadId }))
     .catch((err) => console.error(`[notify] initiator WhatsApp for ${type} failed:`, err));
+}
+
+interface PartyContext {
+  rule: TypeRule;
+  parties: FileParties;
+  leadId: string;
+}
+
+async function loadPartyContext(
+  type: string,
+  leadId: string | null | undefined,
+  actorUserId?: string | null,
+): Promise<PartyContext | null> {
+  if (!leadId) return null;
+  try {
+    const rule = await partyRuleFor(type);
+    if (!rule) return null;
+    let actorId: string | null = actorUserId ?? null;
+    if (!actorId) {
+      try {
+        actorId = (await getSessionUser())?.id ?? null;
+      } catch {
+        actorId = null; // cron / webhook — no action person
+      }
+    }
+    const parties = await resolveFileParties(leadId, actorId);
+    return parties ? { rule, parties, leadId } : null;
+  } catch (err) {
+    console.error(`[notify] party routing lookup for ${type} failed — built-in behaviour:`, err);
+    return null;
+  }
+}
+
+/** party-routing de-dupe: type|lead|phone → time, so a retried callback doesn't re-send. */
+const recentPartyWa = new Map<string, number>();
+
+async function deliverToParties(
+  type: string,
+  input: EmitInput,
+  from: Party,
+  ctx: PartyContext,
+  bellDone: Set<string>,
+  mailDone: Set<string>,
+  alreadyNotified: Set<string>,
+): Promise<void> {
+  const { rule, parties, leadId } = ctx;
+  const title = input.title;
+  const message = input.message;
+  const waPhones: { phone: string; isDealer: boolean }[] = [];
+
+  for (const m of parties.members.values()) {
+    const ch = channelsForPerson(rule, m.parties);
+    const portal: "dealer" | "nbfc" | "admin" =
+      (m.role ?? "").toLowerCase() === "dealer" ? "dealer" : m.tenantId ? "nbfc" : "admin";
+    const href = linkFor(portal, type, null, leadId);
+
+    // Bell — only for people the built-in fan-out did not already write to.
+    if (ch.bell && !bellDone.has(m.userId) && !alreadyNotified.has(m.userId)) {
+      await db.insert(notifications).values({
+        id: genId(),
+        user_id: m.userId,
+        dealer_id: portal === "dealer" ? m.dealerId : null,
+        lead_id: leadId,
+        type,
+        title,
+        message,
+        data: {
+          ...(input.data ?? {}),
+          from,
+          to: { party: portal === "nbfc" ? "nbfc" : portal, label: m.name ?? "" },
+          stage: input.stage ?? null,
+          href,
+          actions: null,
+          leadId,
+          routedBy: "file_action_alerts",
+        },
+        read: false,
+      });
+      bellDone.add(m.userId);
+    }
+
+    if (ch.email && !mailDone.has(m.userId) && m.email) {
+      await emailTargets([{ userId: m.userId, email: m.email, tenantId: m.tenantId }], {
+        subject: input.emailSubject ?? `[iTarang] ${title}`,
+        title,
+        message,
+        provenance: provenanceLine(from, { party: portal === "nbfc" ? "nbfc" : portal, label: m.name ?? "" }, input.stage),
+        href,
+      });
+      mailDone.add(m.userId);
+    }
+
+    if (ch.whatsapp && m.phone) waPhones.push({ phone: m.phone, isDealer: m.parties.has("dealer") });
+  }
+
+  for (const p of parties.phones) {
+    if (rule[p.party].whatsapp) waPhones.push({ phone: p.phone, isDealer: p.party === "dealer" });
+  }
+
+  const body = buildPartyWhatsApp({
+    title,
+    message,
+    customer: parties.customer,
+    reference: parties.reference,
+    actor: from.actor ?? parties.actorName,
+  });
+  const { sendStaffWhatsApp } = await import("@/lib/whatsapp/staff-notify");
+  const sent = new Set<string>();
+  let dealerResult: boolean | null = null;
+  const now = Date.now();
+  for (const p of waPhones) {
+    const ten = p.phone.replace(/\D/g, "").slice(-10);
+    if (ten.length !== 10 || sent.has(ten)) continue;
+    sent.add(ten);
+    const key = `${type}|${leadId}|${ten}|${title}`;
+    const last = recentPartyWa.get(key);
+    if (last && now - last < DEALER_PUSH_DEDUPE_MS) continue;
+    recentPartyWa.set(key, now);
+    const res = await sendStaffWhatsApp(ten, body, {
+      customer: parties.customer,
+      ref: parties.reference,
+      what: title,
+    });
+    if (p.isDealer) dealerResult = (dealerResult ?? false) || res.ok;
+  }
+  if (recentPartyWa.size > 500) {
+    for (const [k, t] of recentPartyWa) if (now - t >= DEALER_PUSH_DEDUPE_MS) recentPartyWa.delete(k);
+  }
+
+  // Same History-card line the built-in dealer push writes.
+  if (dealerResult !== null && parties.dealerId) {
+    try {
+      const { recordLeadFlowEvent } = await import("@/lib/whatsapp/lead-events");
+      await recordLeadFlowEvent({
+        leadId,
+        dealerCode: parties.dealerId,
+        actorKind: "system",
+        actorLabel: "iTarang",
+        action: "notify",
+        note: `${title}${dealerResult ? "" : " (WhatsApp not delivered)"}`.slice(0, 200),
+      });
+    } catch (err) {
+      console.error(`[notify] flow-event for ${type} lead=${leadId} failed:`, err);
+    }
+  }
 }
 
 /** type|lead|entity → last push time, so a retried callback doesn't re-push. */

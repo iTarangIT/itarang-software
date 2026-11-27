@@ -8,6 +8,8 @@
  * and a blank secret field on save keeps the stored value.
  */
 import { useCallback, useEffect, useState } from "react";
+import { Radio } from "lucide-react";
+import { SectionHeader } from "./SettingsCard";
 
 const KEEP = "__UNCHANGED__";
 
@@ -135,30 +137,30 @@ export default function NotificationChannelsSection() {
 
   if (!cfg) {
     return (
-      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5">
-        <h2 className="text-sm font-bold uppercase tracking-widest text-slate-500">Notification Channels</h2>
+      <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <SectionHeader icon={Radio} tone="teal" title="Sending channels" />
         {error ? <p className="text-xs text-red-600 mt-2">{error}</p> : <p className="text-xs text-slate-400 mt-2">Loading…</p>}
       </section>
     );
   }
 
   const dis = !canEdit || busy;
-  const input = "mt-1 w-full text-sm border border-slate-200 rounded-md px-2 py-1.5";
+  const input = "mt-1 w-full text-sm rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100";
 
   return (
-    <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-5">
-      <div>
-        <h2 className="text-sm font-bold uppercase tracking-widest text-slate-500">Notification Channels</h2>
-        <p className="text-xs text-slate-500 mt-0.5">
-          Connect your own gateways, or leave a channel on iTarang default to use the platform gateway.
-        </p>
-      </div>
+    <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-5">
+      <SectionHeader
+        icon={Radio}
+        tone="teal"
+        title="Sending channels"
+        desc="How messages reach your borrowers and team. Connect your own Email, SMS or WhatsApp account, or leave a channel on the iTarang default."
+      />
       {error && <p className="text-xs text-red-600">{error}</p>}
       {note && <p className="text-xs text-emerald-600">{note}</p>}
 
       {/* Email */}
-      <div className="rounded-lg border border-slate-200 p-4 space-y-3">
-        <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Email</h3>
+      <div className="rounded-xl border border-slate-200 bg-slate-50/40 dark:border-slate-800 dark:bg-slate-800/20 p-5 space-y-3">
+        <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Email</h3>
         <label className="block text-[11px] text-slate-500 font-semibold">
           Notification email
           <input
@@ -196,8 +198,8 @@ export default function NotificationChannelsSection() {
       </div>
 
       {/* SMS */}
-      <div className="rounded-lg border border-slate-200 p-4 space-y-3">
-        <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">SMS</h3>
+      <div className="rounded-xl border border-slate-200 bg-slate-50/40 dark:border-slate-800 dark:bg-slate-800/20 p-5 space-y-3">
+        <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">SMS</h3>
         <div className="grid grid-cols-2 gap-3">
           <label className="text-[11px] text-slate-500 font-semibold">Provider
             <select value={cfg.sms_provider} disabled={dis} onChange={(e) => set("sms_provider", e.target.value as Config["sms_provider"])} className={input}>
@@ -217,8 +219,8 @@ export default function NotificationChannelsSection() {
       </div>
 
       {/* WhatsApp */}
-      <div className="rounded-lg border border-slate-200 p-4 space-y-3">
-        <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">WhatsApp</h3>
+      <div className="rounded-xl border border-slate-200 bg-slate-50/40 dark:border-slate-800 dark:bg-slate-800/20 p-5 space-y-3">
+        <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">WhatsApp</h3>
         <label className="flex items-center gap-2 text-sm font-semibold text-slate-700"><input type="checkbox" checked={cfg.whatsapp_enabled} disabled={dis} onChange={(e) => set("whatsapp_enabled", e.target.checked)} />Enable WhatsApp</label>
         {cfg.whatsapp_enabled && (
           <div className="grid grid-cols-2 gap-3">

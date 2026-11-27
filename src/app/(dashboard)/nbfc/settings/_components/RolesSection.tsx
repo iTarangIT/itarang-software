@@ -8,6 +8,8 @@
  * are assigned (server-enforced).
  */
 import { useCallback, useEffect, useState } from "react";
+import { Plus, ShieldCheck } from "lucide-react";
+import { SectionHeader } from "./SettingsCard";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
 
 type PermDef = { key: string; label: string };
@@ -133,20 +135,19 @@ export default function RolesSection() {
   }
 
   return (
-    <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-4">
-      <div className="flex items-start justify-between">
-        <div>
-          <h2 className="text-sm font-bold uppercase tracking-widest text-slate-500">Roles</h2>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Five built-in roles plus your own custom roles (clone a built-in, then tweak the permissions).
-          </p>
-        </div>
+    <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-4">
+      <SectionHeader
+        icon={ShieldCheck}
+        tone="violet"
+        title="Roles & permissions"
+        desc="Built-in roles, plus your own custom roles — copy a built-in one and adjust what it can do."
+      >
         {canEdit && !draft && (
-          <button onClick={() => startCreate()} className="px-3 py-1.5 rounded-md bg-[color:var(--color-brand-navy)] text-white text-xs font-semibold">
-            New custom role
+          <button onClick={() => startCreate()} className="inline-flex items-center gap-1.5 rounded-lg bg-[color:var(--color-brand-navy)] px-4 py-2 text-sm font-semibold text-white shadow-sm hover:opacity-90">
+            <Plus className="h-4 w-4" /> New custom role
           </button>
         )}
-      </div>
+      </SectionHeader>
 
       {error && <p className="text-xs text-red-600">{error}</p>}
 
@@ -189,11 +190,11 @@ export default function RolesSection() {
           <div className="grid grid-cols-2 gap-3">
             <label className="text-[11px] text-slate-500 font-semibold">
               Role name
-              <input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} className="mt-1 w-full text-sm border border-slate-200 rounded-md px-2 py-1.5 font-normal" />
+              <input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} className="mt-1 w-full text-sm rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100 font-normal" />
             </label>
             <label className="text-[11px] text-slate-500 font-semibold">
               Based on (legacy compatibility)
-              <select value={draft.base_role} onChange={(e) => setDraft({ ...draft, base_role: e.target.value })} disabled={!!draft.id} className="mt-1 w-full text-sm border border-slate-200 rounded-md px-2 py-1.5 font-normal disabled:bg-slate-100">
+              <select value={draft.base_role} onChange={(e) => setDraft({ ...draft, base_role: e.target.value })} disabled={!!draft.id} className="mt-1 w-full text-sm rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100 font-normal disabled:bg-slate-100">
                 {systemRoles.map((r) => (
                   <option key={r.key} value={r.key}>{r.label}</option>
                 ))}
@@ -202,7 +203,7 @@ export default function RolesSection() {
           </div>
           <label className="text-[11px] text-slate-500 font-semibold block">
             Description (optional)
-            <input value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} className="mt-1 w-full text-sm border border-slate-200 rounded-md px-2 py-1.5 font-normal" />
+            <input value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} className="mt-1 w-full text-sm rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100 font-normal" />
           </label>
 
           <div className="space-y-3">
