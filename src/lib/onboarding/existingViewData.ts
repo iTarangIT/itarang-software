@@ -8,7 +8,6 @@ import type { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { dealerOnboardingApplications, dealerOnboardingDocuments } from "@/lib/db/schema";
 import { documentLabel } from "@/lib/onboarding/correction-catalog";
-import { boundApplication } from "@/lib/onboarding/docBinding";
 import { checkViewAccess, EXISTING_VIEW_COOKIE, maskTail, type ViewAccess } from "@/lib/onboarding/existingView";
 import { ONBOARDING_LINK_BUCKETS } from "@/lib/storage/fileAccess";
 import { contentTypeForName, readBucketObject } from "@/lib/storage/readStoredDocument";
@@ -18,7 +17,6 @@ type CookieJar = { get(name: string): { value: string } | undefined };
 export function viewAccessFor(token: string, cookies: CookieJar): ViewAccess {
     return checkViewAccess({
         token,
-        boundApplication: boundApplication(cookies),
         cookieNonce: cookies.get(EXISTING_VIEW_COOKIE)?.value ?? null,
     });
 }

@@ -431,6 +431,26 @@ function getPrimaryContact(
   };
 }
 
+// 27 Nov: open the view-only page of the application already on file
+// (15 minutes, this browser only, no download — lib/onboarding/existingView.ts).
+function ExistingViewLink({ url }: { url: string }) {
+  return (
+    <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#D6E6F5] bg-white px-4 py-3">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
+        <span className="inline-flex items-center gap-1"><Lock className="h-3.5 w-3.5" /> View only, no download</span>
+        <span className="inline-flex items-center gap-1"><Clock3 className="h-3.5 w-3.5" /> Link valid 15 min, this browser only</span>
+      </div>
+      <button
+        type="button"
+        onClick={() => window.open(url, "_blank", "noopener")}
+        className="inline-flex items-center gap-2 rounded-xl bg-[#1F5C8F] px-4 py-2 text-sm font-semibold text-white shadow-md shadow-[#1F5C8F]/20 transition hover:bg-[#173F63]"
+      >
+        <Eye className="h-4 w-4" /> View existing application <ArrowUpRight className="h-4 w-4" />
+      </button>
+    </div>
+  );
+}
+
 export default function StepReview() {
   const supabase = createClient();
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -780,6 +800,12 @@ export default function StepReview() {
 
       // ID 129: an application already exists for these details. Ask the
       // server to mail the code and show the box to enter it.
+      // 27 Nov: the application already on file can be VIEWED straight away
+      // (view only, 15 minutes, this browser); changing it still needs the code.
+      if (response.status === 409 && result.viewUrl) {
+        setExistingView({ url: result.viewUrl, status: String(result.existingStatus || "draft") });
+      }
+
       if (response.status === 409 && result.code === "verify_required") {
         resumeTokenRef.current = null;
         await requestResumeCode();
@@ -1427,12 +1453,16 @@ export default function StepReview() {
                   An application already exists for these details
                 </p>
                 <p className="mt-1 text-sm text-slate-600">
-                  {resume.sentTo
-                    ? `Enter the 6-digit code we sent to ${resume.sentTo} to view the application on file and continue it.`
-                    : "Enter the 6-digit code sent to the owner's registered mobile number to view the application on file and continue it."}
+                  You can view the application on file now. To continue or change it, enter the code below.
                 </p>
               </div>
             </div>
+            {existingView && <ExistingViewLink url={existingView.url} />}
+            <p className="mt-4 border-t border-[#E3EDF7] pt-4 text-sm text-slate-600">
+              {resume.sentTo
+                ? `To continue it, enter the 6-digit code we sent to ${resume.sentTo}.`
+                : "To continue it, enter the 6-digit code sent to the owner's registered mobile number."}
+            </p>
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <input
                 value={resume.code}
@@ -1463,6 +1493,14 @@ export default function StepReview() {
               </button>
             </div>
             {resume.error && <p className="mt-2 text-sm text-red-600">{resume.error}</p>}
+          </div>
+        )}
+
+        {/* Already submitted / locked: nothing to continue, but it can be viewed. */}
+        {existingView && !resume && !resumeVerified && (
+          <div className="rounded-2xl border border-[#D6E6F5] bg-gradient-to-br from-[#F3F8FD] to-white p-5 shadow-sm">
+            <p className="text-sm font-semibold text-[#173F63]">An application already exists for these details</p>
+            <ExistingViewLink url={existingView.url} />
           </div>
         )}
 

@@ -1,16 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { boundApplication } from "@/lib/onboarding/docBinding";
-import { readViewToken, signViewToken, viewCookie, viewPath } from "@/lib/onboarding/existingView";
+import {
+  canRenewView,
+  EXISTING_VIEW_COOKIE,
+  readViewToken,
+  signViewToken,
+  viewCookie,
+  viewPath,
+} from "@/lib/onboarding/existingView";
 
 /**
  * POST /api/dealer/onboarding/existing/renew   { token }
  *
  * The 15 minutes of a view-only link ran out: a NEW link, for the same
- * application, in the same browser — only while this browser's code check is
- * still good (the 30-minute resume cookie, docBinding.ts). The new nonce
- * replaces the cookie, so the old URL stops working. Past that, the dealer
- * enters a fresh mobile code (resume/send-otp + verify-otp).
+ * application, in the same browser — only the browser holding that link's
+ * nonce cookie (2 hours). The new nonce replaces the cookie, so the old URL
+ * stops working. Anywhere else, the person presses Submit on the form again.
  */
 
 export const runtime = "nodejs";
@@ -18,12 +23,15 @@ export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
   const body = (await req.json().catch(() => null)) as { token?: unknown } | null;
-  const view = readViewToken(typeof body?.token === "string" ? body.token : null);
-  if (!view) return NextResponse.json({ success: false, message: "This link is not valid." }, { status: 400 });
+  const token = typeof body?.token === "string" ? body.token : null;
+  if (!readViewToken(token)) {
+    return NextResponse.json({ success: false, message: "This link is not valid." }, { status: 400 });
+  }
 
-  if (boundApplication(req.cookies) !== view.applicationId) {
+  const view = canRenewView(token, req.cookies.get(EXISTING_VIEW_COOKIE)?.value);
+  if (!view) {
     return NextResponse.json(
-      { success: false, codeRequired: true, message: "Enter the code we send to the registered mobile to open a new link." },
+      { success: false, formRequired: true, message: "Go back to the onboarding form and press Submit again to open a new link." },
       { status: 401 },
     );
   }
