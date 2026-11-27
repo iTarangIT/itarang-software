@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { and, desc, eq, inArray, ne, or, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db/index";
+import { DB_BUSY_MESSAGE, isDbConnectFailure } from "@/lib/db/connectFailure";
 import {
   auditLogs,
   dealerOnboardingApplications,
@@ -967,6 +968,16 @@ export async function POST(req: NextRequest) {
   } catch (error: any) {
     console.error("DEALER ONBOARDING SUBMIT ERROR:", error);
     console.error("CAUSE:", error?.cause);
+
+    // The DB connection never opened, so nothing was written (the post-commit
+    // helpers above never throw). Say so plainly — never the driver text,
+    // which carries the RDS hostname — and let the form retry on its own.
+    if (isDbConnectFailure(error)) {
+      return NextResponse.json(
+        { success: false, retryable: true, message: DB_BUSY_MESSAGE },
+        { status: 503 },
+      );
+    }
 
     const causeMessage =
       error?.cause instanceof Error ? error.cause.message : undefined;
