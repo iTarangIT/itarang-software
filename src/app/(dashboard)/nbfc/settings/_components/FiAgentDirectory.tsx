@@ -203,11 +203,11 @@ export default function FiAgentDirectory({ canEdit }: { canEdit: boolean }) {
                   {canEdit && editingId === a.id && (
                     <div className="mt-2 ml-10 space-y-2">
                       <div className="grid grid-cols-2 gap-2">
-                        <input value={editDraft.name} onChange={(e) => setEditDraft({ ...editDraft, name: e.target.value })} placeholder="Name *" className="text-xs border border-slate-300 rounded px-2 py-1" />
-                        <input value={editDraft.phone} onChange={(e) => setEditDraft({ ...editDraft, phone: e.target.value })} placeholder="Phone *" className="text-xs border border-slate-300 rounded px-2 py-1" />
-                        <input value={editDraft.email} onChange={(e) => setEditDraft({ ...editDraft, email: e.target.value })} placeholder="Email" className="text-xs border border-slate-300 rounded px-2 py-1" />
-                        <input value={editDraft.city} onChange={(e) => setEditDraft({ ...editDraft, city: e.target.value })} placeholder="City" className="text-xs border border-slate-300 rounded px-2 py-1" />
-                        <select value={editDraft.preferred_channel} onChange={(e) => setEditDraft({ ...editDraft, preferred_channel: e.target.value as typeof editDraft.preferred_channel })} className="text-xs border border-slate-300 rounded px-2 py-1">
+                        <input value={editDraft.name} onChange={(e) => setEditDraft({ ...editDraft, name: e.target.value })} placeholder="Name *" className="text-xs rounded-lg border border-slate-300 bg-white px-3 py-1.5 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100" />
+                        <input value={editDraft.phone} onChange={(e) => setEditDraft({ ...editDraft, phone: e.target.value })} placeholder="Phone *" className="text-xs rounded-lg border border-slate-300 bg-white px-3 py-1.5 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100" />
+                        <input value={editDraft.email} onChange={(e) => setEditDraft({ ...editDraft, email: e.target.value })} placeholder="Email" className="text-xs rounded-lg border border-slate-300 bg-white px-3 py-1.5 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100" />
+                        <input value={editDraft.city} onChange={(e) => setEditDraft({ ...editDraft, city: e.target.value })} placeholder="City" className="text-xs rounded-lg border border-slate-300 bg-white px-3 py-1.5 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100" />
+                        <select value={editDraft.preferred_channel} onChange={(e) => setEditDraft({ ...editDraft, preferred_channel: e.target.value as typeof editDraft.preferred_channel })} className="text-xs rounded-lg border border-slate-300 bg-white px-3 py-1.5 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100">
                           <option value="email">Email</option>
                           <option value="sms">SMS</option>
                           <option value="whatsapp">WhatsApp</option>
@@ -231,18 +231,18 @@ export default function FiAgentDirectory({ canEdit }: { canEdit: boolean }) {
           {/* Add */}
           {canEdit && (
             <div className="border-t border-slate-200 dark:border-slate-700 pt-2 space-y-2">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Add agent</p>
+              <p className="text-xs font-medium text-slate-600 dark:text-slate-300">Add agent</p>
               <div className="grid grid-cols-2 gap-2">
-                <input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="Name *" className="text-xs border border-slate-300 rounded px-2 py-1" />
-                <input value={draft.phone} onChange={(e) => setDraft({ ...draft, phone: e.target.value })} placeholder="Phone *" className="text-xs border border-slate-300 rounded px-2 py-1" />
-                <input value={draft.email} onChange={(e) => setDraft({ ...draft, email: e.target.value })} placeholder="Email" className="text-xs border border-slate-300 rounded px-2 py-1" />
-                <input value={draft.city} onChange={(e) => setDraft({ ...draft, city: e.target.value })} placeholder="City" className="text-xs border border-slate-300 rounded px-2 py-1" />
-                <select value={draft.preferred_channel} onChange={(e) => setDraft({ ...draft, preferred_channel: e.target.value as typeof draft.preferred_channel })} className="text-xs border border-slate-300 rounded px-2 py-1">
+                <input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="Name *" className="text-xs rounded-lg border border-slate-300 bg-white px-3 py-1.5 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100" />
+                <input value={draft.phone} onChange={(e) => setDraft({ ...draft, phone: e.target.value })} placeholder="Phone *" className="text-xs rounded-lg border border-slate-300 bg-white px-3 py-1.5 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100" />
+                <input value={draft.email} onChange={(e) => setDraft({ ...draft, email: e.target.value })} placeholder="Email" className="text-xs rounded-lg border border-slate-300 bg-white px-3 py-1.5 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100" />
+                <input value={draft.city} onChange={(e) => setDraft({ ...draft, city: e.target.value })} placeholder="City" className="text-xs rounded-lg border border-slate-300 bg-white px-3 py-1.5 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100" />
+                <select value={draft.preferred_channel} onChange={(e) => setDraft({ ...draft, preferred_channel: e.target.value as typeof draft.preferred_channel })} className="text-xs rounded-lg border border-slate-300 bg-white px-3 py-1.5 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100">
                   <option value="email">Email</option>
                   <option value="sms">SMS</option>
                   <option value="whatsapp">WhatsApp</option>
                 </select>
-                <label className="text-xs border border-slate-300 rounded px-2 py-1 cursor-pointer text-slate-600 flex items-center">
+                <label className="text-xs rounded-lg border border-slate-300 bg-white px-3 py-1.5 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100 cursor-pointer text-slate-600 flex items-center">
                   {uploading ? "Uploading…" : draft.reference_photo_url ? "Reference ✓" : "Reference photo"}
                   <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={(e) => e.target.files?.[0] && uploadRef(e.target.files[0])} />
                 </label>

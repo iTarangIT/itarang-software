@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { UserCheck } from "lucide-react";
+import { SectionHeader } from "./SettingsCard";
 import {
   NBFC_OWNER_STEPS,
   NBFC_STEP_LABELS,
@@ -109,20 +111,19 @@ export default function StepOwnersSection({ members, initialOwners, canEdit }: P
   }
 
   return (
-    <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-4">
-      <div>
-        <h2 className="text-sm font-bold uppercase tracking-widest text-slate-500">Step owners</h2>
-        <p className="text-xs text-slate-500 mt-0.5">
-          Who is notified and accountable per step. Leave the city blank for the default owner; add a
-          city to override it for that location. Any user with the role may still act.
-        </p>
-      </div>
+    <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-4">
+      <SectionHeader
+        icon={UserCheck}
+        tone="emerald"
+        title="Step owners"
+        desc="Who gets notified and is responsible for each loan step. Leave the city blank for the default owner, or add a city to set a different owner there. Anyone with the right role can still act."
+      />
 
       {rows.length === 0 ? (
         <p className="text-sm text-slate-500 italic">No step owners configured.</p>
       ) : (
         <table className="w-full text-sm">
-          <thead className="bg-slate-50 dark:bg-slate-800/50 text-xs uppercase tracking-widest text-slate-500">
+          <thead className="bg-slate-50 dark:bg-slate-800/50 text-xs text-slate-500">
             <tr>
               <th className="px-3 py-2 text-left font-bold">Step</th>
               <th className="px-3 py-2 text-left font-bold">City (blank = default)</th>
@@ -138,7 +139,7 @@ export default function StepOwnersSection({ members, initialOwners, canEdit }: P
                     value={r.step}
                     disabled={!canEdit || busy}
                     onChange={(e) => update(r._k, { step: e.target.value as NbfcOwnerStep })}
-                    className="border border-slate-300 rounded px-2 py-1 text-sm"
+                    className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100 text-sm"
                   >
                     {NBFC_OWNER_STEPS.map((s) => (
                       <option key={s} value={s}>
@@ -154,7 +155,7 @@ export default function StepOwnersSection({ members, initialOwners, canEdit }: P
                     placeholder="(default)"
                     disabled={!canEdit || busy}
                     onChange={(e) => update(r._k, { city: e.target.value || null })}
-                    className="border border-slate-300 rounded px-2 py-1 text-sm w-40"
+                    className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100 text-sm w-40"
                   />
                 </td>
                 <td className="px-3 py-2">
@@ -163,7 +164,7 @@ export default function StepOwnersSection({ members, initialOwners, canEdit }: P
                       value={r.user_id}
                       disabled={busy}
                       onChange={(e) => update(r._k, { user_id: e.target.value })}
-                      className="border border-slate-300 rounded px-2 py-1 text-sm"
+                      className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100 text-sm"
                     >
                       {members.map((m) => (
                         <option key={m.user_id} value={m.user_id}>
@@ -193,7 +194,7 @@ export default function StepOwnersSection({ members, initialOwners, canEdit }: P
       )}
 
       {error ? (
-        <div className="px-3 py-2 bg-red-50 text-red-700 text-xs rounded">{error}</div>
+        <div className="px-4 py-2.5 bg-red-50 text-red-700 text-sm rounded-lg">{error}</div>
       ) : null}
 
       {canEdit ? (
@@ -212,7 +213,7 @@ export default function StepOwnersSection({ members, initialOwners, canEdit }: P
             <button
               onClick={save}
               disabled={busy}
-              className="px-4 py-1.5 text-sm font-bold rounded bg-[color:var(--color-brand-navy)] text-white disabled:opacity-50"
+              className="px-5 py-2 text-sm font-semibold rounded-lg shadow-sm hover:opacity-90 bg-[color:var(--color-brand-navy)] text-white disabled:opacity-50"
             >
               {busy ? "Saving…" : "Save owners"}
             </button>

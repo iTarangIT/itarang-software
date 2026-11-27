@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { Info, Layers } from "lucide-react";
+import { SectionHeader } from "./SettingsCard";
 
 import FiAgentDirectory from "./FiAgentDirectory";
 import EsignCredentialsPanel from "./EsignCredentialsPanel";
@@ -138,18 +140,20 @@ export default function ServiceOptInSection({ initialConfig, canEdit, callbackBa
   const isManagedRzp = cfg.enach_handoff_method === "itarang_razorpay";
  
   return (
-    <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-5">
-      <div>
-        <h2 className="text-sm font-bold uppercase tracking-widest text-slate-500">
-          Service Opt-In
-        </h2>
-        <p className="text-xs text-slate-500 mt-0.5">
-          Choose which verification steps run through iTarang for this NBFC. Opting out means you
-          perform that step off-platform — the matching step in your Acquire workspace is shown as{" "}
-          <strong>Skipped</strong> and locked, with no actions available. These switches apply{" "}
-          <strong>immediately, to every lead</strong> including ones already in flight; switching a
-          service back on re-opens its step. The configuration underneath each switch (VKYC mode,
-          E-NACH handoff, storage, Track Rules) stays frozen per lead at the moment it bound to you.
+    <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-5">
+      <SectionHeader
+        icon={Layers}
+        tone="indigo"
+        title="Verification services"
+        desc="Turn on the checks you want iTarang to run for you. A service that is off is done by you outside iTarang — its step shows as Skipped in Acquire."
+      />
+      <div className="flex gap-2.5 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-relaxed text-amber-900">
+        <Info className="mt-0.5 h-4 w-4 shrink-0" />
+        <p>
+          On/off switches apply <strong>immediately to every lead</strong>, including ones already in
+          progress — switching a service back on re-opens its step. The detailed settings under each
+          switch (VKYC mode, E-NACH handoff, storage, track rules) stay fixed per lead from the moment
+          it reached you.
         </p>
       </div>
 
@@ -168,7 +172,7 @@ export default function ServiceOptInSection({ initialConfig, canEdit, callbackBa
 
             {/* FI form + review parameters (§10.7/§10.8.2) */}
             <div className="space-y-2">
-              <span className="block text-[10px] font-bold uppercase tracking-widest text-slate-500">FI configuration</span>
+              <span className="block text-xs font-medium text-slate-600 dark:text-slate-300">FI configuration</span>
               <label className="flex items-center gap-2 text-xs text-slate-700">
                 <span className="w-40">Re-inspection cap</span>
                 <input
@@ -179,7 +183,7 @@ export default function ServiceOptInSection({ initialConfig, canEdit, callbackBa
                   placeholder="Unlimited"
                   disabled={!canEdit || busy}
                   onChange={(e) => setFi("reinspection_cap", e.target.value === "" ? null : Number(e.target.value))}
-                  className="w-28 border border-slate-300 rounded px-2 py-1 text-xs"
+                  className="w-28 rounded-lg border border-slate-300 bg-white px-3 py-1.5 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100 text-xs"
                 />
                 <span className="text-[10px] text-slate-400">blank = unlimited</span>
               </label>
@@ -282,7 +286,7 @@ export default function ServiceOptInSection({ initialConfig, canEdit, callbackBa
             ) : null}
             {isManagedRzp ? (
               <div>
-                <span className="block text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">
+                <span className="block text-xs font-medium text-slate-600 dark:text-slate-300 mb-1">
                   Razorpay webhook URL (read-only)
                 </span>
                 <code className="block text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1 break-all">
@@ -297,7 +301,7 @@ export default function ServiceOptInSection({ initialConfig, canEdit, callbackBa
               </div>
             ) : (
               <div>
-                <span className="block text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">
+                <span className="block text-xs font-medium text-slate-600 dark:text-slate-300 mb-1">
                   Result callback URL (read-only)
                 </span>
                 <code className="block text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1 break-all">
@@ -314,7 +318,7 @@ export default function ServiceOptInSection({ initialConfig, canEdit, callbackBa
 
       {/* Document Handling */}
       <div className="border-t border-slate-200 dark:border-slate-800 pt-4 space-y-3">
-        <h3 className="text-xs font-bold uppercase tracking-widest text-slate-500">
+        <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">
           Document Handling
         </h3>
         {/* A null method is the explicit opt-OUT: the agreement rail never runs
@@ -388,7 +392,7 @@ export default function ServiceOptInSection({ initialConfig, canEdit, callbackBa
 
       {/* Track Rules */}
       <div className="border-t border-slate-200 dark:border-slate-800 pt-4 space-y-3">
-        <h3 className="text-xs font-bold uppercase tracking-widest text-slate-500">Track Rules</h3>
+        <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Track Rules</h3>
         <Toggle
           label="All verification tracks must complete before financing conditions"
           desc="Completion gate."
@@ -406,7 +410,7 @@ export default function ServiceOptInSection({ initialConfig, canEdit, callbackBa
       </div>
 
       {error ? (
-        <div className="px-3 py-2 bg-red-50 text-red-700 text-xs rounded">{error}</div>
+        <div className="px-4 py-2.5 bg-red-50 text-red-700 text-sm rounded-lg">{error}</div>
       ) : null}
 
       {canEdit ? (
@@ -417,7 +421,7 @@ export default function ServiceOptInSection({ initialConfig, canEdit, callbackBa
           <button
             onClick={save}
             disabled={busy}
-            className="px-4 py-1.5 text-sm font-bold rounded bg-[color:var(--color-brand-navy)] text-white disabled:opacity-50"
+            className="px-5 py-2 text-sm font-semibold rounded-lg shadow-sm hover:opacity-90 bg-[color:var(--color-brand-navy)] text-white disabled:opacity-50"
           >
             {busy ? "Saving…" : "Save configuration"}
           </button>
@@ -447,18 +451,31 @@ function Toggle({
   children?: React.ReactNode;
 }) {
   return (
-    <div>
-      <label className="flex items-start gap-3 cursor-pointer">
-        <input
-          type="checkbox"
-          checked={checked}
-          disabled={disabled}
-          onChange={(e) => onChange(e.target.checked)}
-          className="mt-0.5"
-        />
+    <div
+      className={`rounded-xl border px-4 py-3.5 transition ${
+        checked
+          ? "border-sky-200 bg-sky-50/40 dark:border-sky-900 dark:bg-sky-900/10"
+          : "border-slate-200 dark:border-slate-800"
+      }`}
+    >
+      <label
+        className={`flex items-start justify-between gap-4 ${disabled ? "cursor-not-allowed" : "cursor-pointer"}`}
+      >
         <span>
-          <span className="text-sm font-medium">{label}</span>
-          {desc ? <span className="block text-xs text-slate-500">{desc}</span> : null}
+          <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">{label}</span>
+          {desc ? <span className="mt-0.5 block text-xs text-slate-500">{desc}</span> : null}
+        </span>
+        <span className="relative mt-0.5 inline-flex shrink-0 items-center">
+          <input
+            type="checkbox"
+            role="switch"
+            checked={checked}
+            disabled={disabled}
+            onChange={(e) => onChange(e.target.checked)}
+            className="peer sr-only"
+          />
+          <span className="h-6 w-11 rounded-full bg-slate-300 transition peer-checked:bg-emerald-500 peer-focus-visible:ring-2 peer-focus-visible:ring-sky-300 peer-disabled:opacity-60" />
+          <span className="pointer-events-none absolute left-0.5 h-5 w-5 rounded-full bg-white shadow transition peer-checked:translate-x-5" />
         </span>
       </label>
       {children}
@@ -491,7 +508,7 @@ function Radio({
 }) {
   return (
     <fieldset>
-      <legend className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">
+      <legend className="text-xs font-medium text-slate-600 dark:text-slate-300 mb-1">
         {legend}
       </legend>
       <div className="space-y-1.5">
@@ -521,7 +538,7 @@ function Radio({
 function ReadOnlyField({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
     <div>
-      <span className="block text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">
+      <span className="block text-xs font-medium text-slate-600 dark:text-slate-300 mb-1">
         {label}
       </span>
       <code className="block text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1 break-all">
@@ -547,7 +564,7 @@ function LabelledInput({
 }) {
   return (
     <div>
-      <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">
+      <label className="block text-xs font-medium text-slate-600 dark:text-slate-300 mb-1">
         {label}
       </label>
       <input
@@ -556,7 +573,7 @@ function LabelledInput({
         placeholder={placeholder}
         disabled={disabled}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full border border-slate-300 rounded px-2 py-1 text-sm"
+        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100 text-sm"
       />
     </div>
   );
