@@ -13,10 +13,13 @@ type Conv = {
   last_message_at: string | null;
   last_inbound_at: string | null;
   last_body: string | null;
+  meeting?: boolean;
+  meeting_hint?: boolean;
   prospect: { id: string; full_name: string | null; headline: string | null; company: string | null; public_url: string; do_not_contact: boolean } | null;
 };
 type Thread = {
   conversation: Conv;
+  meeting: { meeting: boolean; hint: boolean };
   prospect: { full_name: string | null; headline: string | null; company: string | null; public_url: string; do_not_contact: boolean; lead_id: string | null } | null;
   messages: { id: string; direction: string; body: string | null; attachment_name: string | null; sent_at: string; seen_at: string | null }[];
   outbox: { id: string; body: string; status: string; error: string | null; created_at: string }[];
@@ -51,10 +54,12 @@ export function InboxView() {
     if (!openId) return;
     setBusy("draft");
     try {
-      const r = await liFetch<{ draft: string; sentiment: string | null }>(`/api/linkedin/inbox/${openId}/draft`, { method: "POST" });
+      const r = await liFetch<{ draft: string; sentiment: string | null; meeting_hint?: boolean }>(`/api/linkedin/inbox/${openId}/draft`, {
+        method: "POST",
+      });
       setReply(r.draft);
       toast.success("Draft ready — edit it, then press Send");
-      await qc.invalidateQueries({ queryKey: ["li-inbox"] });
+      await Promise.all([qc.invalidateQueries({ queryKey: ["li-inbox"] }), r.meeting_hint ? thread.refetch() : null]);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "No draft");
     } finally {
@@ -73,6 +78,21 @@ export function InboxView() {
       await thread.refetch();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Send failed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /** E-398: the Meetings KPI counts this button only — never the AI hint. */
+  async function meeting(body: { meeting: boolean } | { dismiss_hint: true }) {
+    if (!openId) return;
+    setBusy("meeting");
+    try {
+      await liFetch(`/api/linkedin/inbox/${openId}/meeting`, { method: "POST", ...json(body) });
+      if ("meeting" in body) toast.success(body.meeting ? "Meeting scheduled — counted on Analytics" : "Meeting cleared");
+      await Promise.all([thread.refetch(), qc.invalidateQueries({ queryKey: ["li-inbox"] })]);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed");
     } finally {
       setBusy(null);
     }
@@ -121,7 +141,11 @@ export function InboxView() {
                   <span className={`truncate text-sm ${c.unread ? "font-semibold text-gray-900" : "text-gray-800"}`}>
                     {c.prospect?.full_name ?? "Unknown"}
                   </span>
-                  {c.sentiment && <span className={`rounded-full px-1.5 text-[10px] ${SENTIMENT_TONE[c.sentiment] ?? ""}`}>{c.sentiment}</span>}
+                  <span className="flex shrink-0 gap-1">
+                    {c.meeting && <span className="rounded-full bg-indigo-50 px-1.5 text-[10px] text-indigo-700">meeting</span>}
+                    {!c.meeting && c.meeting_hint && <span className="rounded-full bg-amber-50 px-1.5 text-[10px] text-amber-700">meeting?</span>}
+                    {c.sentiment && <span className={`rounded-full px-1.5 text-[10px] ${SENTIMENT_TONE[c.sentiment] ?? ""}`}>{c.sentiment}</span>}
+                  </span>
                 </div>
                 <div className="truncate text-xs text-gray-500">{c.last_body ?? ""}</div>
                 <div className="text-[10px] text-gray-400">{fmtDate(c.last_message_at)}</div>
@@ -150,14 +174,45 @@ export function InboxView() {
                   {t.prospect?.lead_id && <> · CRM lead {t.prospect.lead_id}</>}
                 </div>
               </div>
-              {t.prospect && !t.prospect.do_not_contact ? (
-                <button disabled={!!busy} onClick={stop} className="rounded-md border border-red-300 px-3 py-1 text-xs text-red-700">
-                  Stop contacting
-                </button>
-              ) : (
-                <span className="text-xs text-red-600">Do not contact</span>
-              )}
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                {t.meeting.meeting ? (
+                  <button
+                    disabled={!!busy}
+                    onClick={() => meeting({ meeting: false })}
+                    className="rounded-md border border-indigo-300 bg-indigo-50 px-3 py-1 text-xs font-medium text-indigo-700"
+                    title="Click to clear"
+                  >
+                    ✓ Meeting scheduled
+                  </button>
+                ) : (
+                  <button
+                    disabled={!!busy}
+                    onClick={() => meeting({ meeting: true })}
+                    className="rounded-md border border-indigo-300 px-3 py-1 text-xs text-indigo-700 hover:bg-indigo-50"
+                  >
+                    Mark meeting scheduled
+                  </button>
+                )}
+                {t.prospect && !t.prospect.do_not_contact ? (
+                  <button disabled={!!busy} onClick={stop} className="rounded-md border border-red-300 px-3 py-1 text-xs text-red-700">
+                    Stop contacting
+                  </button>
+                ) : (
+                  <span className="text-xs text-red-600">Do not contact</span>
+                )}
+              </div>
             </div>
+            {t.meeting.hint && !t.meeting.meeting && (
+              <div className="flex flex-wrap items-center gap-2 border-b border-amber-100 bg-amber-50 px-4 py-2 text-xs text-amber-800">
+                Looks like a call or meeting was agreed in this chat. Mark it so it counts on Analytics?
+                <button disabled={!!busy} onClick={() => meeting({ meeting: true })} className="rounded border border-amber-300 bg-white px-2 py-0.5 font-medium">
+                  Yes, mark it
+                </button>
+                <button disabled={!!busy} onClick={() => meeting({ dismiss_hint: true })} className="underline">
+                  Not a meeting
+                </button>
+              </div>
+            )}
             <div className="flex-1 space-y-2 overflow-y-auto px-4 py-3">
               {t.messages.map((m) => (
                 <div key={m.id} className={`flex ${m.direction === "out" ? "justify-end" : "justify-start"}`}>

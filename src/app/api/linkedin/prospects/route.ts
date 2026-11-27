@@ -15,6 +15,7 @@ export const GET = withErrorHandler(async (req: Request) => {
       state: sp.get("state") || null,
       company: sp.get("company") || null,
       city: sp.get("city") || null,
+      title: sp.get("title") || null,
       q: sp.get("q") || null,
       page: Number(sp.get("page") || 1),
       pageSize: Number(sp.get("pageSize") || 50),

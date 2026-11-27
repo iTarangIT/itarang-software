@@ -250,7 +250,7 @@ describe("agent output parsing", () => {
     expect(s).toEqual([{ id: "a", score: 100, reason: "great fit" }]);
   });
   it("validates a draft", () => {
-    expect(parseDraft({ draft: "Thanks!", sentiment: "Positive" })).toEqual({ draft: "Thanks!", sentiment: "positive" });
+    expect(parseDraft({ draft: "Thanks!", sentiment: "Positive" })).toEqual({ draft: "Thanks!", sentiment: "positive", meeting: false });
     expect(parseDraft({ draft: "" })).toBeNull();
   });
 });

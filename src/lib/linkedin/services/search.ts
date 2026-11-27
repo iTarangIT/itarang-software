@@ -17,8 +17,37 @@ import { searchProvider } from "../providers";
 import type { ProfileRecord } from "../providers/search/types";
 import { logAction } from "./actionLog";
 import { contactedMap, stripRaw, upsertProfiles } from "./prospects";
+import { matchesFilters } from "./searchFilter";
 
-export type SearchFilters = { location?: string | null; company?: string | null; limit?: number };
+export type SearchFilters = {
+  location?: string | null; // legacy free-text city / region
+  company?: string | null;
+  country?: string | null;
+  state?: string | null;
+  city?: string | null;
+  title?: string | null;
+  industry?: string | null;
+  exclude?: string | null;
+  match?: "broad" | "strict" | null;
+  limit?: number;
+};
+
+/** "Pune · Strict · title: Fleet Manager" — the narrowing as one line, for scoring and the run list. */
+export function describeFilters(f: SearchFilters): string {
+  const bits: string[] = [];
+  const add = (label: string, v: string | null | undefined) => {
+    if (v && v.trim()) bits.push(`${label}: ${v.trim()}`);
+  };
+  add("title", f.title);
+  add("company", f.company);
+  add("industry", f.industry);
+  add("city", f.city || f.location);
+  add("state", f.state);
+  add("country", f.country);
+  add("exclude", f.exclude);
+  if (f.match === "strict") bits.push("strict match");
+  return bits.join(" · ");
+}
 
 export async function createSearchRun(args: {
   keywords: string;
@@ -54,6 +83,13 @@ export async function startSearchRun(runId: string): Promise<void> {
       keywords: claimed.keywords,
       location: filters.location,
       company: filters.company,
+      country: filters.country,
+      state: filters.state,
+      city: filters.city,
+      title: filters.title,
+      industry: filters.industry,
+      exclude: filters.exclude,
+      match: filters.match,
       limit: filters.limit ?? 25,
       webhookUrl: `${crmBaseUrl()}/api/webhooks/linkedin/search?run=${claimed.id}`,
       webhookSecret: secret,
@@ -74,9 +110,28 @@ export async function startSearchRun(runId: string): Promise<void> {
   }
 }
 
-/** Save records against a run, then score the run's unscored prospects. Idempotent. */
+/**
+ * Save records against a run, then score the run's unscored prospects. Idempotent.
+ * Records that fail the run's filters (strict match / exclude words) are still
+ * saved as prospects (so enrichment is not wasted) but are not shown on the
+ * run — and a row linked earlier from the thinner discovery data is unlinked
+ * once enrichment shows it does not match.
+ */
 export async function ingestResults(runId: string, records: ProfileRecord[], opts: { finish?: boolean } = {}) {
-  const ids = await upsertProfiles(records, "brightdata");
+  const [run] = await db.select({ filters: liSearchRuns.filters }).from(liSearchRuns).where(eq(liSearchRuns.id, runId)).limit(1);
+  const filters = (run?.filters ?? {}) as SearchFilters;
+  const keep: ProfileRecord[] = [];
+  const drop: ProfileRecord[] = [];
+  for (const r of records) (matchesFilters(r, filters).ok ? keep : drop).push(r);
+  if (drop.length) {
+    const dropIds = await upsertProfiles(drop, "brightdata");
+    if (dropIds.length) {
+      await db
+        .delete(liSearchResults)
+        .where(and(eq(liSearchResults.run_id, runId), inArray(liSearchResults.prospect_id, dropIds)));
+    }
+  }
+  const ids = await upsertProfiles(keep, "brightdata");
   if (ids.length) {
     await db
       .insert(liSearchResults)
@@ -116,7 +171,8 @@ async function scoreRun(runId: string) {
     .where(and(eq(liSearchResults.run_id, runId), sql`${liSearchResults.fit_score} IS NULL`));
   if (!unscored.length) return;
   try {
-    const scores = await scoreProfiles(run.keywords, unscored);
+    const narrowing = describeFilters((run.filters ?? {}) as SearchFilters);
+    const scores = await scoreProfiles(narrowing ? `${run.keywords} (${narrowing})` : run.keywords, unscored);
     for (const s of scores) {
       await db
         .update(liSearchResults)

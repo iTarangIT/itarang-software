@@ -10,12 +10,66 @@ import { ProviderNotConfiguredError, type ProfileRecord, type SearchInput } from
 
 type WebHit = { url?: string; title?: string; description?: string };
 
-/** The site-restricted query. Exported for tests. */
-export function discoveryQuery(input: Pick<SearchInput, "keywords" | "location" | "company">): string {
-  const parts = [`site:linkedin.com/in`, input.keywords.trim()];
-  if (input.company?.trim()) parts.push(`"${input.company.trim()}"`);
-  if (input.location?.trim()) parts.push(input.location.trim());
-  return parts.join(" ");
+type QueryInput = Pick<
+  SearchInput,
+  "keywords" | "location" | "company" | "country" | "state" | "city" | "title" | "industry" | "exclude" | "match"
+>;
+
+const clean = (v: string | null | undefined) => (v ?? "").replace(/["]/g, "").replace(/\s+/g, " ").trim();
+
+/** "kirana, , used cars" → ["kirana", "used cars"]. Pure. */
+export function splitList(v: string | null | undefined): string[] {
+  return (v ?? "")
+    .split(",")
+    .map((w) => clean(w))
+    .filter(Boolean);
+}
+
+/**
+ * The site-restricted web-search query. Exported for tests.
+ *
+ * The search engine ranks by relevance, so every term is "fuzzy" unless it is
+ * quoted. Broad: company stays quoted (as before), everything else plain.
+ * Strict: company, title, city, state are exact phrases. Exclude words are
+ * always `-"word"`. Country is always plain (it narrows, it does not exclude).
+ */
+export function discoveryQuery(input: QueryInput): string {
+  const strict = input.match === "strict";
+  const phrase = (v: string) => (strict ? `"${v}"` : v);
+  const parts = [`site:linkedin.com/in`, clean(input.keywords)];
+  const title = clean(input.title);
+  const company = clean(input.company);
+  const city = clean(input.city) || clean(input.location);
+  const state = clean(input.state);
+  const industry = clean(input.industry);
+  const country = clean(input.country);
+  if (title) parts.push(phrase(title));
+  if (company) parts.push(`"${company}"`);
+  if (industry) parts.push(industry);
+  if (city) parts.push(phrase(city));
+  if (state) parts.push(phrase(state));
+  if (country) parts.push(country);
+  for (const w of splitList(input.exclude)) parts.push(w.includes(" ") ? `-"${w}"` : `-${w}`);
+  return parts.filter(Boolean).join(" ");
+}
+
+/** Countries offered on the Search screen → ISO code for the search engine's geo-targeting. */
+export const SEARCH_COUNTRIES: Record<string, string> = {
+  India: "IN",
+  "United Arab Emirates": "AE",
+  Singapore: "SG",
+  "United Kingdom": "GB",
+  "United States": "US",
+};
+
+/** Firecrawl `location` / `country` body fields for a search. Pure; exported for tests. */
+// Country only: a free-typed city is not a canonical search-engine location
+// name and could be rejected, so city / state stay in the query text instead.
+export function geoTarget(input: Pick<SearchInput, "country">): { location?: string; country?: string } {
+  const country = clean(input.country);
+  const code = SEARCH_COUNTRIES[country];
+  if (!country || !code) return {};
+  return { location: country, country: code };
 }
 
 /** Web hits → profile records (deduped by slug). Pure; exported for tests. */
@@ -47,7 +101,13 @@ export async function discoverProfiles(input: SearchInput): Promise<ProfileRecor
   const res = await fetch("https://api.firecrawl.dev/v2/search", {
     method: "POST",
     headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ query: discoveryQuery(input), limit, sources: [{ type: "web" }] }),
+    body: JSON.stringify({
+      query: discoveryQuery(input),
+      limit,
+      sources: [{ type: "web" }],
+      // Geo-targets the search engine itself (results as seen from that country).
+      ...geoTarget(input),
+    }),
     signal: AbortSignal.timeout(45_000),
   });
   if (!res.ok) {

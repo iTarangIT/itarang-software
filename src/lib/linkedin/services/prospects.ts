@@ -114,15 +114,20 @@ export type ProspectFilters = {
   state?: string | null;
   company?: string | null;
   city?: string | null;
+  /** Headline contains (title / designation). */
+  title?: string | null;
   q?: string | null;
   page?: number;
   pageSize?: number;
+  /** Export: lifts the 200-row page cap (still bounded). */
+  forExport?: boolean;
 };
 
 export async function listProspects(f: ProspectFilters) {
   const where: SQL[] = [];
   if (f.company) where.push(ilike(liProspects.company, `%${f.company}%`));
   if (f.city) where.push(ilike(liProspects.city, `%${f.city}%`));
+  if (f.title) where.push(ilike(liProspects.headline, `%${f.title}%`));
   if (f.q) {
     const q = `%${f.q}%`;
     where.push(or(ilike(liProspects.full_name, q), ilike(liProspects.headline, q), ilike(liProspects.company, q))!);
@@ -146,7 +151,7 @@ export async function listProspects(f: ProspectFilters) {
       ),
     );
   }
-  const pageSize = Math.min(Math.max(f.pageSize ?? 50, 1), 200);
+  const pageSize = Math.min(Math.max(f.pageSize ?? 50, 1), f.forExport ? 10_000 : 200);
   const page = Math.max(f.page ?? 1, 1);
   const cond = where.length ? and(...where) : undefined;
   const [rows, [{ total }]] = await Promise.all([

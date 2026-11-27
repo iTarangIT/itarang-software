@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 
-import { fmtDate, json, liFetch, STATE_LABEL, StateBadge } from "./api";
+import { DownloadButtons, fmtDate, json, liFetch, STATE_LABEL, StateBadge } from "./api";
 import { LI_BASE } from "./LinkedInTabs";
 
 type Row = {
@@ -28,6 +28,7 @@ export function ProspectsView() {
   const [q, setQ] = useState("");
   const [company, setCompany] = useState("");
   const [city, setCity] = useState("");
+  const [title, setTitle] = useState("");
   const [state, setState] = useState("");
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -36,6 +37,7 @@ export function ProspectsView() {
   if (q) params.set("q", q);
   if (company) params.set("company", company);
   if (city) params.set("city", city);
+  if (title) params.set("title", title);
   if (state) params.set("state", state);
 
   const list = useQuery({
@@ -61,6 +63,7 @@ export function ProspectsView() {
       <div className="flex flex-wrap items-end gap-3 rounded-lg border border-gray-200 bg-white p-4">
         {[
           ["Search", q, setQ, "name, headline, company"],
+          ["Title / designation", title, setTitle, "e.g. owner, manager"],
           ["Company", company, setCompany, ""],
           ["City", city, setCity, ""],
         ].map(([label, value, set, ph]) => (
@@ -95,7 +98,8 @@ export function ProspectsView() {
             ))}
           </select>
         </label>
-        <div className="ml-auto">
+        <div className="ml-auto flex flex-wrap items-center gap-3">
+          <DownloadButtons type="prospects" params={{ q, title, company, city, state }} />
           <button
             disabled={!selected.size}
             onClick={() => router.push(`${LI_BASE}/campaigns/new?prospects=${[...selected].join(",")}`)}

@@ -9,6 +9,7 @@ const TABS = [
   { href: `${LI_BASE}/search`, label: "Search" },
   { href: `${LI_BASE}/prospects`, label: "Prospects" },
   { href: `${LI_BASE}/campaigns`, label: "Campaigns" },
+  { href: `${LI_BASE}/analytics`, label: "Analytics" },
   { href: `${LI_BASE}/inbox`, label: "Inbox" },
   { href: `${LI_BASE}/accounts`, label: "Accounts" },
 ];

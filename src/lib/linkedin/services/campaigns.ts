@@ -21,8 +21,11 @@ import {
 import { approvalHashes } from "../lib/hash";
 import { INVITE_NOTE_MAX, MESSAGE_MAX, renderTemplate } from "../lib/render-template";
 import { LIVE_STATES, nextState, TERMINAL_STATES, type ProspectState } from "../state/prospect-state";
-import { logAction } from "./actionLog";
+import { lastSendAt, logAction } from "./actionLog";
+import { getSettings } from "./accounts";
+import { categoriesFor, categoryOf, extrasReady, setCategory } from "./extras";
 import { kpis } from "./kpis";
+import { gapFor, inSendingWindow } from "./pacing";
 
 export { kpis } from "./kpis";
 
@@ -38,8 +41,39 @@ export async function getCampaign(id: string): Promise<LiCampaign> {
 
 export async function listCampaigns() {
   const rows = await db.select().from(liCampaigns).orderBy(desc(liCampaigns.created_at)).limit(200);
-  const counts = await stateCounts(rows.map((r) => r.id));
-  return rows.map((r) => ({ ...r, counts: counts.get(r.id) ?? {} }));
+  const ids = rows.map((r) => r.id);
+  const counts = await stateCounts(ids);
+  const cats = await categoriesFor(ids);
+  const meetings = await meetingCounts(ids);
+  return rows.map((r) => ({
+    ...r,
+    category: categoryOf(cats, r.id),
+    meetings: meetings.get(r.id) ?? 0,
+    counts: counts.get(r.id) ?? {},
+  }));
+}
+
+/** campaign id → number of rows marked "meeting scheduled" (E-398; empty without it). */
+async function meetingCounts(ids: string[]) {
+  const map = new Map<string, number>();
+  if (!ids.length || !(await extrasReady())) return map;
+  const rows = await db.execute<{ id: string; n: number }>(sql`
+    SELECT cp.campaign_id AS id, count(*)::int AS n
+    FROM li_meetings m JOIN li_campaign_prospects cp ON cp.id = m.campaign_prospect_id
+    WHERE cp.campaign_id IN (${sql.join(ids.map((id) => sql`${id}::uuid`), sql`, `)})
+    GROUP BY cp.campaign_id`);
+  for (const r of rows as unknown as { id: string; n: number }[]) map.set(r.id, Number(r.n));
+  return map;
+}
+
+/** campaign_prospect ids (of one campaign) marked "meeting scheduled". */
+async function meetingRowIds(campaignId: string): Promise<Set<string>> {
+  if (!(await extrasReady())) return new Set();
+  const rows = await db.execute<{ id: string }>(sql`
+    SELECT m.campaign_prospect_id AS id
+    FROM li_meetings m JOIN li_campaign_prospects cp ON cp.id = m.campaign_prospect_id
+    WHERE cp.campaign_id = ${campaignId}::uuid`);
+  return new Set((rows as unknown as { id: string }[]).map((r) => r.id));
 }
 
 async function stateCounts(ids: string[]) {
@@ -71,6 +105,7 @@ export async function createCampaign(args: {
   template: string;
   inviteNote?: string | null;
   attachmentId?: string | null;
+  category?: string | null;
   prospectIds: string[];
   actorId: string | null;
 }) {
@@ -86,6 +121,8 @@ export async function createCampaign(args: {
       created_by: args.actorId,
     })
     .returning();
+  // Category is bookkeeping, not content: it is not part of the approval hash.
+  if (args.category && (await extrasReady())) await setCategory(c.id, args.category, args.actorId);
   await addProspects(c.id, args.prospectIds);
   return c;
 }
@@ -128,10 +165,16 @@ async function voidApproval(campaignId: string, reason: string) {
 
 export async function updateCampaign(
   id: string,
-  patch: { name?: string; template?: string; inviteNote?: string | null; attachmentId?: string | null },
+  patch: { name?: string; template?: string; inviteNote?: string | null; attachmentId?: string | null; category?: string },
   actorId: string | null,
 ) {
   const c = await getCampaign(id);
+  // Allowed in any status (even stopped) and never voids the approval.
+  // Skipped (not refused) on a DB without E-398, so saving a draft still works there.
+  if (patch.category && (await extrasReady())) await setCategory(id, patch.category, actorId);
+  const onlyCategory =
+    patch.name === undefined && patch.template === undefined && patch.inviteNote === undefined && patch.attachmentId === undefined;
+  if (onlyCategory) return c;
   if (c.status === "stopped" || c.status === "done") throw httpError(409, "A stopped campaign cannot be edited");
   const template = patch.template ?? c.template;
   const inviteNote = patch.inviteNote !== undefined ? patch.inviteNote : c.invite_note;
@@ -344,13 +387,17 @@ export async function campaignDetail(id: string) {
   const [attachment] = campaign.attachment_id
     ? await db.select().from(liAttachments).where(eq(liAttachments.id, campaign.attachment_id)).limit(1)
     : [];
+  const meetingIds = await meetingRowIds(id);
+  const category = categoryOf(await categoriesFor([id]), id);
   return {
-    campaign,
+    campaign: { ...campaign, category },
+    extras_ready: await extrasReady(),
+    pacing: await pacingInfo(campaign.account_id),
     approval: approval ?? null,
     attachment: attachment ? { id: attachment.id, file_name: attachment.file_name, size_bytes: attachment.size_bytes } : null,
     counts,
     kpis: kpis(
-      rows.map((r) => r.cp),
+      rows.map((r) => ({ ...r.cp, meeting: meetingIds.has(r.cp.id) })),
       Number(
         (
           await db
@@ -367,6 +414,31 @@ export async function campaignDetail(id: string) {
       headline: p.headline,
       public_url: p.public_url,
       do_not_contact: p.do_not_contact,
+      meeting: meetingIds.has(cp.id),
     })),
+  };
+}
+
+/**
+ * How the account paces sends, for the campaign page: the random gap range,
+ * sending hours, and the earliest the next invite / message can go. Uses the
+ * same gapFor() seed as the send ticker, so the time shown is the real one
+ * (still subject to the daily cap and sending hours).
+ */
+async function pacingInfo(accountId: string) {
+  const s = await getSettings(accountId);
+  const last = await lastSendAt(accountId);
+  const now = new Date();
+  const nextAt = last ? new Date(last.at.getTime() + gapFor(s, `${accountId}:${last.id}`)) : null;
+  return {
+    gap_min_minutes: s.gap_min_minutes,
+    gap_max_minutes: s.gap_max_minutes,
+    send_start: s.send_start,
+    send_end: s.send_end,
+    send_days: s.send_days,
+    invites_per_day: s.invites_per_day,
+    last_send_at: last?.at ?? null,
+    next_send_at: nextAt && nextAt > now ? nextAt : null,
+    in_window_now: inSendingWindow(s, now),
   };
 }

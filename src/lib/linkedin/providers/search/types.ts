@@ -7,8 +7,18 @@
 export type SearchInput = {
   keywords: string;
   /** Optional narrowing, folded into the discovery query. */
-  location?: string | null;
+  location?: string | null; // legacy free-text city / region (runs before the filter bar)
   company?: string | null;
+  country?: string | null;
+  state?: string | null;
+  city?: string | null;
+  /** Current title / designation. */
+  title?: string | null;
+  industry?: string | null;
+  /** Comma-separated words a profile must NOT mention. */
+  exclude?: string | null;
+  /** broad = search-engine relevance; strict = phrases quoted, and results that do not contain them are dropped. */
+  match?: "broad" | "strict" | null;
   limit?: number;
   /** Where the provider should deliver results (webhook), if it supports it. */
   webhookUrl?: string | null;

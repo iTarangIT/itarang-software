@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { requireRole } from "@/lib/auth-utils";
+import { LI_CATEGORIES } from "@/lib/linkedin/categories";
 import { LINKEDIN_ROLES } from "@/lib/linkedin/roles";
 import { createCampaign, listCampaigns } from "@/lib/linkedin/services/campaigns";
 
@@ -15,6 +16,7 @@ const Body = z.object({
   invite_note: z.string().max(300).optional().nullable(),
   attachment_id: z.string().uuid().optional().nullable(),
   prospect_ids: z.array(z.string().uuid()).max(1000).default([]),
+  category: z.enum(LI_CATEGORIES),
 });
 
 export const GET = withErrorHandler(async () => {
@@ -31,6 +33,7 @@ export const POST = withErrorHandler(async (req: Request) => {
     template: b.template,
     inviteNote: b.invite_note ?? null,
     attachmentId: b.attachment_id ?? null,
+    category: b.category,
     prospectIds: b.prospect_ids,
     actorId: user.id,
   });

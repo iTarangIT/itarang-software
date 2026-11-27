@@ -66,3 +66,27 @@ export function StateBadge({ state }: { state: string }) {
     </span>
   );
 }
+
+/** /api/linkedin/export URL for the given type + the screen's current filters (empty ones dropped). */
+export function exportUrl(type: "campaign_rows" | "prospects" | "analytics", params: Record<string, string | null | undefined>, format: "xlsx" | "csv" = "xlsx") {
+  const qs = new URLSearchParams({ type, format });
+  for (const [k, v] of Object.entries(params)) if (v) qs.set(k, v);
+  return `/api/linkedin/export?${qs}`;
+}
+
+/** Excel download + a small CSV link, both carrying the screen's filters. */
+export function DownloadButtons(props: { type: "campaign_rows" | "prospects" | "analytics"; params: Record<string, string | null | undefined>; label?: string }) {
+  return (
+    <span className="inline-flex items-center gap-2">
+      <a
+        href={exportUrl(props.type, props.params)}
+        className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-800 hover:bg-gray-50"
+      >
+        {props.label ?? "Download Excel"}
+      </a>
+      <a href={exportUrl(props.type, props.params, "csv")} className="text-xs text-gray-500 underline hover:text-gray-800">
+        CSV
+      </a>
+    </span>
+  );
+}

@@ -2,6 +2,9 @@
 
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
+import { useState } from "react";
+
+import { LI_CATEGORIES, UNCATEGORISED } from "@/lib/linkedin/categories";
 
 import { fmtDate, liFetch } from "./api";
 import { LI_BASE } from "./LinkedInTabs";
@@ -11,6 +14,8 @@ type Row = {
   name: string;
   status: string;
   created_at: string;
+  category: string;
+  meetings: number;
   counts: Record<string, number>;
 };
 
@@ -24,12 +29,23 @@ const STATUS_TONE: Record<string, string> = {
 
 export function CampaignsListView() {
   const list = useQuery({ queryKey: ["li-campaigns"], queryFn: () => liFetch<Row[]>("/api/linkedin/campaigns"), refetchInterval: 30_000 });
-  const rows = list.data ?? [];
+  const [category, setCategory] = useState("");
+  const rows = (list.data ?? []).filter((r) => !category || r.category === category);
   const n = (r: Row, ...k: string[]) => k.reduce((s, x) => s + (r.counts[x] ?? 0), 0);
   return (
     <div className="space-y-3">
       <div className="flex justify-between">
-        <p className="text-sm text-gray-600">Start a campaign from the Search or Prospects tab by selecting people.</p>
+        <div className="flex flex-wrap items-center gap-3">
+          <p className="text-sm text-gray-600">Start a campaign from the Search or Prospects tab by selecting people.</p>
+          <select value={category} onChange={(e) => setCategory(e.target.value)} className="rounded-md border border-gray-300 px-2 py-1.5 text-sm">
+            <option value="">All categories</option>
+            {[...LI_CATEGORIES, UNCATEGORISED].map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+        </div>
         <Link href={`${LI_BASE}/prospects`} className="rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white">
           Pick prospects
         </Link>
@@ -39,12 +55,14 @@ export function CampaignsListView() {
           <thead className="bg-gray-50 text-left text-xs uppercase text-gray-500">
             <tr>
               <th className="px-3 py-2">Campaign</th>
+              <th className="px-3 py-2">Category</th>
               <th className="px-3 py-2">Status</th>
               <th className="px-3 py-2 text-right">Prospects</th>
               <th className="px-3 py-2 text-right">Queued</th>
               <th className="px-3 py-2 text-right">Invited</th>
               <th className="px-3 py-2 text-right">Sent</th>
               <th className="px-3 py-2 text-right">Replied</th>
+              <th className="px-3 py-2 text-right">Meetings</th>
               <th className="px-3 py-2 text-right">Failed</th>
               <th className="px-3 py-2">Created</th>
             </tr>
@@ -60,6 +78,7 @@ export function CampaignsListView() {
                     {r.name}
                   </Link>
                 </td>
+                <td className="px-3 py-2 text-xs text-gray-700">{r.category}</td>
                 <td className="px-3 py-2">
                   <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_TONE[r.status] ?? ""}`}>{r.status}</span>
                 </td>
@@ -68,20 +87,21 @@ export function CampaignsListView() {
                 <td className="px-3 py-2 text-right">{n(r, "invite_sent", "accepted")}</td>
                 <td className="px-3 py-2 text-right">{n(r, "message_sent", "seen")}</td>
                 <td className="px-3 py-2 text-right">{n(r, "replied")}</td>
+                <td className="px-3 py-2 text-right">{r.meetings}</td>
                 <td className="px-3 py-2 text-right">{n(r, "failed")}</td>
                 <td className="px-3 py-2 text-xs text-gray-500">{fmtDate(r.created_at)}</td>
               </tr>
             ))}
             {list.isSuccess && rows.length === 0 && (
               <tr>
-                <td colSpan={9} className="px-3 py-8 text-center text-gray-500">
+                <td colSpan={11} className="px-3 py-8 text-center text-gray-500">
                   No campaigns yet.
                 </td>
               </tr>
             )}
             {list.isError && (
               <tr>
-                <td colSpan={9} className="px-3 py-8 text-center text-red-600">
+                <td colSpan={11} className="px-3 py-8 text-center text-red-600">
                   {(list.error as Error).message}
                 </td>
               </tr>

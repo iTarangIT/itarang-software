@@ -256,3 +256,35 @@ export const liActionLog = pgTable(
   },
   (t) => ({ capsIdx: index("li_action_log_caps_idx").on(t.account_id, t.action, t.at) }),
 );
+
+// E-398 — categories + meetings. NEW tables (not columns on li_campaigns /
+// li_campaign_prospects) so an environment without E-398 keeps every E-393
+// query working; readers probe to_regclass first (services/extras.ts).
+export const liCampaignCategories = pgTable(
+  "li_campaign_categories",
+  {
+    campaign_id: uuid("campaign_id").primaryKey().notNull(),
+    category: varchar("category", { length: 24 }).notNull(),
+    updated_by: uuid("updated_by"),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({ catIdx: index("li_campaign_categories_cat_idx").on(t.category) }),
+);
+
+export const liMeetings = pgTable(
+  "li_meetings",
+  {
+    campaign_prospect_id: uuid("campaign_prospect_id").primaryKey().notNull(),
+    conversation_id: uuid("conversation_id"),
+    marked_by: uuid("marked_by"),
+    marked_at: timestamp("marked_at", { withTimezone: true }).defaultNow().notNull(),
+    note: text("note"),
+  },
+  (t) => ({ markedIdx: index("li_meetings_marked_idx").on(t.marked_at) }),
+);
+
+export const liMeetingHints = pgTable("li_meeting_hints", {
+  conversation_id: uuid("conversation_id").primaryKey().notNull(),
+  detected_at: timestamp("detected_at", { withTimezone: true }).defaultNow().notNull(),
+  dismissed_at: timestamp("dismissed_at", { withTimezone: true }),
+});
