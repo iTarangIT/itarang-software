@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { clientIp, takeIpToken } from "@/lib/auth/reset-throttle";
 import { docBindingCookie } from "@/lib/onboarding/docBinding";
+import { signViewToken, viewCookie, viewPath } from "@/lib/onboarding/existingView";
 import { findResumableApplication, isMissingTable } from "@/lib/onboarding/resumeLookup";
 import { checkResumeCode, WRONG_CODE } from "@/lib/onboarding/resumeCode";
 import { onboardingDocumentLinks, onboardingStoredDocuments } from "@/lib/onboarding/onboardingFileLinks";
@@ -75,6 +76,7 @@ export async function POST(req: NextRequest) {
       return [];
     });
 
+    const view = signViewToken(application.id);
     const res = NextResponse.json({
       success: true,
       applicationId: application.id,
@@ -82,8 +84,14 @@ export async function POST(req: NextRequest) {
       documentLinks,
       documents,
       expiresInSeconds: Math.round(RESUME_TOKEN_TTL_MS / 1000),
+      // 27 Nov: a view-only page of the application already on file — 15
+      // minutes, this browser only (lib/onboarding/existingView.ts).
+      viewUrl: view ? viewPath(view.token) : null,
+      viewExpiresAt: view?.exp ?? null,
+      onboardingStatus: application.onboarding_status ?? "draft",
     });
     res.cookies.set(docBindingCookie(resumeToken));
+    if (view) res.cookies.set(viewCookie(view));
     return res;
   } catch (err) {
     if (isMissingTable(err)) {
