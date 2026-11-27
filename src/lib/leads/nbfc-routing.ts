@@ -30,6 +30,7 @@ import {
 
 import { pickRoutingRule, describeRuleScope, type RoutingLead } from "./nbfc-routing-rules";
 import { loadSectionGOptions } from "./section-g";
+import { routesToNbfc } from "./payment-method";
 import { rankBestFit, type BestFitCandidate, type DealerNbfcHistory } from "./best-fit-rules";
 
 export * from "./nbfc-routing-rules";
@@ -309,7 +310,7 @@ export async function autoRouteLead(leadId: string, opts: { trigger: string }): 
   try {
     const lead = await leadRow(leadId);
     if (!lead) return { routed: false, why: "Lead not found" };
-    if (String(lead.payment_method ?? "").toLowerCase() !== "finance") return { routed: false, why: "Not a finance lead" };
+    if (!routesToNbfc(lead.payment_method)) return { routed: false, why: "Not a finance lead" };
 
     const { STEP4_UNLOCKED_STATUSES, submitStep4ProductSelection } = await import("./submit-step4");
     if (!STEP4_UNLOCKED_STATUSES.has(String(lead.kyc_status))) return { routed: false, why: "Step 4 is not open" };

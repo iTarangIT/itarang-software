@@ -33,6 +33,7 @@ import { listSchemeOptions, mayPickScheme, setLeadSchemePick } from "@/lib/leads
 import { registerLeadState } from "./lead-states";
 import { loadSession, mergeContext, reply, replyList, setSession, type SessionRow } from "./session-store";
 import type { InboundEvent, ListRow } from "./types";
+import { routesToNbfc } from "@/lib/leads/payment-method";
 
 export const DC_LEAD_LOAN_AMT = "DC_LEAD_LOAN_AMT";
 export const DC_LEAD_SCHEME_PICK = "DC_LEAD_SCHEME_PICK";
@@ -78,7 +79,7 @@ async function needsIntake(session: SessionRow): Promise<{ leadId: string; hasAm
   // A self-serve customer chat is not the salesperson's upload.
   if (ctx.flow === "customer" && !ctx.op) return null;
   const lead = await leadFacts(leadId);
-  if (!lead || String(lead.payment_method ?? "").toLowerCase() !== "finance") return null;
+  if (!lead || !routesToNbfc(lead.payment_method)) return null;
   return { leadId, hasAmount: lead.requested_loan_amount != null };
 }
 
