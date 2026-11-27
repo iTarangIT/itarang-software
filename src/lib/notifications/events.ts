@@ -2501,23 +2501,42 @@ export async function notifyLeadResumed(p: {
   oldLeadId?: string | null;
   nbfcTenantId?: string | null;
   nbfcName?: string | null;
+  /** new_dealer — the dealer the new case was opened for. */
+  newDealerName?: string | null;
   note: string;
   byName?: string | null;
+  /** The admin / sales head who resumed it (not re-notified on WhatsApp). */
+  byUserId?: string | null;
 }) {
   const who = await leadLabel(p.leadId);
   const what =
     p.mode === "new_dealer"
-      ? `${who}'s file was opened as a new case for you after an NBFC rejection (corrected documents received).`
+      ? `${who}'s file was opened as a new case for ${p.newDealerName ?? "you"} after an NBFC rejection (corrected documents received)` +
+        (p.nbfcName ? `; it will go to ${p.nbfcName} once KYC and consent are done again.` : ".")
       : p.mode === "same_nbfc"
         ? `${who}'s rejected file was sent back to ${p.nbfcName ?? "the lender"} with corrected documents.`
         : `${who}'s rejected file was sent to ${p.nbfcName ?? "another lender"} with corrected documents.`;
   const to = [
+    // iTarang Admin / CEO / Business Head / Sales Head / Partner.
     toAdmins({ href: adminLead(p.leadId) }),
     toLeadDealer(p.leadId, {
       href: dealerLead(p.leadId),
       message: `${what} Note: ${p.note}`,
     }),
   ];
+
+  // 27 Nov — the iTarang salesperson who sent the file (dealer-check
+  // initiator) hears it on the bell + email too, not only on WhatsApp. For a
+  // new case the salesperson is the one on the ORIGINAL file.
+  const salesperson = await fileInitiator(p.oldLeadId ?? p.leadId);
+  if (salesperson?.userId && salesperson.userId !== p.byUserId) {
+    to.push({
+      audience: { kind: "user", userId: salesperson.userId },
+      as: { party: "admin", label: "Salesperson" },
+      href: adminLead(p.leadId),
+      email: true,
+    });
+  }
   if (p.nbfcTenantId) {
     to.push(
       toNbfc(p.nbfcTenantId, p.nbfcName ?? "NBFC", {
@@ -2536,7 +2555,51 @@ export async function notifyLeadResumed(p: {
     from: adminParty(p.byName ?? null),
     data: { mode: p.mode, old_lead_id: p.oldLeadId ?? null, note: p.note, entityId: p.mode },
     to,
+    actorUserId: p.byUserId ?? null,
   });
+
+  // 27 Nov — Sales Heads also get it on WhatsApp (unless File action alerts
+  // governs this type, in which case emit() sent the ticked WhatsApps).
+  try {
+    const { partyRuleFor } = await import("@/lib/notifications/party-routing");
+    if (await partyRuleFor("lead.resumed")) return;
+    const heads = await db
+      .select({ id: users.id, phone: users.phone })
+      .from(users)
+      .where(and(sql`LOWER(${users.role}) = 'sales_head'`, eq(users.is_active, true)));
+    const { sendStaffWhatsApp } = await import("@/lib/whatsapp/staff-notify");
+    const title = p.mode === "new_dealer" ? "New case from a rejected file" : "Rejected file resumed";
+    const body = [`*${title}*`, what, `Note: ${p.note}`, `Ref: ${p.leadId}`, p.byName ? `By: ${p.byName}` : null]
+      .filter(Boolean)
+      .join("\n");
+    const sent = new Set<string>();
+    for (const h of heads) {
+      if (h.id === p.byUserId) continue; // the Sales Head who did it
+      const ten = (h.phone ?? "").replace(/\D/g, "").slice(-10);
+      if (ten.length !== 10 || sent.has(ten)) continue;
+      sent.add(ten);
+      await sendStaffWhatsApp(ten, body, { customer: who, ref: p.leadId, what: title });
+    }
+  } catch (err) {
+    console.error("[notify] lead.resumed Sales Head WhatsApp failed:", err);
+  }
+}
+
+/** The iTarang salesperson who sent this file (latest dealer-check initiator). */
+async function fileInitiator(leadId: string): Promise<{ userId: string | null } | null> {
+  try {
+    const { leadDealerReviews } = await import("@/lib/db/schema");
+    const { desc } = await import("drizzle-orm");
+    const [r] = await db
+      .select({ userId: leadDealerReviews.initiated_by_user_id })
+      .from(leadDealerReviews)
+      .where(eq(leadDealerReviews.lead_id, leadId))
+      .orderBy(desc(leadDealerReviews.created_at))
+      .limit(1);
+    return r ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /* ================================================================== *

@@ -29,6 +29,12 @@ describe("decideResume", () => {
     }
   });
 
+  it("accepts every finance variant (27 Nov: other_finance files could not be resumed)", () => {
+    for (const pm of ["finance", "other_finance", "dealer_finance", "Other_Finance"]) {
+      expect(decideResume({ ...base, paymentMethod: pm }).ok).toBe(true);
+    }
+  });
+
   it("refuses cash files, sanctioned files and files already moved to a new case", () => {
     expect(decideResume({ ...base, paymentMethod: "cash" }).ok).toBe(false);
     expect(decideResume({ ...base, kycStatus: "loan_sanctioned" }).ok).toBe(false);

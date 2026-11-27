@@ -270,6 +270,20 @@ export async function resumeRejectedLead(opts: {
   if (!dealer) throw new ResumeError("Dealer not found, not approved, or closed", 404);
   if (!dealer.financeEnabled) throw new ResumeError(`${dealer.name} is not enabled for finance leads`);
 
+  // 27 Nov — "another eligible dealer AND an NBFC": the NBFC + scheme is
+  // optional; when given it must fit this customer under the NEW dealer, and is
+  // checked BEFORE the new case exists. Blank = chosen automatically (routing
+  // rule / best fit) when the new case reaches Step 4.
+  let pickLabel: string | null = null;
+  if (opts.nbfcId && opts.loanProductId) {
+    const { listSchemeOptions } = await import("./scheme-pick");
+    const fits = (await listSchemeOptions(opts.leadId, dealer.dealerId)).find(
+      (o) => o.nbfcId === opts.nbfcId && o.loanProductId === opts.loanProductId,
+    );
+    if (!fits) throw new ResumeError(`That lender + scheme does not fit this customer under ${dealer.name}`);
+    pickLabel = fits.label;
+  }
+
   const newLeadId = await copyLeadForDealer({
     oldLeadId: opts.leadId,
     dealerCode: dealer.dealerId,
@@ -309,8 +323,32 @@ export async function resumeRejectedLead(opts: {
       timestamp: now,
     },
   ]);
-  await afterResume({ leadId: newLeadId, mode: "new_dealer", note, actor: opts.actor, oldLeadId: opts.leadId });
-  return { leadId: newLeadId, mode: "new_dealer", nbfcName: null };
+  if (pickLabel && opts.nbfcId && opts.loanProductId) {
+    try {
+      const { setLeadSchemePick } = await import("./scheme-pick");
+      await setLeadSchemePick({
+        leadId: newLeadId,
+        pick: { nbfcId: opts.nbfcId, loanProductId: opts.loanProductId },
+        byUserId: opts.actor.id,
+        byName: opts.actor.name,
+        channel: "web",
+      });
+    } catch (err) {
+      // The case exists; the lender is then chosen automatically at Step 4.
+      console.warn("[resume-rejected] lender pick on the new case failed", err instanceof Error ? err.message : String(err));
+      pickLabel = null;
+    }
+  }
+  await afterResume({
+    leadId: newLeadId,
+    mode: "new_dealer",
+    note,
+    actor: opts.actor,
+    oldLeadId: opts.leadId,
+    nbfcName: pickLabel,
+    newDealerName: dealer.name,
+  });
+  return { leadId: newLeadId, mode: "new_dealer", nbfcName: pickLabel };
 }
 
 /** Customer columns carried to the new case. Lifecycle columns start fresh. */
@@ -429,6 +467,7 @@ async function afterResume(p: {
   oldLeadId?: string | null;
   nbfcTenantId?: string | null;
   nbfcName?: string | null;
+  newDealerName?: string | null;
   skipVerifierNotice?: boolean;
 }) {
   try {
@@ -439,8 +478,10 @@ async function afterResume(p: {
       oldLeadId: p.oldLeadId ?? null,
       nbfcTenantId: p.nbfcTenantId ?? null,
       nbfcName: p.nbfcName ?? null,
+      newDealerName: p.newDealerName ?? null,
       note: p.note,
       byName: p.actor.name,
+      byUserId: p.actor.id,
     });
   } catch (err) {
     console.error("[resume-rejected] notification failed", err);

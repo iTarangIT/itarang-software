@@ -39,7 +39,11 @@ export interface SchemeOption {
 }
 
 /** Every lender + product the BRE allows for this lead now (staff view). */
-export async function listSchemeOptions(leadId: string): Promise<SchemeOption[]> {
+export async function listSchemeOptions(
+  leadId: string,
+  /** 27 Nov — the options this customer would have under ANOTHER dealer (resume as a new case). */
+  dealerOverride?: string | null,
+): Promise<SchemeOption[]> {
   const [lead] = await db
     .select({
       dealer_id: leads.dealer_id,
@@ -54,7 +58,7 @@ export async function listSchemeOptions(leadId: string): Promise<SchemeOption[]>
     .limit(1);
   if (!lead) return [];
   const options = await loadSectionGOptions(
-    lead,
+    dealerOverride ? { ...lead, dealer_id: dealerOverride } : lead,
     lead.requested_loan_amount != null ? Number(lead.requested_loan_amount) : null,
     { skipPinnedDefault: true },
   );

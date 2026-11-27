@@ -48,6 +48,9 @@ export default function ResumeRejectedPanel({ leadId }: { leadId: string }) {
   const [q, setQ] = useState("");
   const [dealers, setDealers] = useState<Dealer[]>([]);
   const [dealer, setDealer] = useState<Dealer | null>(null);
+  // 27 Nov — option 3: the lenders that fit this customer under the picked dealer.
+  const [dealerOptions, setDealerOptions] = useState<Option[] | null>(null);
+  const [dealerScheme, setDealerScheme] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ tone: "ok" | "err"; text: string; link?: string } | null>(null);
 
@@ -75,6 +78,23 @@ export default function ResumeRejectedPanel({ leadId }: { leadId: string }) {
     return () => clearTimeout(t);
   }, [q, mode, view?.dealer_id]);
 
+  useEffect(() => {
+    setDealerScheme("");
+    if (!dealer) {
+      setDealerOptions(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const r = await fetch(`${base}?dealer=${encodeURIComponent(dealer.dealerId)}`, { cache: "no-store" });
+      const j = (await r.json().catch(() => null)) as { ok?: boolean; dealer_options?: Option[] } | null;
+      if (!cancelled) setDealerOptions(j?.ok ? j.dealer_options ?? [] : []);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [dealer, base]);
+
   async function submit() {
     if (!note.trim()) return setMsg({ tone: "err", text: "Write what the customer corrected." });
     let body: Record<string, unknown>;
@@ -86,6 +106,10 @@ export default function ResumeRejectedPanel({ leadId }: { leadId: string }) {
     } else {
       if (!dealer) return setMsg({ tone: "err", text: "Pick the dealer for the new case." });
       body = { mode, note: note.trim(), dealer_id: dealer.dealerId };
+      if (dealerScheme) {
+        const [nbfc_id, loan_product_id] = dealerScheme.split(":").map(Number);
+        body = { ...body, nbfc_id, loan_product_id };
+      }
     }
     setBusy(true);
     setMsg(null);
@@ -96,7 +120,10 @@ export default function ResumeRejectedPanel({ leadId }: { leadId: string }) {
       if (mode === "new_dealer") {
         setMsg({
           tone: "ok",
-          text: `New case ${j.leadId} created for ${dealer?.name}. This rejected case stays here as history.`,
+          text:
+            `New case ${j.leadId} created for ${dealer?.name}` +
+            (j.nbfcName ? `, lender ${j.nbfcName}` : ", lender chosen automatically at Step 4") +
+            ". This rejected case stays here as history.",
           link: `/admin/kyc-review/${j.leadId}`,
         });
       } else {
@@ -167,7 +194,7 @@ export default function ResumeRejectedPanel({ leadId }: { leadId: string }) {
               [
                 ["same_nbfc", "Same dealer · same NBFC"],
                 ["other_nbfc", "Same dealer · another NBFC"],
-                ["new_dealer", "Another dealer (new case)"],
+                ["new_dealer", "Another dealer + an NBFC (new case)"],
               ] as const
             ).map(([m, label]) => (
               <label key={m} className="flex items-center gap-1.5">
@@ -222,7 +249,30 @@ export default function ResumeRejectedPanel({ leadId }: { leadId: string }) {
                 className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
               />
               {dealer ? (
-                <p className="text-xs text-emerald-700">Selected: {dealer.name}</p>
+                <div className="space-y-1.5">
+                  <p className="text-xs text-emerald-700">Selected dealer: {dealer.name}</p>
+                  {dealerOptions === null ? (
+                    <p className="text-xs text-slate-500">Checking which lenders fit under this dealer…</p>
+                  ) : dealerOptions.length ? (
+                    <select
+                      value={dealerScheme}
+                      onChange={(e) => setDealerScheme(e.target.value)}
+                      className="min-w-[18rem] rounded border border-slate-300 px-2 py-1.5 text-sm"
+                    >
+                      <option value="">NBFC: choose automatically at Step 4 (routing rule / best fit)</option>
+                      {dealerOptions.map((o) => (
+                        <option key={`${o.nbfcId}:${o.loanProductId}`} value={`${o.nbfcId}:${o.loanProductId}`}>
+                          {o.label} · {o.detail}
+                          {view.rejections.some((r) => o.label.startsWith(`${r.nbfc_name} —`)) ? " · rejected this customer before" : ""}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <p className="text-xs text-amber-700">
+                      No lender fits this customer under {dealer.name} — pick another dealer.
+                    </p>
+                  )}
+                </div>
               ) : dealers.length ? (
                 <ul className="max-h-40 overflow-auto rounded border border-slate-200">
                   {dealers.map((d) => (
