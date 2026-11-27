@@ -1,13 +1,16 @@
 /**
  * /nbfc/settings — Tenant configuration (BRD §6.1.8)
  *
- * Three sections:
- *   1. Tenant info (read-only)
- *   2. Users — list + invite/remove (POST/DELETE /api/nbfc/users)
- *   3. Notification preferences (jsonb stored on nbfc_users.notification_prefs)
- *   4. Risk-rule thresholds (read-only — admin edits at /admin/nbfc/risk-rules)
+ * Grouped into tabs (SettingsTabs, `?tab=`):
+ *   organisation  — profile card + risk-rule thresholds (read-only)
+ *   team          — users / invite / approval hierarchy, step owners, roles
+ *   services      — Service Opt-In (FI, VKYC, E-NACH, e-sign, track rules)
+ *   wallet        — prepaid wallet
+ *   agents        — recovery agent directory
+ *   notifications — my preferences + tenant channels
  */
 import Link from "next/link";
+import type { ReactNode } from "react";
 import { db } from "@/lib/db";
 import { eq } from "drizzle-orm";
 import { getCurrentTenant, getSessionUser } from "@/lib/nbfc/tenant";
@@ -25,6 +28,15 @@ import {
   normalizeNbfcRole,
   type NbfcOwnerStep,
 } from "@/lib/nbfc/origination-roles";
+import {
+  FileCheck2,
+  Hash,
+  Landmark,
+  Lock,
+  Mail,
+  ShieldAlert,
+  Users,
+} from "lucide-react";
 import UsersSection from "./_components/UsersSection";
 import RolesSection from "./_components/RolesSection";
 import NotificationChannelsSection from "./_components/NotificationChannelsSection";
@@ -35,6 +47,7 @@ import ServiceOptInSection, {
 import StepOwnersSection from "./_components/StepOwnersSection";
 import WalletSection from "./_components/WalletSection";
 import RecoveryAgentDirectory from "./_components/RecoveryAgentDirectory";
+import SettingsTabs, { type SettingsTab } from "./_components/SettingsTabs";
 
 export const dynamic = "force-dynamic";
 
@@ -58,7 +71,12 @@ const SERVICE_CONFIG_DEFAULTS: ServiceConfig = {
   esign_webhook_secret: null,
 };
 
-export default async function SettingsPage() {
+export default async function SettingsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ tab?: string }>;
+}) {
+  const params = (await searchParams) ?? {};
   const tenant = await getCurrentTenant();
   const session = await getSessionUser();
 
@@ -147,149 +165,260 @@ export default async function SettingsPage() {
 
   const thresholdRules = await db.select().from(nbfcRiskRules);
 
+  const tabs: SettingsTab[] = [
+    {
+      id: "organisation",
+      label: "Organisation",
+      hint: "Your NBFC profile and risk limits",
+      content: (
+        <>
+          <OrganisationCard tenant={tenant} teamSize={memberships.length} />
+          <RiskThresholds
+            rules={thresholdRules.map((r) => ({
+              id: String(r.id),
+              rule_key: r.rule_key,
+              current_value: Number(r.current_value),
+              unit: r.unit ?? null,
+              updated_at: r.updated_at ?? null,
+            }))}
+          />
+        </>
+      ),
+    },
+    {
+      id: "team",
+      label: "Team & access",
+      hint: "People, roles and who approves what",
+      content: (
+        <>
+          <UsersSection
+            tenantId={tenant.id}
+            currentUserId={session?.id ?? null}
+            canManage={canEdit}
+            cibilReviewEnabledAt={hierarchyRow?.enabledAt?.toISOString() ?? null}
+            members={memberships.map((m) => ({
+              user_id: m.user_id,
+              role: m.role,
+              email: m.email,
+              name: m.name,
+              phone: m.phone ?? null,
+              parent_user_id: m.parent_user_id ?? null,
+              delegated_steps: Array.isArray(m.delegated_steps) ? m.delegated_steps : [],
+              allowed_nav: Array.isArray(m.allowed_nav) ? m.allowed_nav : null,
+              title: m.title ?? null,
+              created_at: m.created_at?.toISOString() ?? null,
+            }))}
+          />
+          {/* Step owners (§7.2) */}
+          <StepOwnersSection
+            members={memberships.map((m) => ({
+              user_id: m.user_id,
+              email: m.email,
+              name: m.name,
+            }))}
+            initialOwners={stepOwners}
+            canEdit={canEdit}
+          />
+          {/* Roles — custom RBAC (§15.8): system roles + clone-to-customise */}
+          <RolesSection />
+        </>
+      ),
+    },
+    {
+      id: "services",
+      label: "Loan services",
+      hint: "Field check, Video KYC, E-NACH, e-sign",
+      // Service Opt-In + document/track config (§7.4)
+      content: (
+        <ServiceOptInSection
+          initialConfig={serviceConfig}
+          canEdit={canEdit}
+          callbackBase={callbackBase}
+        />
+      ),
+    },
+    {
+      id: "wallet",
+      label: "Wallet & billing",
+      hint: "Balance, top-ups and transactions",
+      // Prepaid balance, auto-NACH config, transaction history (§8.1)
+      content: <WalletSection canEdit={canEdit} />,
+    },
+    {
+      id: "agents",
+      label: "Recovery agents",
+      hint: "People sent to collect batteries",
+      // E-262 — the Recovery queue cannot dispatch anyone until this list has a
+      // name in it, so it gets its own tab rather than sitting inside Services.
+      content: <RecoveryAgentDirectory canEdit={canEdit} />,
+    },
+    {
+      id: "notifications",
+      label: "Notifications",
+      hint: "Alerts you get and how they are sent",
+      content: (
+        <>
+          {/* My preferences — only when the viewer has a membership. */}
+          {myMembership ? (
+            <NotificationPrefsSection
+              initialPrefs={(myMembership.notification_prefs ?? {}) as Record<string, unknown>}
+            />
+          ) : null}
+          {/* Notification Channels — per-NBFC Email/SMS/WhatsApp gateways (§15.5) */}
+          <NotificationChannelsSection />
+        </>
+      ),
+    },
+  ];
+
   return (
     <div className="space-y-6">
-      <header>
-        <p className="section-label-muted">Settings</p>
-        <h1 className="text-2xl font-semibold text-[color:var(--color-brand-navy)] mt-1">
-          {tenant.display_name}
-        </h1>
+      <header className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <p className="section-label-muted">Settings</p>
+          <h1 className="text-2xl font-semibold text-[color:var(--color-brand-navy)] mt-1">
+            {tenant.display_name}
+          </h1>
+          <p className="mt-1 text-sm text-slate-500">
+            Manage your organisation, team, services and alerts in one place.
+          </p>
+        </div>
+        {!canEdit ? (
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-800">
+            <Lock className="h-3.5 w-3.5" />
+            View only — ask your NBFC admin to make changes
+          </span>
+        ) : null}
       </header>
 
-      {/* Tenant info */}
-      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5">
-        <h2 className="text-sm font-bold uppercase tracking-widest text-slate-500 mb-3">
-          Tenant
-        </h2>
-        <dl className="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-3 text-sm">
-          <Field k="Slug" v={tenant.slug} />
-          <Field k="Display name" v={tenant.display_name} />
-          <Field k="Contact email" v={tenant.contact_email ?? "—"} />
-          <Field
-            k="AUM"
-            v={tenant.aum_inr ? `₹${Number(tenant.aum_inr).toLocaleString("en-IN")}` : "—"}
-          />
-          <Field k="Active loans" v={tenant.active_loans.toLocaleString("en-IN")} />
-        </dl>
-      </section>
-
-      {/* Users */}
-      <UsersSection
-        tenantId={tenant.id}
-        currentUserId={session?.id ?? null}
-        canManage={canEdit}
-        cibilReviewEnabledAt={hierarchyRow?.enabledAt?.toISOString() ?? null}
-        members={memberships.map((m) => ({
-          user_id: m.user_id,
-          role: m.role,
-          email: m.email,
-          name: m.name,
-          phone: m.phone ?? null,
-          parent_user_id: m.parent_user_id ?? null,
-          delegated_steps: Array.isArray(m.delegated_steps) ? m.delegated_steps : [],
-          allowed_nav: Array.isArray(m.allowed_nav) ? m.allowed_nav : null,
-          title: m.title ?? null,
-          created_at: m.created_at?.toISOString() ?? null,
-        }))}
-      />
-
-      {/* Roles — custom RBAC (§15.8): system roles + clone-to-customise */}
-      <RolesSection />
-
-      {/* Wallet — prepaid balance, auto-NACH config, transaction history (§8.1) */}
-      <WalletSection canEdit={canEdit} />
-
-      {/* Service Opt-In + document/track config (§7.4) */}
-      <ServiceOptInSection
-        initialConfig={serviceConfig}
-        canEdit={canEdit}
-        callbackBase={callbackBase}
-      />
-
-      {/* Recovery agents (E-262) — the people dispatched to collect a flagged
-          battery. Its own section rather than a link inside Service Opt-In (the
-          way the FI directory sits): the Recovery queue cannot dispatch anyone
-          until this list has a name in it, so it is not a sub-setting. */}
-      <RecoveryAgentDirectory canEdit={canEdit} />
-
-      {/* Notification Channels — per-NBFC Email/SMS/WhatsApp gateways (§15.5) */}
-      <NotificationChannelsSection />
-
-      {/* Step owners (§7.2) */}
-      <StepOwnersSection
-        members={memberships.map((m) => ({
-          user_id: m.user_id,
-          email: m.email,
-          name: m.name,
-        }))}
-        initialOwners={stepOwners}
-        canEdit={canEdit}
-      />
-
-      {/* Notification preferences (only show if the current viewer has a membership) */}
-      {myMembership ? (
-        <NotificationPrefsSection
-          initialPrefs={
-            (myMembership.notification_prefs ?? {}) as Record<string, unknown>
-          }
-        />
-      ) : null}
-
-      {/* Risk-rule thresholds (read-only) */}
-      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5">
-        <div className="flex items-start justify-between mb-3">
-          <div>
-            <h2 className="text-sm font-bold uppercase tracking-widest text-slate-500">
-              Risk-rule thresholds
-            </h2>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Read-only here. Edits go through the iTarang admin and a dual-approval gate.
-            </p>
-          </div>
-          <Link
-            href="/admin/nbfc/risk-rules"
-            className="text-xs underline text-[color:var(--color-brand-navy)]"
-          >
-            Edit (admin) →
-          </Link>
-        </div>
-        {thresholdRules.length === 0 ? (
-          <p className="text-sm text-slate-500 italic">No threshold rules configured yet.</p>
-        ) : (
-          <table className="w-full text-sm">
-            <thead className="bg-slate-50 dark:bg-slate-800/50 text-xs uppercase tracking-widest text-slate-500">
-              <tr>
-                <th className="px-3 py-2 text-left font-bold">Rule</th>
-                <th className="px-3 py-2 text-right font-bold">Value</th>
-                <th className="px-3 py-2 text-left font-bold">Updated</th>
-              </tr>
-            </thead>
-            <tbody>
-              {thresholdRules.map((r) => (
-                <tr key={r.id} className="border-t border-slate-100 dark:border-slate-800">
-                  <td className="px-3 py-1.5 font-mono text-xs">{r.rule_key}</td>
-                  <td className="px-3 py-1.5 text-right tabular-nums font-bold">
-                    {Number(r.current_value).toLocaleString("en-IN")}
-                    {r.unit ? ` ${r.unit}` : ""}
-                  </td>
-                  <td className="px-3 py-1.5 text-xs text-slate-500 tabular-nums">
-                    {r.updated_at?.toLocaleString() ?? "—"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
+      <SettingsTabs tabs={tabs} initialTab={params.tab} />
     </div>
   );
 }
 
-function Field({ k, v }: { k: string; v: string | number }) {
+type Tenant = Awaited<ReturnType<typeof getCurrentTenant>>;
+
+function OrganisationCard({ tenant, teamSize }: { tenant: Tenant; teamSize: number }) {
+  const initials =
+    tenant.display_name
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((w) => w[0]?.toUpperCase())
+      .join("") || "N";
   return (
-    <div>
-      <dt className="text-[10px] font-bold uppercase tracking-widest text-slate-500">{k}</dt>
-      <dd className="mt-0.5 font-medium">{v}</dd>
+    <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <div className="flex flex-wrap items-center gap-4 bg-gradient-to-r from-[color:var(--color-brand-navy)] to-sky-600 px-6 py-5 text-white">
+        <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-white/15 text-xl font-bold ring-1 ring-white/30">
+          {initials}
+        </div>
+        <div className="min-w-0">
+          <h3 className="truncate text-lg font-semibold">{tenant.display_name}</h3>
+          <p className="flex items-center gap-1.5 text-sm text-white/80">
+            <Mail className="h-3.5 w-3.5" />
+            {tenant.contact_email ?? "No contact email on file"}
+          </p>
+        </div>
+      </div>
+      <dl className="grid grid-cols-2 sm:grid-cols-4 sm:divide-x divide-slate-100 dark:divide-slate-800">
+        <Stat
+          icon={<Landmark className="h-4 w-4" />}
+          k="Assets under management"
+          v={tenant.aum_inr ? `₹${Number(tenant.aum_inr).toLocaleString("en-IN")}` : "—"}
+        />
+        <Stat
+          icon={<FileCheck2 className="h-4 w-4" />}
+          k="Active loans"
+          v={Number(tenant.active_loans ?? 0).toLocaleString("en-IN")}
+        />
+        <Stat icon={<Users className="h-4 w-4" />} k="Team members" v={String(teamSize)} />
+        <Stat
+          icon={<Hash className="h-4 w-4" />}
+          k="Account ID"
+          v={<span className="font-mono text-sm">{tenant.slug}</span>}
+        />
+      </dl>
+    </section>
+  );
+}
+
+function Stat({ icon, k, v }: { icon: ReactNode; k: string; v: ReactNode }) {
+  return (
+    <div className="px-6 py-4">
+      <dt className="flex items-center gap-1.5 text-xs font-medium text-slate-500">
+        <span className="text-slate-400">{icon}</span>
+        {k}
+      </dt>
+      <dd className="mt-1 text-lg font-semibold text-slate-900 dark:text-slate-100">{v}</dd>
     </div>
+  );
+}
+
+/** rule_key like "cds_min_score" → "Cds min score". */
+function humanizeRule(key: string): string {
+  const s = key.replace(/[_.-]+/g, " ").trim();
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function RiskThresholds({
+  rules,
+}: {
+  rules: {
+    id: string;
+    rule_key: string;
+    current_value: number;
+    unit: string | null;
+    updated_at: Date | null;
+  }[];
+}) {
+  return (
+    <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div className="flex items-start gap-3">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-rose-50 text-rose-600">
+            <ShieldAlert className="h-[18px] w-[18px]" />
+          </span>
+          <div>
+            <h3 className="font-semibold text-slate-900 dark:text-slate-100">Risk limits</h3>
+            <p className="text-sm text-slate-500">
+              Thresholds that raise risk alerts. Read-only here — iTarang admin changes them
+              with a two-person approval.
+            </p>
+          </div>
+        </div>
+        <Link
+          href="/admin/nbfc/risk-rules"
+          className="text-sm font-medium text-[color:var(--color-brand-navy)] hover:underline"
+        >
+          Edit (admin) →
+        </Link>
+      </div>
+      {rules.length === 0 ? (
+        <p className="rounded-lg bg-slate-50 px-4 py-6 text-center text-sm text-slate-500 dark:bg-slate-800/50">
+          No risk limits configured yet.
+        </p>
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {rules.map((r) => (
+            <div
+              key={r.id}
+              className="rounded-lg border border-slate-200 px-4 py-3 dark:border-slate-800"
+              title={r.rule_key}
+            >
+              <div className="text-xs text-slate-500">{humanizeRule(r.rule_key)}</div>
+              <div className="mt-1 text-lg font-semibold tabular-nums text-slate-900 dark:text-slate-100">
+                {r.current_value.toLocaleString("en-IN")}
+                {r.unit ? (
+                  <span className="ml-1 text-sm font-normal text-slate-500">{r.unit}</span>
+                ) : null}
+              </div>
+              <div className="mt-0.5 text-[11px] text-slate-400">
+                Updated {r.updated_at ? r.updated_at.toLocaleDateString("en-IN") : "—"}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }

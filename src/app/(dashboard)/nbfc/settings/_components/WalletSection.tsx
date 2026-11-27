@@ -7,6 +7,8 @@
  * balance + history + auto-NACH config.
  */
 import { useCallback, useEffect, useState } from "react";
+import { Wallet as WalletIcon } from "lucide-react";
+import { SectionHeader } from "./SettingsCard";
 
 type Wallet = {
   balance: string;
@@ -225,26 +227,25 @@ export default function WalletSection({ canEdit }: { canEdit: boolean }) {
   };
 
   return (
-    <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-4">
-      <div className="flex items-start justify-between">
-        <div>
-          <h2 className="text-sm font-bold uppercase tracking-widest text-slate-500">Wallet</h2>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Prepaid balance. Service charges are deducted per the iTarang billing configuration (§8).
-          </p>
+    <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-4">
+      <SectionHeader
+        icon={WalletIcon}
+        tone="emerald"
+        title="Wallet"
+        desc="Your prepaid balance. Service charges are deducted from it automatically."
+      >
+        <div className="rounded-xl bg-gradient-to-br from-[color:var(--color-brand-navy)] to-sky-600 px-5 py-3 text-right text-white shadow-sm">
+          <p className="text-xs text-white/75">Available balance</p>
+          <p className="text-2xl font-bold tabular-nums">{inr(wallet?.balance)}</p>
         </div>
-        <div className="text-right">
-          <p className="text-[10px] uppercase tracking-wider text-slate-400">Balance</p>
-          <p className="text-2xl font-bold text-[color:var(--color-brand-navy)]">{inr(wallet?.balance)}</p>
-        </div>
-      </div>
+      </SectionHeader>
 
       {error && <p className="text-xs text-red-600">{error}</p>}
 
       {/* iTarang Virtual Account — funds-in (display-only, §15.3) */}
-      <div className="rounded-lg border border-slate-200 dark:border-slate-800 p-4 space-y-3">
+      <div className="rounded-xl border border-slate-200 bg-slate-50/40 dark:border-slate-800 dark:bg-slate-800/20 p-5 space-y-3">
         <div className="flex items-center justify-between">
-          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">iTarang Virtual Account</h3>
+          <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">iTarang Virtual Account</h3>
           {canEdit && (
             <button
               onClick={issueVirtualAccount}
@@ -278,9 +279,9 @@ export default function WalletSection({ canEdit }: { canEdit: boolean }) {
       </div>
 
       {/* iTarang Auto-Recharge Mandate — funds-in (creditor-side NACH, §16.4) */}
-      <div className="rounded-lg border border-slate-200 dark:border-slate-800 p-4 space-y-3">
+      <div className="rounded-xl border border-slate-200 bg-slate-50/40 dark:border-slate-800 dark:bg-slate-800/20 p-5 space-y-3">
         <div className="flex items-center justify-between">
-          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">iTarang Auto-Recharge Mandate</h3>
+          <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">iTarang Auto-Recharge Mandate</h3>
           <span className={`text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 rounded ${mandateBadge[mandateStatus] ?? mandateBadge.none}`}>
             {mandateStatus === "none" ? "not set up" : mandateStatus}
           </span>
@@ -300,7 +301,7 @@ export default function WalletSection({ canEdit }: { canEdit: boolean }) {
       </div>
 
       {/* Auto-NACH config */}
-      <div className="rounded-lg border border-slate-200 dark:border-slate-800 p-4 space-y-3">
+      <div className="rounded-xl border border-slate-200 bg-slate-50/40 dark:border-slate-800 dark:bg-slate-800/20 p-5 space-y-3">
         <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
           <input type="checkbox" checked={enabled} disabled={!canEdit} onChange={(e) => setEnabled(e.target.checked)} />
           Auto-NACH recharge
@@ -314,7 +315,7 @@ export default function WalletSection({ canEdit }: { canEdit: boolean }) {
                 onChange={(e) => setThreshold(e.target.value)}
                 disabled={!canEdit}
                 inputMode="numeric"
-                className="w-full mt-1 text-sm border border-slate-200 rounded-md px-2 py-1.5"
+                className="w-full mt-1 text-sm rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100"
               />
             </div>
             <div>
@@ -324,7 +325,7 @@ export default function WalletSection({ canEdit }: { canEdit: boolean }) {
                 onChange={(e) => setRecharge(e.target.value)}
                 disabled={!canEdit}
                 inputMode="numeric"
-                className="w-full mt-1 text-sm border border-slate-200 rounded-md px-2 py-1.5"
+                className="w-full mt-1 text-sm rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100"
               />
             </div>
           </div>
@@ -341,7 +342,7 @@ export default function WalletSection({ canEdit }: { canEdit: boolean }) {
 
       {/* Transaction history */}
       <div>
-        <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">Transaction history</h3>
+        <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100 mb-2">Transaction history</h3>
         {ledger.length === 0 ? (
           <p className="text-sm text-slate-500 italic">No transactions yet.</p>
         ) : (

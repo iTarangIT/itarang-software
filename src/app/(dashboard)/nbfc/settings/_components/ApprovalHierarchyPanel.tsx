@@ -14,6 +14,8 @@
  */
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { GitBranch } from "lucide-react";
+import { SectionHeader } from "./SettingsCard";
 import { HIERARCHY_STEPS, type HierarchyStep } from "@/lib/nbfc/approval-hierarchy-rules";
 import { CHILD_DEFAULT_NAV, CHILD_DEFAULT_TITLE, DEFAULT_TITLE, NBFC_NAV, type NbfcNavId } from "@/lib/nbfc/portal-nav";
 
@@ -193,18 +195,27 @@ export default function ApprovalHierarchyPanel({
   }
 
   return (
-    <div className="border-t border-slate-200 dark:border-slate-800 pt-4 space-y-3">
-      <div>
-        <h3 className="text-xs font-bold uppercase tracking-widest text-slate-500">
-          Access &amp; approval hierarchy
-        </h3>
-        <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed">
-          For each user, set the designation they see, the menus they can open, and who they report to.
-          A child (e.g. a Credit Verifier) uploads the CIBIL report and a note and sends it to the person
-          they report to. While it waits the child cannot act. After approval the parent owns the lead;
-          the child can only do the steps you tick. A rejection needs a reason and closes the file.
-        </p>
-      </div>
+    <div className="border-t border-slate-200 dark:border-slate-800 pt-5 space-y-4">
+      <SectionHeader
+        icon={GitBranch}
+        tone="violet"
+        title="Access & approvals"
+        desc="For each person, set their job title, the menus they can open and who approves their work."
+      />
+      <ol className="grid gap-2 text-xs text-slate-600 sm:grid-cols-3 dark:text-slate-300">
+        <li className="rounded-lg bg-slate-50 px-3 py-2.5 dark:bg-slate-800/50">
+          <b className="text-slate-800 dark:text-slate-100">1. Team member sends</b> — e.g. a Credit
+          Verifier uploads the CIBIL report and a note to their approver, then waits.
+        </li>
+        <li className="rounded-lg bg-slate-50 px-3 py-2.5 dark:bg-slate-800/50">
+          <b className="text-slate-800 dark:text-slate-100">2. Approver decides</b> — approves and
+          takes over the lead, or rejects with a reason (which closes the file).
+        </li>
+        <li className="rounded-lg bg-slate-50 px-3 py-2.5 dark:bg-slate-800/50">
+          <b className="text-slate-800 dark:text-slate-100">3. After approval</b> — the team member
+          can only do the extra steps you tick for them.
+        </li>
+      </ol>
 
       <label className="flex items-start gap-2 text-sm">
         <input
@@ -230,7 +241,7 @@ export default function ApprovalHierarchyPanel({
 
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
-          <thead className="bg-slate-50 dark:bg-slate-800/50 text-xs uppercase tracking-widest text-slate-500">
+          <thead className="bg-slate-50 dark:bg-slate-800/50 text-xs text-slate-500">
             <tr>
               <th className="px-3 py-2 text-left font-bold">User</th>
               <th className="px-3 py-2 text-left font-bold">Designation</th>
@@ -249,7 +260,7 @@ export default function ApprovalHierarchyPanel({
                     <div className="grid gap-3 text-xs">
                       <div className="flex flex-wrap gap-4">
                         <label>
-                          <span className="block mb-1 text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                          <span className="block mb-1 text-xs font-medium text-slate-600 dark:text-slate-300">
                             Designation
                           </span>
                           <input
@@ -258,18 +269,18 @@ export default function ApprovalHierarchyPanel({
                             disabled={busy}
                             maxLength={64}
                             placeholder={draftParent ? CHILD_DEFAULT_TITLE : DEFAULT_TITLE}
-                            className="border border-slate-300 rounded px-2 py-1 text-sm w-56"
+                            className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100 text-sm w-56"
                           />
                         </label>
                         <label>
-                          <span className="block mb-1 text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                          <span className="block mb-1 text-xs font-medium text-slate-600 dark:text-slate-300">
                             Reports to
                           </span>
                           <select
                             value={draftParent}
                             onChange={(e) => onParentChange(e.target.value)}
                             disabled={busy || m.user_id === currentUserId}
-                            className="border border-slate-300 rounded px-2 py-1 text-sm"
+                            className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100 text-sm"
                           >
                             <option value="">Nobody (independent)</option>
                             {members
@@ -283,7 +294,7 @@ export default function ApprovalHierarchyPanel({
                         </label>
                       </div>
                       <div>
-                        <span className="block text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                        <span className="block text-xs font-medium text-slate-600 dark:text-slate-300">
                           Menus this user can see and open
                         </span>
                         <MenuTicks
@@ -295,7 +306,7 @@ export default function ApprovalHierarchyPanel({
                       </div>
                       {draftParent ? (
                         <div>
-                          <span className="block text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                          <span className="block text-xs font-medium text-slate-600 dark:text-slate-300">
                             After the CIBIL approval this user may also do
                           </span>
                           <StepTicks value={draftSteps} onChange={setDraftSteps} disabled={busy} />
@@ -372,7 +383,7 @@ export default function ApprovalHierarchyPanel({
           </tbody>
         </table>
       </div>
-      {error ? <div className="px-3 py-2 bg-red-50 text-red-700 text-xs rounded">{error}</div> : null}
+      {error ? <div className="px-4 py-2.5 bg-red-50 text-red-700 text-sm rounded-lg">{error}</div> : null}
     </div>
   );
 }

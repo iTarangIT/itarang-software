@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { Bell } from "lucide-react";
+import { SectionHeader } from "./SettingsCard";
 
 interface Props {
   initialPrefs: Record<string, unknown>;
@@ -75,18 +77,16 @@ export default function NotificationPrefsSection({ initialPrefs }: Props) {
   }
 
   return (
-    <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-4">
-      <div>
-        <h2 className="text-sm font-bold uppercase tracking-widest text-slate-500">
-          My notification preferences
-        </h2>
-        <p className="text-xs text-slate-500 mt-0.5">
-          Email + in-app delivery per event. Saved per user, not per tenant.
-        </p>
-      </div>
+    <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-4">
+      <SectionHeader
+        icon={Bell}
+        tone="sky"
+        title="My alerts"
+        desc="Choose which events you hear about, by email and inside the portal. This only changes your own alerts."
+      />
 
       <table className="w-full text-sm">
-        <thead className="bg-slate-50 dark:bg-slate-800/50 text-xs uppercase tracking-widest text-slate-500">
+        <thead className="bg-slate-50 dark:bg-slate-800/50 text-xs text-slate-500">
           <tr>
             <th className="px-3 py-2 text-left font-bold">Event</th>
             <th className="px-3 py-2 text-center font-bold">Email</th>
@@ -116,7 +116,7 @@ export default function NotificationPrefsSection({ initialPrefs }: Props) {
       </table>
 
       {error ? (
-        <div className="px-3 py-2 bg-red-50 text-red-700 text-xs rounded">{error}</div>
+        <div className="px-4 py-2.5 bg-red-50 text-red-700 text-sm rounded-lg">{error}</div>
       ) : null}
 
       <div className="flex justify-end items-center gap-3">
@@ -128,7 +128,7 @@ export default function NotificationPrefsSection({ initialPrefs }: Props) {
         <button
           onClick={save}
           disabled={busy}
-          className="px-4 py-1.5 text-sm font-bold rounded bg-[color:var(--color-brand-navy)] text-white disabled:opacity-50"
+          className="px-5 py-2 text-sm font-semibold rounded-lg shadow-sm hover:opacity-90 bg-[color:var(--color-brand-navy)] text-white disabled:opacity-50"
         >
           {busy ? "Saving…" : "Save preferences"}
         </button>
