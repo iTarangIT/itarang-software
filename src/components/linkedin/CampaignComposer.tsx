@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
+import { LI_CATEGORIES, UNCATEGORISED } from "@/lib/linkedin/categories";
+
 import { json, liFetch } from "./api";
 import { LI_BASE } from "./LinkedInTabs";
 
@@ -31,6 +33,7 @@ type Campaign = {
   invite_note: string | null;
   attachment_id: string | null;
   status: string;
+  category?: string;
 };
 
 export function CampaignComposer({ initialProspectIds, campaignId }: { initialProspectIds: string[]; campaignId: string | null }) {
@@ -38,6 +41,7 @@ export function CampaignComposer({ initialProspectIds, campaignId }: { initialPr
   const [id, setId] = useState<string | null>(campaignId);
   const [name, setName] = useState("");
   const [accountId, setAccountId] = useState("");
+  const [category, setCategory] = useState("");
   const [template, setTemplate] = useState("Hi {{first_name}}, ");
   const [note, setNote] = useState("");
   const [attachment, setAttachment] = useState<{ id: string; file_name: string } | null>(null);
@@ -65,6 +69,7 @@ export function CampaignComposer({ initialProspectIds, campaignId }: { initialPr
     if (!c) return;
     setName(c.name);
     setAccountId(c.account_id);
+    setCategory(c.category && c.category !== UNCATEGORISED ? c.category : "");
     setTemplate(c.template);
     setNote(c.invite_note ?? "");
     setAttachment(existing.data?.attachment ?? null);
@@ -105,6 +110,7 @@ export function CampaignComposer({ initialProspectIds, campaignId }: { initialPr
 
   async function save() {
     if (!accountId) return toast.error("Add a LinkedIn account first (Accounts tab)");
+    if (!category) return toast.error("Pick a category (3 Wheeler, 2 Wheeler, FinTech…) so the campaign shows up in Analytics");
     setSaving(true);
     try {
       const body = {
@@ -112,6 +118,7 @@ export function CampaignComposer({ initialProspectIds, campaignId }: { initialPr
         template,
         invite_note: note || null,
         attachment_id: attachment?.id ?? null,
+        category,
       };
       if (id) {
         await liFetch(`/api/linkedin/campaigns/${id}`, { method: "PATCH", ...json(body) });
@@ -168,6 +175,18 @@ export function CampaignComposer({ initialProspectIds, campaignId }: { initialPr
         <label className="block text-sm">
           <span className="mb-1 block font-medium text-gray-700">Name</span>
           <input value={name} onChange={(e) => edit(setName)(e.target.value)} className="w-full rounded-md border border-gray-300 px-3 py-2" />
+        </label>
+        <label className="block text-sm">
+          <span className="mb-1 block font-medium text-gray-700">Category</span>
+          <select value={category} onChange={(e) => edit(setCategory)(e.target.value)} className="w-full rounded-md border border-gray-300 px-3 py-2">
+            <option value="">Pick a category…</option>
+            {LI_CATEGORIES.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+          <span className="text-xs text-gray-500">Groups the campaign on the Analytics tab. Changing it never affects the approval.</span>
         </label>
         <label className="block text-sm">
           <span className="mb-1 block font-medium text-gray-700">Send from</span>

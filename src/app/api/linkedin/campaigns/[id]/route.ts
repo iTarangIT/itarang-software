@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { requireRole } from "@/lib/auth-utils";
+import { LI_CATEGORIES } from "@/lib/linkedin/categories";
 import { LINKEDIN_ROLES } from "@/lib/linkedin/roles";
 import { campaignDetail, updateCampaign } from "@/lib/linkedin/services/campaigns";
 
@@ -14,6 +15,7 @@ const Body = z.object({
   template: z.string().max(8000).optional(),
   invite_note: z.string().max(300).optional().nullable(),
   attachment_id: z.string().uuid().optional().nullable(),
+  category: z.enum(LI_CATEGORIES).optional(),
 });
 
 export const GET = withErrorHandler(async (_req: Request, { params }: { params: Promise<{ id: string }> }) => {
@@ -29,7 +31,7 @@ export const PATCH = withErrorHandler(async (req: Request, { params }: { params:
   return successResponse(
     await updateCampaign(
       id,
-      { name: b.name, template: b.template, inviteNote: b.invite_note, attachmentId: b.attachment_id },
+      { name: b.name, template: b.template, inviteNote: b.invite_note, attachmentId: b.attachment_id, category: b.category },
       user.id,
     ),
   );

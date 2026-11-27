@@ -5,15 +5,32 @@ import Link from "next/link";
 import { useState } from "react";
 import { toast } from "sonner";
 
-import { fmtDate, json, liFetch, STATE_LABEL, StateBadge } from "./api";
+import { LI_CATEGORIES } from "@/lib/linkedin/categories";
+
+import { DownloadButtons, fmtDate, json, liFetch, STATE_LABEL, StateBadge } from "./api";
 import { LI_BASE } from "./LinkedInTabs";
 
 type Detail = {
-  campaign: { id: string; name: string; status: string; template: string; invite_note: string | null };
+  campaign: { id: string; name: string; status: string; template: string; invite_note: string | null; category: string };
+  extras_ready: boolean;
+  pacing: {
+    gap_min_minutes: number;
+    gap_max_minutes: number;
+    send_start: string;
+    send_end: string;
+    send_days: string;
+    invites_per_day: number;
+    last_send_at: string | null;
+    next_send_at: string | null;
+    in_window_now: boolean;
+  };
   approval: { approved_at: string; prospect_count: number; voided_at: string | null; void_reason: string | null } | null;
   attachment: { file_name: string } | null;
   counts: Record<string, number>;
   kpis: {
+    approached: number;
+    meetings: number;
+    meeting_pct: number | null;
     invited: number;
     accepted: number;
     messaged: number;
@@ -38,8 +55,17 @@ type Detail = {
     last_error: string | null;
     missing_fields: string | null;
     stopped_reason: string | null;
+    meeting: boolean;
   }[];
 };
+
+const DAY_NAMES = ["", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const daysLabel = (s: string) =>
+  s
+    .split(",")
+    .map((d) => DAY_NAMES[Number(d.trim())] ?? "")
+    .filter(Boolean)
+    .join(", ");
 
 const pct = (v: number | null) => (v == null ? "—" : `${v}%`);
 
@@ -50,6 +76,16 @@ export function CampaignDetailView({ id }: { id: string }) {
     queryFn: () => liFetch<Detail>(`/api/linkedin/campaigns/${id}`),
     refetchInterval: 30_000,
   });
+
+  async function changeCategory(category: string) {
+    try {
+      await liFetch(`/api/linkedin/campaigns/${id}`, { method: "PATCH", ...json({ category }) });
+      toast.success(`Category set to ${category}`);
+      await q.refetch();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed");
+    }
+  }
 
   async function control(action: "pause" | "resume" | "stop") {
     if (action === "stop" && !window.confirm("Stop this campaign? Nothing more will be sent from it.")) return;
@@ -74,7 +110,24 @@ export function CampaignDetailView({ id }: { id: string }) {
     <div className="space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-xl font-semibold text-gray-900">{d.campaign.name}</h2>
+          <h2 className="flex flex-wrap items-center gap-2 text-xl font-semibold text-gray-900">
+            {d.campaign.name}
+            {d.extras_ready ? (
+              <select
+                value={(LI_CATEGORIES as readonly string[]).includes(d.campaign.category) ? d.campaign.category : ""}
+                onChange={(e) => e.target.value && changeCategory(e.target.value)}
+                className="rounded-full border border-gray-300 bg-gray-50 px-2 py-0.5 text-xs font-medium text-gray-700"
+                title="Category (for Analytics)"
+              >
+                <option value="">Uncategorised</option>
+                {LI_CATEGORIES.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+          </h2>
           <p className="text-sm text-gray-600">
             Status <strong>{s}</strong>
             {d.approval && !d.approval.voided_at && <> · approved {fmtDate(d.approval.approved_at)} for {d.approval.prospect_count}</>}
@@ -82,7 +135,8 @@ export function CampaignDetailView({ id }: { id: string }) {
             {d.attachment && <> · attachment {d.attachment.file_name}</>}
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <DownloadButtons type="campaign_rows" params={{ campaign_id: id }} />
           <Link href={`${LI_BASE}/campaigns/new?campaign=${id}`} className="rounded-md border border-gray-300 px-3 py-1.5 text-sm">
             Edit
           </Link>
@@ -104,10 +158,28 @@ export function CampaignDetailView({ id }: { id: string }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+      <p className="rounded-md bg-gray-50 px-3 py-2 text-xs text-gray-600">
+        Sends go out one at a time, a random {d.pacing.gap_min_minutes}–{d.pacing.gap_max_minutes} min apart, {d.pacing.send_start}–
+        {d.pacing.send_end} IST on {daysLabel(d.pacing.send_days)}, at most {d.pacing.invites_per_day} invites a day (change on the
+        Accounts tab).{" "}
+        {d.pacing.next_send_at
+          ? `Next send not before ${fmtDate(d.pacing.next_send_at)}.`
+          : d.pacing.in_window_now
+            ? "The next send can go on the worker's next tick."
+            : "Outside sending hours now."}
+        {d.pacing.last_send_at && ` Last send ${fmtDate(d.pacing.last_send_at)}.`}
+      </p>
+
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
         {[
+          ["Approached", String(d.kpis.approached), "invited or messaged"],
           ["Invite acceptance", pct(d.kpis.acceptance_pct), `${d.kpis.accepted} of ${d.kpis.invited} invites`],
           ["Reply rate", pct(d.kpis.reply_pct), `${d.kpis.replied} of ${d.kpis.messaged} messaged`],
+          [
+            "Meetings scheduled",
+            d.extras_ready ? String(d.kpis.meetings) : "—",
+            d.extras_ready ? `${pct(d.kpis.meeting_pct)} of approached · mark in Inbox` : "needs migration E-398",
+          ],
           ["Positive replies", pct(d.kpis.positive_reply_pct), `${d.kpis.positive} of ${d.kpis.replied} replies`],
           ["In queue", String((d.counts.queued ?? 0) + (d.counts.accepted ?? 0)), "waiting for the paced worker"],
         ].map(([label, value, sub]) => (
@@ -138,6 +210,7 @@ export function CampaignDetailView({ id }: { id: string }) {
               <th className="px-3 py-2">Message sent</th>
               <th className="px-3 py-2">Seen</th>
               <th className="px-3 py-2">Replied</th>
+              <th className="px-3 py-2">Meeting</th>
               <th className="px-3 py-2">Note</th>
             </tr>
           </thead>
@@ -159,6 +232,7 @@ export function CampaignDetailView({ id }: { id: string }) {
                 {/* doc §6.5: "Seen" only when LinkedIn reports it. */}
                 <td className="px-3 py-2 text-xs">{r.seen_at ? fmtDate(r.seen_at) : r.message_sent_at ? "Not available" : "—"}</td>
                 <td className="px-3 py-2 text-xs">{fmtDate(r.replied_at)}</td>
+                <td className="px-3 py-2 text-xs">{r.meeting ? <span className="font-medium text-green-700">Scheduled</span> : "—"}</td>
                 <td className="max-w-[280px] px-3 py-2 text-xs text-gray-600">
                   {r.last_error ?? r.stopped_reason ?? r.missing_fields ?? (r.next_action_at && ["queued", "accepted"].includes(r.state) ? `next try ${fmtDate(r.next_action_at)}` : "")}
                 </td>

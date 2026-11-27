@@ -21,7 +21,8 @@ export type LiAction =
   | "resume"
   | "resolve"
   | "approve"
-  | "connect";
+  | "connect"
+  | "meeting"; // E-398: Sales Head marked / cleared "meeting scheduled" (ok = marked)
 
 type Db = typeof db;
 

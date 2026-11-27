@@ -16,6 +16,7 @@ import {
 import { draftReply } from "../agent/reply-draft";
 import type { Message } from "../providers/messaging/types";
 import { nextState, TERMINAL_STATES, type ProspectState } from "../state/prospect-state";
+import { meetingStateFor, raiseMeetingHint } from "./extras";
 import { stopProspectEverywhere, updateProspect } from "./prospects";
 
 const httpError = (status: number, message: string) => Object.assign(new Error(message), { status });
@@ -30,9 +31,12 @@ export async function listConversations(opts: { accountId?: string | null } = {}
     // Replies first (doc screen 5): unread, then the latest inbound, then the rest.
     .orderBy(desc(liConversations.unread), sql`${liConversations.last_inbound_at} DESC NULLS LAST`, desc(liConversations.last_message_at))
     .limit(300);
+  const meetings = await meetingStateFor(rows.map((r) => r.c.id));
   return rows.map(({ c, p, last_body }) => ({
     ...c,
     last_body,
+    meeting: meetings.get(c.id)?.meeting ?? false,
+    meeting_hint: meetings.get(c.id)?.hint ?? false,
     prospect: p
       ? { id: p.id, full_name: p.full_name, headline: p.headline, company: p.company, public_url: p.public_url, do_not_contact: p.do_not_contact }
       : null,
@@ -60,8 +64,10 @@ export async function getThread(conversationId: string) {
   if (row.c.unread) {
     await db.update(liConversations).set({ unread: false }).where(eq(liConversations.id, conversationId));
   }
+  const meeting = (await meetingStateFor([conversationId])).get(conversationId) ?? { meeting: false, hint: false };
   return {
     conversation: row.c,
+    meeting,
     prospect: row.p
       ? { id: row.p.id, full_name: row.p.full_name, headline: row.p.headline, company: row.p.company, city: row.p.city, public_url: row.p.public_url, do_not_contact: row.p.do_not_contact, lead_id: row.p.lead_id }
       : null,
@@ -96,7 +102,9 @@ export async function draftFor(conversationId: string) {
       await stopProspectEverywhere(t.prospect.id, "negative reply");
     }
   }
-  return result;
+  // A nudge for the Sales Head only; the Meetings KPI counts the button, never this.
+  if (result.meeting && !t.meeting.meeting) await raiseMeetingHint(conversationId);
+  return { ...result, meeting_hint: result.meeting && !t.meeting.meeting };
 }
 
 export async function stopContacting(conversationId: string, actorId: string | null) {
