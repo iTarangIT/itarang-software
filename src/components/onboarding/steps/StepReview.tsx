@@ -746,17 +746,28 @@ export default function StepReview() {
           },
       };
 
-      const response = await fetch("/api/dealer/onboarding/submit", {
-        method: "POST",
-        credentials: "include",
-        cache: "no-store",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
-      });
+      const postSubmit = () =>
+        fetch("/api/dealer/onboarding/submit", {
+          method: "POST",
+          credentials: "include",
+          cache: "no-store",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
 
-      const result = await response.json();
+      // A `retryable` 503 means the server could not open a DB connection, so
+      // nothing was saved — repeating the same submit is safe. Two quiet
+      // retries ride out a busy minute before the dealer ever sees an error.
+      let response = await postSubmit();
+      let result = await response.json();
+      for (const waitMs of [2000, 5000]) {
+        if (!(response.status === 503 && result?.retryable)) break;
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+        response = await postSubmit();
+        result = await response.json();
+      }
 
       // ID 129: an application already exists for these details. Ask the
       // server to mail the code and show the box to enter it.
