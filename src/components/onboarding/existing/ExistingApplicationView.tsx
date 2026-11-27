@@ -132,7 +132,7 @@ export default function ExistingApplicationView({
         window.location.replace(json.viewUrl);
         return;
       }
-      // The 30-minute code check is over too — reload: this URL now shows the code box.
+      // This browser can't renew (cookie gone) — reload: this URL now explains what to do.
       window.location.reload();
     } catch {
       setRenewError("Could not open a new link. Check your connection and try again.");
@@ -230,7 +230,7 @@ export default function ExistingApplicationView({
         {/* Security strip */}
         <div className="mb-6 flex flex-wrap items-center gap-x-6 gap-y-2 rounded-2xl border border-emerald-100 bg-white/95 px-5 py-4 text-sm text-slate-700 shadow-lg shadow-slate-900/5 backdrop-blur">
           <span className="inline-flex items-center gap-2 font-semibold text-emerald-700">
-            <ShieldCheck className="h-5 w-5" /> Verified by mobile code
+            <ShieldCheck className="h-5 w-5" /> Private link
           </span>
           <span>Opens only in this browser</span>
           <span className="hidden h-4 w-px bg-slate-200 sm:block" />
@@ -323,7 +323,7 @@ export default function ExistingApplicationView({
                   }`}
                 >
                   {canContinue
-                    ? "You can go back to the onboarding form in your other tab and submit — your saved documents are already filled in."
+                    ? "To continue this application, go back to the onboarding form and enter the code sent to the registered mobile or email."
                     : "This application is already with iTarang for review, so it can't be changed from the form. If something needs fixing, iTarang will send you a correction request."}
                 </div>
               </div>

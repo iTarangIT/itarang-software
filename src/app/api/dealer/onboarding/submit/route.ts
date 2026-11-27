@@ -26,6 +26,7 @@ import {
   planDocuments,
   verifyResumeToken,
 } from "@/lib/onboarding/submitAccess";
+import { signViewToken, viewCookie, viewPath } from "@/lib/onboarding/existingView";
 import { markDocsSubmitted } from "@/lib/onboarding/leadMilestones";
 import { checkCustomerGstin, GSTIN_CHECK_MESSAGE } from "@/lib/leads/gstin";
 import { checkStoredPaths } from "@/lib/onboarding/storedDocuments";
@@ -607,10 +608,27 @@ export async function POST(req: NextRequest) {
       resumeApplicationId: verifyResumeToken(cleanString(rawBody.resumeToken)),
     });
     if (decision.action === "refuse") {
-      return NextResponse.json(
-        { success: false, code: decision.code, message: decision.message },
+      // 27 Nov (user): whoever is filling the form may LOOK at the application
+      // already on file — view only, 15 minutes, this browser only
+      // (lib/onboarding/existingView.ts). Changing it still needs the code.
+      // Same target decideSubmit() refused.
+      const refused =
+        byId ??
+        (caller.kind === "dealer" && byUser && byUser.onboarding_status !== "approved" ? byUser : null) ??
+        byIdentity;
+      const view = refused ? signViewToken(refused.id) : null;
+      const res = NextResponse.json(
+        {
+          success: false,
+          code: decision.code,
+          message: decision.message,
+          viewUrl: view ? viewPath(view.token) : null,
+          existingStatus: refused?.onboarding_status ?? null,
+        },
         { status: decision.status },
       );
+      if (view) res.cookies.set(viewCookie(view));
+      return res;
     }
     const existingApplication =
       decision.action === "update"

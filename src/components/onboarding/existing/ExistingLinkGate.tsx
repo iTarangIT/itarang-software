@@ -8,27 +8,27 @@ type Reason = "expired" | "replaced" | "other_browser" | "invalid";
 const COPY: Record<Reason, { title: string; body: string }> = {
   expired: {
     title: "This link has expired",
-    body: "For your security each link works for 15 minutes. Opening a new one…",
+    body: "For your security each link works for 15 minutes.",
   },
   replaced: {
     title: "A newer link was opened",
     body: "This link stopped working when a newer one was opened in this browser.",
   },
   other_browser: {
-    title: "Verify it's you",
-    body: "This link opens only in the browser where the code was entered. Get a code on the registered mobile to view the application here.",
+    title: "This link opens only where it was made",
+    body: "For security, a view link works only in the browser it was opened from. Go back to the onboarding form and press Submit to open a new link here.",
   },
   invalid: {
     title: "This link is not valid",
-    body: "Please go back to the onboarding form and verify again.",
+    body: "Please go back to the onboarding form and press Submit again.",
   },
 };
 
 /**
  * The view-only link can't be shown (27 Nov): expired, replaced, another
- * browser, or forged. Where possible a new link opens by itself (this
- * browser's code check is still good); otherwise the dealer gets a fresh code
- * on the mobile on the application and lands on a new link.
+ * browser, or forged. Where possible a new link opens by itself (this browser
+ * still holds the link's cookie); otherwise the person goes back to the form
+ * and presses Submit, or — the owner — gets a code on the registered mobile.
  */
 export default function ExistingLinkGate({
   token,
@@ -148,27 +148,20 @@ export default function ExistingLinkGate({
 
           {phase === "ask" && applicationId && reason !== "invalid" && (
             <div className="space-y-3">
-              {reason === "replaced" && (
-                <button
-                  type="button"
-                  onClick={() => void renew()}
-                  className="w-full rounded-xl bg-[#1F5C8F] px-4 py-3 text-sm font-semibold text-white shadow-md shadow-[#1F5C8F]/25 transition hover:bg-[#173F63]"
-                >
-                  Open a new link
-                </button>
-              )}
+              <a
+                href="/dealer-onboarding"
+                className="block w-full rounded-xl bg-[#1F5C8F] px-4 py-3 text-center text-sm font-semibold text-white shadow-md shadow-[#1F5C8F]/25 transition hover:bg-[#173F63]"
+              >
+                Back to the onboarding form
+              </a>
               <button
                 type="button"
                 disabled={busy}
                 onClick={() => void sendCode()}
-                className={`flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold transition disabled:opacity-60 ${
-                  reason === "replaced"
-                    ? "border border-slate-300 text-slate-700 hover:bg-slate-50"
-                    : "bg-[#1F5C8F] text-white shadow-md shadow-[#1F5C8F]/25 hover:bg-[#173F63]"
-                }`}
+                className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-300 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
               >
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
-                Send a code to the registered mobile
+                I&apos;m the owner — send a code to the registered mobile
               </button>
             </div>
           )}
@@ -210,12 +203,14 @@ export default function ExistingLinkGate({
 
           {error && <p className="mt-3 text-sm text-rose-600">{error}</p>}
 
+          {!(phase === "ask" && applicationId && reason !== "invalid") && (
           <a
             href="/dealer-onboarding"
             className="mt-6 block text-center text-sm font-medium text-slate-500 hover:text-[#1F5C8F]"
           >
             ← Back to the onboarding form
           </a>
+          )}
         </div>
       </div>
     </div>
