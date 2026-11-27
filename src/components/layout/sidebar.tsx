@@ -640,6 +640,13 @@ const ROLE_TRAILING_SECTIONS: Record<string, any[]> = {
           icon: Bell,
           href: "/admin/settings/dealer-check",
         },
+        {
+          // 27 Nov — who hears about each file action, by bell / email / WhatsApp.
+          id: "sh-file-action-alerts",
+          label: "File action alerts",
+          icon: Bell,
+          href: "/admin/settings/file-action-alerts",
+        },
         dealerValidationDigestItem("sh"),
         kycReviewDigestItem("sh"),
         scrapBuybackDigestItem("sh"),
@@ -1827,6 +1834,13 @@ const roleNavigation: Record<string, any[]> = {
           label: "Dealer check alerts",
           icon: Bell,
           href: "/admin/settings/dealer-check",
+        },
+        {
+          // 27 Nov — who hears about each file action, by bell / email / WhatsApp.
+          id: "admin-file-action-alerts",
+          label: "File action alerts",
+          icon: Bell,
+          href: "/admin/settings/file-action-alerts",
         },
         dealerValidationDigestItem("admin"),
         kycReviewDigestItem("admin"),
