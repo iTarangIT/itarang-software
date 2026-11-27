@@ -23,10 +23,16 @@ import { ResumeError, getResumeView, resumeRejectedLead } from "@/lib/leads/resu
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id: leadId } = await params;
   const user = await requireAdminAppUserForLead(leadId);
   if (!user) return NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 });
+  // 27 Nov — the lenders this customer would have under ANOTHER dealer.
+  const forDealer = req.nextUrl.searchParams.get("dealer")?.trim();
+  if (forDealer) {
+    const options = await listSchemeOptions(leadId, forDealer).catch(() => []);
+    return NextResponse.json({ ok: true, dealer_options: options });
+  }
   try {
     const view = await getResumeView(leadId);
     if (!view) return NextResponse.json({ ok: false, error: "Lead not found" }, { status: 404 });
@@ -61,7 +67,14 @@ const Body = z.discriminatedUnion("mode", [
     nbfc_id: z.coerce.number().int().positive(),
     loan_product_id: z.coerce.number().int().positive(),
   }),
-  z.object({ mode: z.literal("new_dealer"), note: z.string().min(1).max(1000), dealer_id: z.string().min(1).max(255) }),
+  z.object({
+    mode: z.literal("new_dealer"),
+    note: z.string().min(1).max(1000),
+    dealer_id: z.string().min(1).max(255),
+    // 27 Nov — optional lender + scheme for the new case (blank = automatic at Step 4).
+    nbfc_id: z.coerce.number().int().positive().optional(),
+    loan_product_id: z.coerce.number().int().positive().optional(),
+  }),
 ]);
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -85,8 +98,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       note: d.note,
       actor: { id: user.id, name: user.name ?? user.email ?? null, role: user.role },
       assignmentId: d.mode === "same_nbfc" ? d.assignment_id ?? null : null,
-      nbfcId: d.mode === "other_nbfc" ? d.nbfc_id : null,
-      loanProductId: d.mode === "other_nbfc" ? d.loan_product_id : null,
+      nbfcId: d.mode === "other_nbfc" || d.mode === "new_dealer" ? d.nbfc_id ?? null : null,
+      loanProductId: d.mode === "other_nbfc" || d.mode === "new_dealer" ? d.loan_product_id ?? null : null,
       newDealerId: d.mode === "new_dealer" ? d.dealer_id : null,
     });
     return NextResponse.json({ ok: true, ...r });
