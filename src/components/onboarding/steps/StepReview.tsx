@@ -12,6 +12,9 @@ import {
   X,
   Download,
   Image as ImageIcon,
+  Lock,
+  Clock3,
+  ArrowUpRight,
 } from "lucide-react";
 import { useOnboardingStore } from "@/store/onboardingStore";
 import { dealerTypeLabel } from "@/lib/dealer/dealer-type";
@@ -477,6 +480,9 @@ export default function StepReview() {
   const setUpload = useOnboardingStore((s) => s.setUpload);
   // ID 166-B: the code was accepted; the dealer checks the files, then submits.
   const [resumeVerified, setResumeVerified] = useState(false);
+  // 27 Nov: the view-only page of the application already on file (15 min,
+  // this browser only — lib/onboarding/existingView.ts).
+  const [existingView, setExistingView] = useState<{ url: string; status: string } | null>(null);
 
   const primaryContact = getPrimaryContact(state);
 
@@ -551,6 +557,9 @@ export default function StepReview() {
         return;
       }
       resumeTokenRef.current = json.resumeToken;
+      setExistingView(
+        json.viewUrl ? { url: json.viewUrl, status: String(json.onboardingStatus || "draft") } : null,
+      );
       // ID 166-B: the application's stored files, by document type. A slot
       // this browser left empty (reload, another phone) takes the stored file;
       // a slot holding a newer upload keeps it. Links match on storage path.
@@ -1370,24 +1379,60 @@ export default function StepReview() {
           <p className="text-sm text-red-600">{errors.api}</p>
         )}
 
-        {resumeVerified && !resume && (
-          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
-            Verified. Your saved documents are shown above — check them, then
-            press Submit for Admin Review.
-          </div>
-        )}
+        {resumeVerified && !resume && (() => {
+          const editable = !existingView || ["draft", "correction_requested", "rejected"].includes(existingView.status);
+          return (
+            <div className="overflow-hidden rounded-2xl border border-emerald-200 bg-white shadow-sm">
+              <div className="flex items-start gap-3 bg-gradient-to-r from-emerald-50 to-white p-4">
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-600 text-white">
+                  <ShieldCheck className="h-5 w-5" />
+                </span>
+                <div className="text-sm">
+                  <p className="font-semibold text-emerald-900">Verified — the application on file is yours</p>
+                  <p className="mt-0.5 text-emerald-800">
+                    {editable
+                      ? "Your saved documents are shown above — check them, then press Submit for Admin Review."
+                      : "This application is already submitted and under review, so it can't be changed here. You can still view it."}
+                  </p>
+                </div>
+              </div>
+              {existingView && (
+                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-emerald-100 px-4 py-3">
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
+                    <span className="inline-flex items-center gap-1"><Lock className="h-3.5 w-3.5" /> View only, no download</span>
+                    <span className="inline-flex items-center gap-1"><Clock3 className="h-3.5 w-3.5" /> Link valid 15 min, this browser only</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => window.open(existingView.url, "_blank", "noopener")}
+                    className="inline-flex items-center gap-2 rounded-xl bg-[#1F5C8F] px-4 py-2 text-sm font-semibold text-white shadow-md shadow-[#1F5C8F]/20 transition hover:bg-[#173F63]"
+                  >
+                    <Eye className="h-4 w-4" /> View existing application <ArrowUpRight className="h-4 w-4" />
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {/* ID 129 — prove this application is yours before it is changed. */}
         {resume && (
-          <div className="rounded-2xl border border-[#E3E8EF] bg-white p-4 shadow-sm">
-            <p className="text-sm font-semibold text-[#173F63]">
-              An application already exists for these details
-            </p>
-            <p className="mt-1 text-sm text-slate-600">
-              {resume.sentTo
-                ? `To continue it, enter the 6-digit code we sent to ${resume.sentTo}.`
-                : "To continue it, enter the 6-digit code sent to the owner's registered mobile number."}
-            </p>
+          <div className="rounded-2xl border border-[#D6E6F5] bg-gradient-to-br from-[#F3F8FD] to-white p-5 shadow-sm">
+            <div className="flex items-start gap-3">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#1F5C8F] text-white shadow-md shadow-[#1F5C8F]/25">
+                <Lock className="h-5 w-5" />
+              </span>
+              <div>
+                <p className="text-sm font-semibold text-[#173F63]">
+                  An application already exists for these details
+                </p>
+                <p className="mt-1 text-sm text-slate-600">
+                  {resume.sentTo
+                    ? `Enter the 6-digit code we sent to ${resume.sentTo} to view the application on file and continue it.`
+                    : "Enter the 6-digit code sent to the owner's registered mobile number to view the application on file and continue it."}
+                </p>
+              </div>
+            </div>
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <input
                 value={resume.code}

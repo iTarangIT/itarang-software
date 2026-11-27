@@ -514,7 +514,10 @@ export async function middleware(request: NextRequest) {
     path === "/auctions" ||
     path.startsWith("/recovery-agent/") ||
     // 23 Nov — the dealer-check email / WhatsApp link; the signed token is the credential.
-    path.startsWith("/dealer-check-action/");
+    path.startsWith("/dealer-check-action/") ||
+    // 27 Nov — view-only page of an existing onboarding application. The page
+    // itself checks the 15-minute link + this browser's code cookie.
+    path.startsWith("/onboarding/existing/");
 
   const isProtectedRoute =
     Object.values(roleDashboards).some((dashboardPath) =>

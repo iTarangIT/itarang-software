@@ -79,6 +79,7 @@ export const PUBLIC_API_RULES: readonly PublicApiRule[] = [
   { pattern: /^\/api\/dealer\/onboarding\/(submit|status)$/, why: "pre-login dealer onboarding form" },
   { pattern: /^\/api\/dealer\/onboarding\/resume\/(send-otp|verify-otp)$/, why: "one-time code to continue an existing application without a login — mailed to the owner e-mail on the application (ID 129)" },
   { pattern: /^\/api\/dealer\/onboarding\/file-link$/, why: "a dealer with no login views its own earlier onboarding uploads — the resume token or a live correction token proves the application; the file is matched to it (ID 166 decision 5)" },
+  { pattern: /^\/api\/dealer\/onboarding\/existing\/(renew|[^/]+\/doc\/[^/]+)$/, why: "view-only page of an existing onboarding application (27 Nov) — the 15-minute view token AND this browser's httpOnly code + view cookies are checked in the route; documents leave only as page images" },
   { pattern: /^\/api\/dealer-onboarding\/salespeople$/, why: "salesperson dropdown on the pre-login onboarding form — names and roles only, no email or phone (ID 66)" },
   { pattern: /^\/api\/dealer-onboarding\/save$/, why: "autosave of the pre-login onboarding form — a prospective dealer has no account yet (ID 118 log review, 13 Oct)" },
   { pattern: /^\/api\/uploads\/dealer-documents$/, why: "uploads from the pre-login onboarding form and the correction link" },

@@ -132,7 +132,8 @@ export function maskEmail(email: string | null | undefined): string {
 
 export const RESUME_TOKEN_TTL_MS = 30 * 60 * 1000;
 
-function tokenSecret(): string | null {
+/** Signing secret for the onboarding resume + view tokens (null when unset). */
+export function tokenSecret(): string | null {
     const own = process.env.ONBOARDING_RESUME_SECRET?.trim();
     if (own) return own;
     const master = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
